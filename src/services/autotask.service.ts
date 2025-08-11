@@ -25,26 +25,208 @@ import {
   AutotaskDepartment,
   AutotaskQueryOptionsExtended
 } from '../types/autotask';
-import { McpServerConfig } from '../types/mcp';
+import { McpServerConfig, AutotaskCredentials, TenantContext } from '../types/mcp';
 import { Logger } from '../utils/logger';
+
+// New: Client pool management for multi-tenant support
+interface ClientPoolEntry {
+  client: AutotaskClient;
+  tenantId: string;
+  lastUsed: Date;
+  credentials: AutotaskCredentials;
+}
 
 export class AutotaskService {
   private client: AutotaskClient | null = null;
   private logger: Logger;
   private config: McpServerConfig;
   private initializationPromise: Promise<void> | null = null;
+  
+  // New: Multi-tenant support
+  private isMultiTenant: boolean;
+  private clientPool: Map<string, ClientPoolEntry> = new Map();
+  private readonly poolSize: number;
+  private readonly sessionTimeout: number;
 
   constructor(config: McpServerConfig, logger: Logger) {
     this.config = config;
     this.logger = logger;
+    this.isMultiTenant = config.multiTenant?.enabled ?? false;
+    this.poolSize = config.multiTenant?.clientPoolSize ?? 50;
+    this.sessionTimeout = config.multiTenant?.sessionTimeout ?? 30 * 60 * 1000; // 30 minutes
+
+    if (!this.isMultiTenant) {
+      // Single-tenant mode: initialize immediately if credentials available
+      if (config.autotask?.username && config.autotask?.secret && config.autotask?.integrationCode) {
+        this.logger.info('Single-tenant mode: credentials provided, will initialize on first use');
+      }
+    } else {
+      this.logger.info('Multi-tenant mode enabled', { 
+        poolSize: this.poolSize, 
+        sessionTimeout: this.sessionTimeout 
+      });
+      // Start cleanup interval for expired clients
+      this.startClientCleanup();
+    }
   }
 
   /**
-   * Initialize the Autotask client with credentials
+   * Get or create Autotask client for tenant
+   */
+  private async getClientForTenant(tenantContext?: TenantContext): Promise<AutotaskClient> {
+    if (!this.isMultiTenant) {
+      // Single-tenant mode: use default client
+      return this.ensureClient();
+    }
+
+    if (!tenantContext?.credentials) {
+      throw new Error('Multi-tenant mode requires tenant credentials');
+    }
+
+    const tenantId = tenantContext.tenantId;
+    const cacheKey = this.getTenantCacheKey(tenantContext.credentials);
+
+    // Check if we have a cached client for this tenant
+    const poolEntry = this.clientPool.get(cacheKey);
+    if (poolEntry && this.isClientValid(poolEntry)) {
+      poolEntry.lastUsed = new Date();
+      this.logger.debug(`Using cached client for tenant: ${tenantId}`);
+      return poolEntry.client;
+    }
+
+    // Create new client for tenant
+    this.logger.info(`Creating new Autotask client for tenant: ${tenantId}`);
+    const client = await this.createTenantClient(tenantContext.credentials, tenantContext.impersonationResourceId);
+
+    // Store in pool (with size limit)
+    this.managePoolSize();
+    this.clientPool.set(cacheKey, {
+      client,
+      tenantId,
+      lastUsed: new Date(),
+      credentials: tenantContext.credentials
+    });
+
+    return client;
+  }
+
+  /**
+   * Create cache key for tenant credentials
+   */
+  private getTenantCacheKey(credentials: AutotaskCredentials): string {
+    // Create a hash-like key from credentials (excluding sensitive data from logs)
+    const keyData = `${credentials.username}:${credentials.integrationCode}:${credentials.apiUrl || 'auto'}`;
+    return Buffer.from(keyData).toString('base64').substring(0, 16);
+  }
+
+  /**
+   * Check if cached client is still valid
+   */
+  private isClientValid(poolEntry: ClientPoolEntry): boolean {
+    const now = new Date();
+    const timeSinceLastUsed = now.getTime() - poolEntry.lastUsed.getTime();
+    return timeSinceLastUsed < this.sessionTimeout;
+  }
+
+  /**
+   * Manage client pool size
+   */
+  private managePoolSize(): void {
+    if (this.clientPool.size >= this.poolSize) {
+      // Remove oldest client
+      let oldestKey = '';
+      let oldestTime = new Date();
+
+      for (const [key, entry] of this.clientPool.entries()) {
+        if (entry.lastUsed < oldestTime) {
+          oldestTime = entry.lastUsed;
+          oldestKey = key;
+        }
+      }
+
+      if (oldestKey) {
+        this.logger.debug(`Removing oldest client from pool: ${oldestKey}`);
+        this.clientPool.delete(oldestKey);
+      }
+    }
+  }
+
+  /**
+   * Start periodic cleanup of expired clients
+   */
+  private startClientCleanup(): void {
+    setInterval(() => {
+      const now = new Date();
+      const expiredKeys: string[] = [];
+
+      for (const [key, entry] of this.clientPool.entries()) {
+        const timeSinceLastUsed = now.getTime() - entry.lastUsed.getTime();
+        if (timeSinceLastUsed > this.sessionTimeout) {
+          expiredKeys.push(key);
+        }
+      }
+
+      expiredKeys.forEach(key => {
+        this.logger.debug(`Removing expired client from pool: ${key}`);
+        this.clientPool.delete(key);
+      });
+
+      if (expiredKeys.length > 0) {
+        this.logger.info(`Cleaned up ${expiredKeys.length} expired clients from pool`);
+      }
+    }, 5 * 60 * 1000); // Check every 5 minutes
+  }
+
+  /**
+   * Create Autotask client for specific tenant
+   */
+  private async createTenantClient(credentials: AutotaskCredentials, impersonationResourceId?: number): Promise<AutotaskClient> {
+    try {
+      const { username, secret, integrationCode, apiUrl } = credentials;
+      
+      if (!username || !secret || !integrationCode) {
+        throw new Error('Missing required Autotask credentials: username, secret, and integrationCode are required');
+      }
+
+      this.logger.debug('Creating Autotask client for tenant...', { 
+        impersonationResourceId: impersonationResourceId ? `[Resource ID: ${impersonationResourceId}]` : undefined 
+      });
+      
+      const authConfig: any = {
+        username,
+        secret,
+        integrationCode
+      };
+      
+      if (apiUrl) {
+        authConfig.apiUrl = apiUrl;
+      } else if (this.config.multiTenant?.defaultApiUrl) {
+        authConfig.apiUrl = this.config.multiTenant.defaultApiUrl;
+      }
+
+      // Add impersonation header if provided
+      if (impersonationResourceId) {
+        authConfig.headers = {
+          'ImpersonationResourceId': impersonationResourceId.toString()
+        };
+        this.logger.debug(`Added impersonation header for resource ID: ${impersonationResourceId}`);
+      }
+
+      const client = await AutotaskClient.create(authConfig);
+      this.logger.debug('Tenant Autotask client created successfully');
+      return client;
+    } catch (error) {
+      this.logger.error('Failed to create tenant Autotask client:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Initialize the Autotask client with credentials (single-tenant mode)
    */
   async initialize(): Promise<void> {
     try {
-      const { username, secret, integrationCode, apiUrl } = this.config.autotask;
+      const { username, secret, integrationCode, apiUrl } = this.config.autotask || {};
       
       if (!username || !secret || !integrationCode) {
         throw new Error('Missing required Autotask credentials: username, secret, and integrationCode are required');
@@ -73,7 +255,7 @@ export class AutotaskService {
   }
 
   /**
-   * Ensure client is initialized (with lazy initialization)
+   * Ensure client is initialized (with lazy initialization) - single-tenant mode
    */
   private async ensureClient(): Promise<AutotaskClient> {
     if (!this.client) {
@@ -102,12 +284,12 @@ export class AutotaskService {
     await this.initializationPromise;
   }
 
-  // Company operations (using accounts in autotask-node)
-  async getCompany(id: number): Promise<AutotaskCompany | null> {
-    const client = await this.ensureClient();
+  // Company operations (updated to support multi-tenant)
+  async getCompany(id: number, tenantContext?: TenantContext): Promise<AutotaskCompany | null> {
+    const client = await this.getClientForTenant(tenantContext);
     
     try {
-      this.logger.debug(`Getting company with ID: ${id}`);
+      this.logger.debug(`Getting company with ID: ${id}`, { tenant: tenantContext?.tenantId });
       const result = await client.accounts.get(id);
       return result.data as AutotaskCompany || null;
     } catch (error) {
@@ -116,8 +298,8 @@ export class AutotaskService {
     }
   }
 
-  async searchCompanies(options: AutotaskQueryOptions = {}): Promise<AutotaskCompany[]> {
-    const client = await this.ensureClient();
+  async searchCompanies(options: AutotaskQueryOptions = {}, tenantContext?: TenantContext): Promise<AutotaskCompany[]> {
+    const client = await this.getClientForTenant(tenantContext);
     
     try {
       this.logger.debug('Searching companies with options:', options);
@@ -187,8 +369,8 @@ export class AutotaskService {
     }
   }
 
-  async createCompany(company: Partial<AutotaskCompany>): Promise<number> {
-    const client = await this.ensureClient();
+  async createCompany(company: Partial<AutotaskCompany>, tenantContext?: TenantContext): Promise<number> {
+    const client = await this.getClientForTenant(tenantContext);
     
     try {
       this.logger.debug('Creating company:', company);
@@ -1176,9 +1358,9 @@ export class AutotaskService {
   }
 
   // Utility methods
-  async testConnection(): Promise<boolean> {
+  async testConnection(tenantContext?: TenantContext): Promise<boolean> {
     try {
-      const client = await this.ensureClient();
+      const client = await this.getClientForTenant(tenantContext);
       // Try to get account with ID 0 as a connection test
       const result = await client.accounts.get(0);
       this.logger.info('Connection test successful:', { hasData: !!result.data, resultType: typeof result });

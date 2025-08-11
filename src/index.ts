@@ -21,12 +21,17 @@ async function main() {
     logger.debug('Configuration loaded', { 
       serverName: mcpConfig.name, 
       serverVersion: mcpConfig.version,
-      hasCredentials: !!(mcpConfig.autotask.username && mcpConfig.autotask.secret && mcpConfig.autotask.integrationCode)
+      hasCredentials: !!(mcpConfig.autotask?.username && mcpConfig.autotask?.secret && mcpConfig.autotask?.integrationCode),
+      multiTenantEnabled: mcpConfig.multiTenant?.enabled || false
     });
 
-    // Validate required configuration
-    if (!mcpConfig.autotask.username || !mcpConfig.autotask.secret || !mcpConfig.autotask.integrationCode) {
-      throw new Error('Missing required Autotask credentials. Please set AUTOTASK_USERNAME, AUTOTASK_SECRET, and AUTOTASK_INTEGRATION_CODE environment variables.');
+    // Validate required configuration (only for single-tenant mode)
+    if (!mcpConfig.multiTenant?.enabled) {
+      if (!mcpConfig.autotask?.username || !mcpConfig.autotask?.secret || !mcpConfig.autotask?.integrationCode) {
+        throw new Error('Missing required Autotask credentials. Please set AUTOTASK_USERNAME, AUTOTASK_SECRET, and AUTOTASK_INTEGRATION_CODE environment variables, or enable multi-tenant mode with MULTI_TENANT_ENABLED=true.');
+      }
+    } else {
+      logger.info('Multi-tenant mode enabled - credentials will be provided per request');
     }
 
     // Create the MCP server (don't initialize Autotask yet)

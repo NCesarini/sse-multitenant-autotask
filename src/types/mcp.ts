@@ -4,12 +4,41 @@
 export interface McpServerConfig {
   name: string;
   version: string;
-  autotask: {
+  autotask?: {
     username?: string;
     integrationCode?: string;
     secret?: string;
     apiUrl?: string;
   };
+  // New: Multi-tenant configuration
+  multiTenant?: {
+    enabled: boolean;
+    defaultApiUrl?: string;
+    clientPoolSize?: number;
+    sessionTimeout?: number;
+  };
+}
+
+// New: Per-request authentication
+export interface AutotaskCredentials {
+  username: string;
+  secret: string;
+  integrationCode: string;
+  apiUrl?: string;
+}
+
+// New: Tenant context for requests
+export interface TenantContext {
+  tenantId: string;
+  credentials: AutotaskCredentials;
+  sessionId?: string;
+  // User impersonation - which user this session acts as
+  impersonationResourceId?: number;
+}
+
+// Enhanced tool call with tenant context
+export interface McpToolCallWithTenant extends McpToolCall {
+  tenantContext?: TenantContext;
 }
 
 // MCP Resource types

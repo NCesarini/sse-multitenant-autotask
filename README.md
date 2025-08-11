@@ -12,6 +12,7 @@ A [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) server that p
 - **🛠️ Comprehensive API Coverage**: Access to companies, contacts, tickets, time entries, and more
 - **🔍 Advanced Search**: Powerful search capabilities with filters across all entities
 - **📝 CRUD Operations**: Create, read, update operations for core Autotask entities
+- **👤 User Impersonation**: Act on behalf of specific users while maintaining proper permissions and audit trails
 - **🔄 ID-to-Name Mapping**: Automatic resolution of company and resource IDs to human-readable names
 - **⚡ Intelligent Caching**: Smart caching system for improved performance and reduced API calls
 - **🔒 Secure Authentication**: Enterprise-grade API security with Autotask credentials
@@ -25,6 +26,7 @@ A [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) server that p
 - [Configuration](#configuration)
 - [Usage](#usage)
 - [API Reference](#api-reference)
+- [User Impersonation](docs/USER_IMPERSONATION.md)
 - [ID-to-Name Mapping](#id-to-name-mapping)
 - [Docker Deployment](#docker-deployment)
 - [Claude Desktop Integration](#claude-desktop-integration)
