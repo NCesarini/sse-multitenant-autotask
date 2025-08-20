@@ -76,26 +76,63 @@ export class AutotaskService {
   private async getClientForTenant(tenantContext?: TenantContext): Promise<AutotaskClient> {
     if (!this.isMultiTenant) {
       // Single-tenant mode: use default client
+      this.logger.debug('🏠 Using single-tenant mode - getting default client');
       return this.ensureClient();
     }
 
+    this.logger.info('🏢 Multi-tenant mode enabled - processing tenant context', {
+      hasTenantContext: !!tenantContext,
+      tenantId: tenantContext?.tenantId,
+      hasCredentials: !!tenantContext?.credentials,
+      sessionId: tenantContext?.sessionId
+    });
+
     if (!tenantContext?.credentials) {
+      this.logger.error('❌ Multi-tenant mode requires tenant credentials but none provided');
       throw new Error('Multi-tenant mode requires tenant credentials');
     }
 
     const tenantId = tenantContext.tenantId;
     const cacheKey = this.getTenantCacheKey(tenantContext.credentials);
 
+    this.logger.debug('🔍 Checking client pool for tenant', {
+      tenantId,
+      cacheKey: cacheKey.substring(0, 8) + '...',
+      poolSize: this.clientPool.size,
+      poolKeys: Array.from(this.clientPool.keys()).map(k => k.substring(0, 8) + '...')
+    });
+
     // Check if we have a cached client for this tenant
     const poolEntry = this.clientPool.get(cacheKey);
     if (poolEntry && this.isClientValid(poolEntry)) {
       poolEntry.lastUsed = new Date();
-      this.logger.debug(`Using cached client for tenant: ${tenantId}`);
+      this.logger.info(`♻️ Using cached client for tenant: ${tenantId}`, {
+        tenantId,
+        cacheKey: cacheKey.substring(0, 8) + '...',
+        clientAge: Date.now() - poolEntry.lastUsed.getTime(),
+        poolSize: this.clientPool.size
+      });
       return poolEntry.client;
     }
 
+    if (poolEntry && !this.isClientValid(poolEntry)) {
+      this.logger.debug('⏰ Cached client expired for tenant, removing from pool', {
+        tenantId,
+        cacheKey: cacheKey.substring(0, 8) + '...',
+        lastUsed: poolEntry.lastUsed
+      });
+      this.clientPool.delete(cacheKey);
+    }
+
     // Create new client for tenant
-    this.logger.info(`Creating new Autotask client for tenant: ${tenantId}`);
+    this.logger.info(`🆕 Creating new Autotask client for tenant: ${tenantId}`, {
+      tenantId,
+      username: tenantContext.credentials.username ? `${tenantContext.credentials.username.substring(0, 3)}***` : undefined,
+      hasApiUrl: !!tenantContext.credentials.apiUrl,
+      apiUrl: tenantContext.credentials.apiUrl,
+      poolSizeBefore: this.clientPool.size
+    });
+    
     const client = await this.createTenantClient(tenantContext.credentials, tenantContext.impersonationResourceId);
 
     // Store in pool (with size limit)
@@ -105,6 +142,12 @@ export class AutotaskService {
       tenantId,
       lastUsed: new Date(),
       credentials: tenantContext.credentials
+    });
+
+    this.logger.info(`✅ Client created and cached for tenant: ${tenantId}`, {
+      tenantId,
+      cacheKey: cacheKey.substring(0, 8) + '...',
+      poolSizeAfter: this.clientPool.size
     });
 
     return client;
@@ -184,6 +227,16 @@ export class AutotaskService {
     try {
       const { username, secret, integrationCode, apiUrl } = credentials;
       
+      this.logger.info('Creating Autotask client for tenant...', { 
+        impersonationResourceId: impersonationResourceId ? `[Resource ID: ${impersonationResourceId}]` : undefined,
+        credentials: {
+          username,
+          secret: secret ? `${secret.substring(0, 3)}***${secret.substring(secret.length - 3)}` : undefined,
+          integrationCode,
+          apiUrl: apiUrl || 'auto-discovery'
+        }
+      });
+
       if (!username || !secret || !integrationCode) {
         throw new Error('Missing required Autotask credentials: username, secret, and integrationCode are required');
       }
@@ -198,10 +251,24 @@ export class AutotaskService {
         integrationCode
       };
       
+      // API URL resolution logic with detailed logging
       if (apiUrl) {
         authConfig.apiUrl = apiUrl;
+        this.logger.info(`Using explicit API URL: ${apiUrl}`, { 
+          source: 'tenant-credentials',
+          apiUrl 
+        });
       } else if (this.config.multiTenant?.defaultApiUrl) {
         authConfig.apiUrl = this.config.multiTenant.defaultApiUrl;
+        this.logger.info(`Using default API URL: ${this.config.multiTenant.defaultApiUrl}`, { 
+          source: 'multi-tenant-config',
+          apiUrl: this.config.multiTenant.defaultApiUrl 
+        });
+      } else {
+        this.logger.info('Using autotask-node auto-discovery for API URL', { 
+          source: 'auto-discovery',
+          note: 'Library will discover zone automatically'
+        });
       }
 
       // Add impersonation header if provided
@@ -212,11 +279,32 @@ export class AutotaskService {
         this.logger.debug(`Added impersonation header for resource ID: ${impersonationResourceId}`);
       }
 
+      this.logger.info('Creating Autotask client with configuration:', {
+        username: username ? `${username.substring(0, 8)}***` : undefined,
+        hasSecret: !!secret,
+        integrationCode,
+        apiUrl: authConfig.apiUrl || 'auto-discovery',
+        hasImpersonation: !!impersonationResourceId
+      });
+
       const client = await AutotaskClient.create(authConfig);
-      this.logger.debug('Tenant Autotask client created successfully');
+      
+      this.logger.info('✅ Tenant Autotask client created successfully', {
+        username: username ? `${username.substring(0, 8)}***` : undefined,
+        finalApiUrl: authConfig.apiUrl || 'discovered',
+        hasImpersonation: !!impersonationResourceId
+      });
+      
       return client;
     } catch (error) {
-      this.logger.error('Failed to create tenant Autotask client:', error);
+      this.logger.error('❌ Failed to create tenant Autotask client:', {
+        error: error instanceof Error ? error.message : 'Unknown error',
+        stack: error instanceof Error ? error.stack : undefined,
+        username: credentials.username ? `${credentials.username.substring(0, 8)}***` : undefined,
+        hasSecret: !!credentials.secret,
+        integrationCode: credentials.integrationCode,
+        apiUrl: credentials.apiUrl || 'auto-discovery'
+      });
       throw error;
     }
   }
@@ -286,19 +374,53 @@ export class AutotaskService {
 
   // Company operations (updated to support multi-tenant)
   async getCompany(id: number, tenantContext?: TenantContext): Promise<AutotaskCompany | null> {
+    const startTime = Date.now();
+    
+    this.logger.debug('🏢 Getting company by ID', {
+      companyId: id,
+      hasTenantContext: !!tenantContext,
+      tenantId: tenantContext?.tenantId,
+      operation: 'getCompany'
+    });
+
     const client = await this.getClientForTenant(tenantContext);
     
     try {
       this.logger.debug(`Getting company with ID: ${id}`, { tenant: tenantContext?.tenantId });
       const result = await client.accounts.get(id);
+      
+      const executionTime = Date.now() - startTime;
+      this.logger.info('✅ Company retrieved successfully', {
+        companyId: id,
+        found: !!result.data,
+        tenantId: tenantContext?.tenantId,
+        executionTimeMs: executionTime
+      });
+      
       return result.data as AutotaskCompany || null;
     } catch (error) {
-      this.logger.error(`Failed to get company ${id}:`, error);
+      const executionTime = Date.now() - startTime;
+      this.logger.error(`❌ Failed to get company ${id}:`, {
+        companyId: id,
+        tenantId: tenantContext?.tenantId,
+        error: error instanceof Error ? error.message : 'Unknown error',
+        executionTimeMs: executionTime
+      });
       throw error;
     }
   }
 
   async searchCompanies(options: AutotaskQueryOptions = {}, tenantContext?: TenantContext): Promise<AutotaskCompany[]> {
+    const startTime = Date.now();
+    
+    this.logger.info('🔍 Searching companies', {
+      hasTenantContext: !!tenantContext,
+      tenantId: tenantContext?.tenantId,
+      hasFilter: !!options.filter,
+      pageSize: options.pageSize,
+      operation: 'searchCompanies'
+    });
+
     const client = await this.getClientForTenant(tenantContext);
     
     try {
@@ -318,7 +440,13 @@ export class AutotaskService {
         const result = await client.accounts.list(queryOptions as any);
         const companies = (result.data as AutotaskCompany[]) || [];
         
-        this.logger.info(`Retrieved ${companies.length} companies (limited by user to ${options.pageSize})`);
+        const executionTime = Date.now() - startTime;
+        this.logger.info(`✅ Retrieved ${companies.length} companies (limited by user to ${options.pageSize})`, {
+          tenantId: tenantContext?.tenantId,
+          resultCount: companies.length,
+          requestedPageSize: options.pageSize,
+          executionTimeMs: executionTime
+        });
         return companies;
         
       } else {
@@ -335,7 +463,11 @@ export class AutotaskService {
             page: currentPage
           };
 
-          this.logger.debug(`Fetching companies page ${currentPage}...`);
+          this.logger.debug(`Fetching companies page ${currentPage}...`, {
+            tenantId: tenantContext?.tenantId,
+            page: currentPage,
+            pageSize
+          });
           
           const result = await client.accounts.list(queryOptions as any);
           const companies = (result.data as AutotaskCompany[]) || [];
@@ -355,16 +487,31 @@ export class AutotaskService {
           
           // Safety check to prevent infinite loops
           if (currentPage > 50) {
-            this.logger.warn('Company pagination safety limit reached at 50 pages (25,000 companies)');
+            this.logger.warn('Company pagination safety limit reached at 50 pages (25,000 companies)', {
+              tenantId: tenantContext?.tenantId,
+              totalCompanies: allCompanies.length
+            });
             hasMorePages = false;
           }
         }
         
-        this.logger.info(`Retrieved ${allCompanies.length} companies across ${currentPage} pages (COMPLETE dataset for accuracy)`);
+        const executionTime = Date.now() - startTime;
+        this.logger.info(`✅ Retrieved ${allCompanies.length} companies across ${currentPage} pages (COMPLETE dataset for accuracy)`, {
+          tenantId: tenantContext?.tenantId,
+          resultCount: allCompanies.length,
+          pagesRetrieved: currentPage,
+          executionTimeMs: executionTime
+        });
         return allCompanies;
       }
     } catch (error) {
-      this.logger.error('Failed to search companies:', error);
+      const executionTime = Date.now() - startTime;
+      this.logger.error('❌ Failed to search companies:', {
+        tenantId: tenantContext?.tenantId,
+        error: error instanceof Error ? error.message : 'Unknown error',
+        executionTimeMs: executionTime,
+        options
+      });
       throw error;
     }
   }
@@ -384,8 +531,8 @@ export class AutotaskService {
     }
   }
 
-  async updateCompany(id: number, updates: Partial<AutotaskCompany>): Promise<void> {
-    const client = await this.ensureClient();
+  async updateCompany(id: number, updates: Partial<AutotaskCompany>, tenantContext?: TenantContext): Promise<void> {
+    const client = await this.getClientForTenant(tenantContext);
     
     try {
       this.logger.debug(`Updating company ${id}:`, updates);
@@ -398,8 +545,8 @@ export class AutotaskService {
   }
 
   // Contact operations
-  async getContact(id: number): Promise<AutotaskContact | null> {
-    const client = await this.ensureClient();
+  async getContact(id: number, tenantContext?: TenantContext): Promise<AutotaskContact | null> {
+    const client = await this.getClientForTenant(tenantContext);
     
     try {
       this.logger.debug(`Getting contact with ID: ${id}`);
@@ -411,8 +558,8 @@ export class AutotaskService {
     }
   }
 
-  async searchContacts(options: AutotaskQueryOptions = {}): Promise<AutotaskContact[]> {
-    const client = await this.ensureClient();
+  async searchContacts(options: AutotaskQueryOptions = {}, tenantContext?: TenantContext): Promise<AutotaskContact[]> {
+    const client = await this.getClientForTenant(tenantContext);
     
     try {
       this.logger.debug('Searching contacts with options:', options);
@@ -482,8 +629,8 @@ export class AutotaskService {
     }
   }
 
-  async createContact(contact: Partial<AutotaskContact>): Promise<number> {
-    const client = await this.ensureClient();
+  async createContact(contact: Partial<AutotaskContact>, tenantContext?: TenantContext): Promise<number> {
+    const client = await this.getClientForTenant(tenantContext);
     
     try {
       this.logger.debug('Creating contact:', contact);
@@ -497,8 +644,8 @@ export class AutotaskService {
     }
   }
 
-  async updateContact(id: number, updates: Partial<AutotaskContact>): Promise<void> {
-    const client = await this.ensureClient();
+  async updateContact(id: number, updates: Partial<AutotaskContact>, tenantContext?: TenantContext): Promise<void> {
+    const client = await this.getClientForTenant(tenantContext);
     
     try {
       this.logger.debug(`Updating contact ${id}:`, updates);
@@ -511,8 +658,8 @@ export class AutotaskService {
   }
 
   // Ticket operations
-  async getTicket(id: number, fullDetails: boolean = false): Promise<AutotaskTicket | null> {
-    const client = await this.ensureClient();
+  async getTicket(id: number, fullDetails: boolean = false, tenantContext?: TenantContext): Promise<AutotaskTicket | null> {
+    const client = await this.getClientForTenant(tenantContext);
     
     try {
       this.logger.debug(`Getting ticket with ID: ${id}, fullDetails: ${fullDetails}`);
@@ -532,8 +679,8 @@ export class AutotaskService {
     }
   }
 
-  async searchTickets(options: AutotaskQueryOptionsExtended = {}): Promise<AutotaskTicket[]> {
-    const client = await this.ensureClient();
+  async searchTickets(options: AutotaskQueryOptionsExtended = {}, tenantContext?: TenantContext): Promise<AutotaskTicket[]> {
+    const client = await this.getClientForTenant(tenantContext);
     
     try {
       this.logger.debug('Searching tickets with options:', options);
@@ -741,8 +888,8 @@ export class AutotaskService {
     };
   }
 
-  async createTicket(ticket: Partial<AutotaskTicket>): Promise<number> {
-    const client = await this.ensureClient();
+  async createTicket(ticket: Partial<AutotaskTicket>, tenantContext?: TenantContext): Promise<number> {
+    const client = await this.getClientForTenant(tenantContext);
     
     try {
       this.logger.debug('Creating ticket:', ticket);
@@ -756,8 +903,8 @@ export class AutotaskService {
     }
   }
 
-  async updateTicket(id: number, updates: Partial<AutotaskTicket>): Promise<void> {
-    const client = await this.ensureClient();
+  async updateTicket(id: number, updates: Partial<AutotaskTicket>, tenantContext?: TenantContext): Promise<void> {
+    const client = await this.getClientForTenant(tenantContext);
     
     try {
       this.logger.debug(`Updating ticket ${id}:`, updates);
@@ -770,8 +917,8 @@ export class AutotaskService {
   }
 
   // Time entry operations
-  async createTimeEntry(timeEntry: Partial<AutotaskTimeEntry>): Promise<number> {
-    const client = await this.ensureClient();
+  async createTimeEntry(timeEntry: Partial<AutotaskTimeEntry>, tenantContext?: TenantContext): Promise<number> {
+    const client = await this.getClientForTenant(tenantContext);
     
     try {
       this.logger.debug('Creating time entry:', timeEntry);
@@ -785,8 +932,8 @@ export class AutotaskService {
     }
   }
 
-  async getTimeEntries(options: AutotaskQueryOptions = {}): Promise<AutotaskTimeEntry[]> {
-    const client = await this.ensureClient();
+  async getTimeEntries(options: AutotaskQueryOptions = {}, tenantContext?: TenantContext): Promise<AutotaskTimeEntry[]> {
+    const client = await this.getClientForTenant(tenantContext);
     
     try {
       this.logger.debug('Getting time entries with options:', options);
@@ -799,8 +946,8 @@ export class AutotaskService {
   }
 
   // Project operations
-  async getProject(id: number): Promise<AutotaskProject | null> {
-    const client = await this.ensureClient();
+  async getProject(id: number, tenantContext?: TenantContext): Promise<AutotaskProject | null> {
+    const client = await this.getClientForTenant(tenantContext);
     
     try {
       this.logger.debug(`Getting project with ID: ${id}`);
@@ -812,8 +959,8 @@ export class AutotaskService {
     }
   }
 
-  async searchProjects(options: AutotaskQueryOptions = {}): Promise<AutotaskProject[]> {
-    const client = await this.ensureClient();
+  async searchProjects(options: AutotaskQueryOptions = {}, tenantContext?: TenantContext): Promise<AutotaskProject[]> {
+    const client = await this.getClientForTenant(tenantContext);
     
     try {
       this.logger.debug('Searching projects with options:', options);
@@ -941,8 +1088,8 @@ export class AutotaskService {
     };
   }
 
-  async createProject(project: Partial<AutotaskProject>): Promise<number> {
-    const client = await this.ensureClient();
+  async createProject(project: Partial<AutotaskProject>, tenantContext?: TenantContext): Promise<number> {
+    const client = await this.getClientForTenant(tenantContext);
     
     try {
       this.logger.debug('Creating project:', project);
@@ -956,8 +1103,8 @@ export class AutotaskService {
     }
   }
 
-  async updateProject(id: number, updates: Partial<AutotaskProject>): Promise<void> {
-    const client = await this.ensureClient();
+  async updateProject(id: number, updates: Partial<AutotaskProject>, tenantContext?: TenantContext): Promise<void> {
+    const client = await this.getClientForTenant(tenantContext);
     
     try {
       this.logger.debug(`Updating project ${id}:`, updates);
@@ -970,8 +1117,8 @@ export class AutotaskService {
   }
 
   // Resource operations
-  async getResource(id: number): Promise<AutotaskResource | null> {
-    const client = await this.ensureClient();
+  async getResource(id: number, tenantContext?: TenantContext): Promise<AutotaskResource | null> {
+    const client = await this.getClientForTenant(tenantContext);
     
     try {
       this.logger.debug(`Getting resource with ID: ${id}`);
@@ -983,8 +1130,8 @@ export class AutotaskService {
     }
   }
 
-  async searchResources(options: AutotaskQueryOptions = {}): Promise<AutotaskResource[]> {
-    const client = await this.ensureClient();
+  async searchResources(options: AutotaskQueryOptions = {}, tenantContext?: TenantContext): Promise<AutotaskResource[]> {
+    const client = await this.getClientForTenant(tenantContext);
     
     try {
       this.logger.debug('Searching resources with options:', options);
@@ -1110,8 +1257,8 @@ export class AutotaskService {
   // }
 
   // Configuration Item operations
-  async getConfigurationItem(id: number): Promise<AutotaskConfigurationItem | null> {
-    const client = await this.ensureClient();
+  async getConfigurationItem(id: number, tenantContext?: TenantContext): Promise<AutotaskConfigurationItem | null> {
+    const client = await this.getClientForTenant(tenantContext);
     
     try {
       this.logger.debug(`Getting configuration item with ID: ${id}`);
@@ -1123,8 +1270,8 @@ export class AutotaskService {
     }
   }
 
-  async searchConfigurationItems(options: AutotaskQueryOptions = {}): Promise<AutotaskConfigurationItem[]> {
-    const client = await this.ensureClient();
+  async searchConfigurationItems(options: AutotaskQueryOptions = {}, tenantContext?: TenantContext): Promise<AutotaskConfigurationItem[]> {
+    const client = await this.getClientForTenant(tenantContext);
     
     try {
       this.logger.debug('Searching configuration items with options:', options);
@@ -1136,8 +1283,8 @@ export class AutotaskService {
     }
   }
 
-  async createConfigurationItem(configItem: Partial<AutotaskConfigurationItem>): Promise<number> {
-    const client = await this.ensureClient();
+  async createConfigurationItem(configItem: Partial<AutotaskConfigurationItem>, tenantContext?: TenantContext): Promise<number> {
+    const client = await this.getClientForTenant(tenantContext);
     
     try {
       this.logger.debug('Creating configuration item:', configItem);
@@ -1151,8 +1298,8 @@ export class AutotaskService {
     }
   }
 
-  async updateConfigurationItem(id: number, updates: Partial<AutotaskConfigurationItem>): Promise<void> {
-    const client = await this.ensureClient();
+  async updateConfigurationItem(id: number, updates: Partial<AutotaskConfigurationItem>, tenantContext?: TenantContext): Promise<void> {
+    const client = await this.getClientForTenant(tenantContext);
     
     try {
       this.logger.debug(`Updating configuration item ${id}:`, updates);
@@ -1192,8 +1339,8 @@ export class AutotaskService {
   // }
 
   // Contract operations (read-only for now as they're complex)
-  async getContract(id: number): Promise<AutotaskContract | null> {
-    const client = await this.ensureClient();
+  async getContract(id: number, tenantContext?: TenantContext): Promise<AutotaskContract | null> {
+    const client = await this.getClientForTenant(tenantContext);
     
     try {
       this.logger.debug(`Getting contract with ID: ${id}`);
@@ -1205,8 +1352,8 @@ export class AutotaskService {
     }
   }
 
-  async searchContracts(options: AutotaskQueryOptions = {}): Promise<AutotaskContract[]> {
-    const client = await this.ensureClient();
+  async searchContracts(options: AutotaskQueryOptions = {}, tenantContext?: TenantContext): Promise<AutotaskContract[]> {
+    const client = await this.getClientForTenant(tenantContext);
     
     try {
       this.logger.debug('Searching contracts with options:', options);
@@ -1219,8 +1366,8 @@ export class AutotaskService {
   }
 
   // Invoice operations (read-only)
-  async getInvoice(id: number): Promise<AutotaskInvoice | null> {
-    const client = await this.ensureClient();
+  async getInvoice(id: number, tenantContext?: TenantContext): Promise<AutotaskInvoice | null> {
+    const client = await this.getClientForTenant(tenantContext);
     
     try {
       this.logger.debug(`Getting invoice with ID: ${id}`);
@@ -1232,8 +1379,8 @@ export class AutotaskService {
     }
   }
 
-  async searchInvoices(options: AutotaskQueryOptions = {}): Promise<AutotaskInvoice[]> {
-    const client = await this.ensureClient();
+  async searchInvoices(options: AutotaskQueryOptions = {}, tenantContext?: TenantContext): Promise<AutotaskInvoice[]> {
+    const client = await this.getClientForTenant(tenantContext);
     
     try {
       this.logger.debug('Searching invoices with options:', options);
@@ -1246,8 +1393,8 @@ export class AutotaskService {
   }
 
   // Task operations
-  async getTask(id: number): Promise<AutotaskTask | null> {
-    const client = await this.ensureClient();
+  async getTask(id: number, tenantContext?: TenantContext): Promise<AutotaskTask | null> {
+    const client = await this.getClientForTenant(tenantContext);
     
     try {
       this.logger.debug(`Getting task with ID: ${id}`);
@@ -1259,8 +1406,8 @@ export class AutotaskService {
     }
   }
 
-  async searchTasks(options: AutotaskQueryOptions = {}): Promise<AutotaskTask[]> {
-    const client = await this.ensureClient();
+  async searchTasks(options: AutotaskQueryOptions = {}, tenantContext?: TenantContext): Promise<AutotaskTask[]> {
+    const client = await this.getClientForTenant(tenantContext);
     
     try {
       this.logger.debug('Searching tasks with options:', options);
@@ -1329,8 +1476,8 @@ export class AutotaskService {
     };
   }
 
-  async createTask(task: Partial<AutotaskTask>): Promise<number> {
-    const client = await this.ensureClient();
+  async createTask(task: Partial<AutotaskTask>, tenantContext?: TenantContext): Promise<number> {
+    const client = await this.getClientForTenant(tenantContext);
     
     try {
       this.logger.debug('Creating task:', task);
@@ -1344,8 +1491,8 @@ export class AutotaskService {
     }
   }
 
-  async updateTask(id: number, updates: Partial<AutotaskTask>): Promise<void> {
-    const client = await this.ensureClient();
+  async updateTask(id: number, updates: Partial<AutotaskTask>, tenantContext?: TenantContext): Promise<void> {
+    const client = await this.getClientForTenant(tenantContext);
     
     try {
       this.logger.debug(`Updating task ${id}:`, updates);
@@ -1371,13 +1518,72 @@ export class AutotaskService {
     }
   }
 
+  /**
+   * Test zone information discovery for debugging API URL issues
+   */
+  async testZoneInformation(tenantContext?: TenantContext): Promise<any> {
+    try {
+      const { username, secret, integrationCode } = tenantContext?.credentials || this.config.autotask || {};
+      
+      if (!username || !secret || !integrationCode) {
+        throw new Error('Missing required credentials for zone information test');
+      }
+
+      this.logger.info('Testing zone information discovery...', {
+        username: username ? `${username.substring(0, 8)}***` : undefined,
+        integrationCode
+      });
+
+      // Try to get zone information directly from Autotask
+      const zoneUrl = 'https://webservices.autotask.net/ATServicesRest/v1.0/zoneInformation';
+      
+      // Make direct API call to zone information endpoint
+      const response = await fetch(zoneUrl, {
+        method: 'GET',
+        headers: {
+          'ApiIntegrationcode': integrationCode,
+          'UserName': username,
+          'Secret': secret,
+          'Content-Type': 'application/json'
+        }
+      });
+
+      if (!response.ok) {
+        throw new Error(`Zone information request failed: ${response.status} ${response.statusText}`);
+      }
+
+      const zoneInfo = await response.json() as any;
+      
+      this.logger.info('Zone information retrieved:', {
+        url: zoneInfo.url,
+        webUrl: zoneInfo.webUrl,
+        zoneInfo
+      });
+
+      return zoneInfo;
+    } catch (error) {
+      this.logger.error('Zone information test failed:', {
+        error: error instanceof Error ? error.message : 'Unknown error',
+        stack: error instanceof Error ? error.stack : undefined
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * Check if the service is running in multi-tenant mode
+   */
+  public isInMultiTenantMode(): boolean {
+    return this.isMultiTenant;
+  }
+
   // =====================================================
   // NEW ENTITY METHODS - Phase 1: High-Priority Entities
   // =====================================================
 
   // Note entities - Using the generic notes endpoint
-  async getTicketNote(ticketId: number, noteId: number): Promise<AutotaskTicketNote | null> {
-    const client = await this.ensureClient();
+  async getTicketNote(ticketId: number, noteId: number, tenantContext?: TenantContext): Promise<AutotaskTicketNote | null> {
+    const client = await this.getClientForTenant(tenantContext);
     
     try {
       this.logger.debug(`Getting ticket note - TicketID: ${ticketId}, NoteID: ${noteId}`);
@@ -1396,8 +1602,8 @@ export class AutotaskService {
     }
   }
 
-  async searchTicketNotes(ticketId: number, options: AutotaskQueryOptionsExtended = {}): Promise<AutotaskTicketNote[]> {
-    const client = await this.ensureClient();
+  async searchTicketNotes(ticketId: number, options: AutotaskQueryOptionsExtended = {}, tenantContext?: TenantContext): Promise<AutotaskTicketNote[]> {
+    const client = await this.getClientForTenant(tenantContext);
     
     try {
       this.logger.debug(`Searching ticket notes for ticket ${ticketId}:`, options);
@@ -1421,8 +1627,8 @@ export class AutotaskService {
     }
   }
 
-  async createTicketNote(ticketId: number, note: Partial<AutotaskTicketNote>): Promise<number> {
-    const client = await this.ensureClient();
+  async createTicketNote(ticketId: number, note: Partial<AutotaskTicketNote>, tenantContext?: TenantContext): Promise<number> {
+    const client = await this.getClientForTenant(tenantContext);
     
     try {
       this.logger.debug(`Creating ticket note for ticket ${ticketId}:`, note);
@@ -1440,8 +1646,8 @@ export class AutotaskService {
     }
   }
 
-  async getProjectNote(projectId: number, noteId: number): Promise<AutotaskProjectNote | null> {
-    const client = await this.ensureClient();
+  async getProjectNote(projectId: number, noteId: number, tenantContext?: TenantContext): Promise<AutotaskProjectNote | null> {
+    const client = await this.getClientForTenant(tenantContext);
     
     try {
       this.logger.debug(`Getting project note - ProjectID: ${projectId}, NoteID: ${noteId}`);
@@ -1459,8 +1665,8 @@ export class AutotaskService {
     }
   }
 
-  async searchProjectNotes(projectId: number, options: AutotaskQueryOptionsExtended = {}): Promise<AutotaskProjectNote[]> {
-    const client = await this.ensureClient();
+  async searchProjectNotes(projectId: number, options: AutotaskQueryOptionsExtended = {}, tenantContext?: TenantContext): Promise<AutotaskProjectNote[]> {
+    const client = await this.getClientForTenant(tenantContext);
     
     try {
       this.logger.debug(`Searching project notes for project ${projectId}:`, options);
@@ -1483,8 +1689,8 @@ export class AutotaskService {
     }
   }
 
-  async createProjectNote(projectId: number, note: Partial<AutotaskProjectNote>): Promise<number> {
-    const client = await this.ensureClient();
+  async createProjectNote(projectId: number, note: Partial<AutotaskProjectNote>, tenantContext?: TenantContext): Promise<number> {
+    const client = await this.getClientForTenant(tenantContext);
     
     try {
       this.logger.debug(`Creating project note for project ${projectId}:`, note);
@@ -1502,8 +1708,8 @@ export class AutotaskService {
     }
   }
 
-  async getCompanyNote(companyId: number, noteId: number): Promise<AutotaskCompanyNote | null> {
-    const client = await this.ensureClient();
+  async getCompanyNote(companyId: number, noteId: number, tenantContext?: TenantContext): Promise<AutotaskCompanyNote | null> {
+    const client = await this.getClientForTenant(tenantContext);
     
     try {
       this.logger.debug(`Getting company note - CompanyID: ${companyId}, NoteID: ${noteId}`);
@@ -1521,8 +1727,8 @@ export class AutotaskService {
     }
   }
 
-  async searchCompanyNotes(companyId: number, options: AutotaskQueryOptionsExtended = {}): Promise<AutotaskCompanyNote[]> {
-    const client = await this.ensureClient();
+  async searchCompanyNotes(companyId: number, options: AutotaskQueryOptionsExtended = {}, tenantContext?: TenantContext): Promise<AutotaskCompanyNote[]> {
+    const client = await this.getClientForTenant(tenantContext);
     
     try {
       this.logger.debug(`Searching company notes for company ${companyId}:`, options);
@@ -1545,8 +1751,8 @@ export class AutotaskService {
     }
   }
 
-  async createCompanyNote(companyId: number, note: Partial<AutotaskCompanyNote>): Promise<number> {
-    const client = await this.ensureClient();
+  async createCompanyNote(companyId: number, note: Partial<AutotaskCompanyNote>, tenantContext?: TenantContext): Promise<number> {
+    const client = await this.getClientForTenant(tenantContext);
     
     try {
       this.logger.debug(`Creating company note for company ${companyId}:`, note);
@@ -1565,8 +1771,8 @@ export class AutotaskService {
   }
 
   // Attachment entities - Using the generic attachments endpoint
-  async getTicketAttachment(ticketId: number, attachmentId: number, includeData: boolean = false): Promise<AutotaskTicketAttachment | null> {
-    const client = await this.ensureClient();
+  async getTicketAttachment(ticketId: number, attachmentId: number, includeData: boolean = false, tenantContext?: TenantContext): Promise<AutotaskTicketAttachment | null> {
+    const client = await this.getClientForTenant(tenantContext);
     
     try {
       this.logger.debug(`Getting ticket attachment - TicketID: ${ticketId}, AttachmentID: ${attachmentId}, includeData: ${includeData}`);
@@ -1587,8 +1793,8 @@ export class AutotaskService {
     }
   }
 
-  async searchTicketAttachments(ticketId: number, options: AutotaskQueryOptionsExtended = {}): Promise<AutotaskTicketAttachment[]> {
-    const client = await this.ensureClient();
+  async searchTicketAttachments(ticketId: number, options: AutotaskQueryOptionsExtended = {}, tenantContext?: TenantContext): Promise<AutotaskTicketAttachment[]> {
+    const client = await this.getClientForTenant(tenantContext);
     
     try {
       this.logger.debug(`Searching ticket attachments for ticket ${ticketId}:`, options);
@@ -1612,8 +1818,8 @@ export class AutotaskService {
   }
 
   // Expense entities
-  async getExpenseReport(id: number): Promise<AutotaskExpenseReport | null> {
-    const client = await this.ensureClient();
+  async getExpenseReport(id: number, tenantContext?: TenantContext): Promise<AutotaskExpenseReport | null> {
+    const client = await this.getClientForTenant(tenantContext);
     
     try {
       this.logger.debug(`Getting expense report with ID: ${id}`);
@@ -1625,8 +1831,8 @@ export class AutotaskService {
     }
   }
 
-  async searchExpenseReports(options: AutotaskQueryOptionsExtended = {}): Promise<AutotaskExpenseReport[]> {
-    const client = await this.ensureClient();
+  async searchExpenseReports(options: AutotaskQueryOptionsExtended = {}, tenantContext?: TenantContext): Promise<AutotaskExpenseReport[]> {
+    const client = await this.getClientForTenant(tenantContext);
     
     try {
       this.logger.debug('Searching expense reports with options:', options);
@@ -1656,8 +1862,8 @@ export class AutotaskService {
     }
   }
 
-  async createExpenseReport(report: Partial<AutotaskExpenseReport>): Promise<number> {
-    const client = await this.ensureClient();
+  async createExpenseReport(report: Partial<AutotaskExpenseReport>, tenantContext?: TenantContext): Promise<number> {
+    const client = await this.getClientForTenant(tenantContext);
     
     try {
       this.logger.debug('Creating expense report:', report);
@@ -1673,24 +1879,24 @@ export class AutotaskService {
 
   // For expense items, we'll need to use a different approach since they're child entities
   // This is a placeholder - actual implementation may vary based on API structure
-  async getExpenseItem(_expenseId: number, _itemId: number): Promise<AutotaskExpenseItem | null> {
+  async getExpenseItem(_expenseId: number, _itemId: number, _tenantContext?: TenantContext): Promise<AutotaskExpenseItem | null> {
     // This would need to be implemented based on the actual API structure for child items
     throw new Error('Expense items API not yet implemented - requires child entity handling');
   }
 
-  async searchExpenseItems(_expenseId: number, _options: AutotaskQueryOptionsExtended = {}): Promise<AutotaskExpenseItem[]> {
+  async searchExpenseItems(_expenseId: number, _options: AutotaskQueryOptionsExtended = {}, _tenantContext?: TenantContext): Promise<AutotaskExpenseItem[]> {
     // This would need to be implemented based on the actual API structure for child items
     throw new Error('Expense items API not yet implemented - requires child entity handling');
   }
 
-  async createExpenseItem(_expenseId: number, _item: Partial<AutotaskExpenseItem>): Promise<number> {
+  async createExpenseItem(_expenseId: number, _item: Partial<AutotaskExpenseItem>, _tenantContext?: TenantContext): Promise<number> {
     // This would need to be implemented based on the actual API structure for child items
     throw new Error('Expense items API not yet implemented - requires child entity handling');
   }
 
   // Quote entity
-  async getQuote(id: number): Promise<AutotaskQuote | null> {
-    const client = await this.ensureClient();
+  async getQuote(id: number, tenantContext?: TenantContext): Promise<AutotaskQuote | null> {
+    const client = await this.getClientForTenant(tenantContext);
     
     try {
       this.logger.debug(`Getting quote with ID: ${id}`);
@@ -1702,8 +1908,8 @@ export class AutotaskService {
     }
   }
 
-  async searchQuotes(options: AutotaskQueryOptionsExtended = {}): Promise<AutotaskQuote[]> {
-    const client = await this.ensureClient();
+  async searchQuotes(options: AutotaskQueryOptionsExtended = {}, tenantContext?: TenantContext): Promise<AutotaskQuote[]> {
+    const client = await this.getClientForTenant(tenantContext);
     
     try {
       this.logger.debug('Searching quotes with options:', options);
@@ -1739,8 +1945,8 @@ export class AutotaskService {
     }
   }
 
-  async createQuote(quote: Partial<AutotaskQuote>): Promise<number> {
-    const client = await this.ensureClient();
+  async createQuote(quote: Partial<AutotaskQuote>, tenantContext?: TenantContext): Promise<number> {
+    const client = await this.getClientForTenant(tenantContext);
     
     try {
       this.logger.debug('Creating quote:', quote);
@@ -1756,19 +1962,19 @@ export class AutotaskService {
 
   // BillingCode and Department entities are not directly available in autotask-node
   // These would need to be implemented via custom API calls or alternative endpoints
-  async getBillingCode(_id: number): Promise<AutotaskBillingCode | null> {
+  async getBillingCode(_id: number, _tenantContext?: TenantContext): Promise<AutotaskBillingCode | null> {
     throw new Error('Billing codes API not directly available in autotask-node library');
   }
 
-  async searchBillingCodes(_options: AutotaskQueryOptionsExtended = {}): Promise<AutotaskBillingCode[]> {
+  async searchBillingCodes(_options: AutotaskQueryOptionsExtended = {}, _tenantContext?: TenantContext): Promise<AutotaskBillingCode[]> {
     throw new Error('Billing codes API not directly available in autotask-node library');
   }
 
-  async getDepartment(_id: number): Promise<AutotaskDepartment | null> {
+  async getDepartment(_id: number, _tenantContext?: TenantContext): Promise<AutotaskDepartment | null> {
     throw new Error('Departments API not directly available in autotask-node library');
   }
 
-  async searchDepartments(_options: AutotaskQueryOptionsExtended = {}): Promise<AutotaskDepartment[]> {
+  async searchDepartments(_options: AutotaskQueryOptionsExtended = {}, _tenantContext?: TenantContext): Promise<AutotaskDepartment[]> {
     throw new Error('Departments API not directly available in autotask-node library');
   }
 } 

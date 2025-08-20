@@ -85,6 +85,12 @@ export class MappingService {
    * Initialize cache with company and resource data
    */
   private async initializeCache(): Promise<void> {
+    // Skip cache initialization in multi-tenant mode
+    if (this.autotaskService.isInMultiTenantMode()) {
+      this.logger.info('Multi-tenant mode detected - skipping cache initialization (mapping will use direct API calls)');
+      return;
+    }
+
     if (this.isCacheValid('companies') && this.isCacheValid('resources')) {
       return;
     }
@@ -192,7 +198,8 @@ export class MappingService {
       // Fallback to direct API lookup (if cache just doesn't have this specific resource)
       this.logger.debug(`Resource ${resourceId} not in cache, attempting direct lookup`);
       try {
-        const resource = await this.autotaskService.getResource(resourceId);
+        // Pass undefined tenant context for single-tenant mode
+        const resource = await this.autotaskService.getResource(resourceId, undefined);
         if (resource && resource.firstName && resource.lastName) {
           const fullName = `${resource.firstName} ${resource.lastName}`.trim();
           // Add to cache for future use
@@ -231,9 +238,15 @@ export class MappingService {
   }
 
   /**
-   * Refresh the company cache
+   * Refresh company cache safely - handles multi-tenant environments
    */
   private async refreshCompanyCache(): Promise<void> {
+    // Skip cache refresh in multi-tenant mode
+    if (this.autotaskService.isInMultiTenantMode()) {
+      this.logger.debug('Multi-tenant mode - skipping company cache refresh');
+      return;
+    }
+
     if (this.isCacheValid('companies')) {
       return; // Cache is still valid
     }
@@ -242,9 +255,10 @@ export class MappingService {
       this.logger.info('Refreshing company cache...');
       
       // Use pagination-by-default to get ALL companies for complete accuracy
+      // Pass undefined tenant context for single-tenant mode
       const companies = await this.autotaskService.searchCompanies({
         // No pageSize specified - gets ALL companies via pagination by default
-      });
+      }, undefined);
 
       this.cache.companies.clear();
       
@@ -264,15 +278,22 @@ export class MappingService {
   }
 
   /**
-   * Refresh resource cache safely (handle endpoint limitations)
+   * Refresh resource cache safely (handle endpoint limitations and multi-tenant mode)
    */
   private async refreshResourceCache(): Promise<void> {
+    // Skip cache refresh in multi-tenant mode
+    if (this.autotaskService.isInMultiTenantMode()) {
+      this.logger.debug('Multi-tenant mode - skipping resource cache refresh');
+      return;
+    }
+
     try {
       this.logger.debug('Refreshing resource cache...');
       
       // Note: Some Autotask instances don't support resource listing via REST API
       // This is a known limitation - see Autotask documentation
-      const resources = await this.autotaskService.searchResources({ pageSize: 0 });
+      // Pass undefined tenant context for single-tenant mode
+      const resources = await this.autotaskService.searchResources({ pageSize: 0 }, undefined);
       
       this.cache.resources.clear();
       for (const resource of resources) {

@@ -64,12 +64,34 @@ export class AutotaskSseServer {
     // Parse JSON
     this.app.use(express.json());
 
-    // Request logging
+    // Request logging with detailed tenant debugging
     this.app.use((req, _res, next) => {
-      this.logger.info(`${req.method} ${req.path}`, {
-        headers: req.headers,
-        query: req.query
-      });
+      const requestInfo = {
+        method: req.method,
+        path: req.path,
+        query: req.query,
+        userAgent: req.headers['user-agent'],
+        contentType: req.headers['content-type'],
+        bodySize: req.body ? JSON.stringify(req.body).length : 0
+      };
+
+      this.logger.info(`📥 Incoming request: ${req.method} ${req.path}`, requestInfo);
+
+      // Log tenant information if present in body or query
+      const hasTenantInBody = req.body && (req.body._tenant || req.body.tenant || req.body.credentials);
+      const hasTenantInQuery = req.query && (req.query._tenant || req.query.tenant || req.query.credentials);
+      
+      if (hasTenantInBody || hasTenantInQuery) {
+        this.logger.debug('🏢 Tenant credentials detected in request', {
+          inBody: hasTenantInBody,
+          inQuery: hasTenantInQuery,
+          tenantFields: {
+            body: hasTenantInBody ? Object.keys(req.body._tenant || req.body.tenant || req.body.credentials || {}) : [],
+            query: hasTenantInQuery ? Object.keys(req.query._tenant || req.query.tenant || req.query.credentials || {}) : []
+          }
+        });
+      }
+
       next();
     });
   }
@@ -88,36 +110,55 @@ export class AutotaskSseServer {
     // SSE endpoint - establishes the Server-Sent Events connection
     this.app.get('/sse', (_req, res) => {
       try {
-        this.logger.info('New SSE connection request');
+        this.logger.info('🔌 New SSE connection request');
 
         // Create SSE transport with POST endpoint for client messages
         const transport = new SSEServerTransport('/messages', res);
         const sessionId = transport.sessionId;
 
-        this.logger.info(`Created SSE transport with session ID: ${sessionId}`);
+        this.logger.info(`✅ Created SSE transport with session ID: ${sessionId}`, {
+          sessionId,
+          clientIP: _req.ip,
+          userAgent: _req.headers['user-agent'],
+          totalActiveSessions: this.transports.size
+        });
 
         // Store transport for message handling
         this.transports.set(sessionId, transport);
 
         // Handle client disconnect
         res.on('close', () => {
-          this.logger.info(`SSE connection closed for session: ${sessionId}`);
+          this.logger.info(`🔌 SSE connection closed for session: ${sessionId}`, {
+            sessionId,
+            remainingSessions: this.transports.size - 1
+          });
           this.transports.delete(sessionId);
         });
 
         res.on('error', (error) => {
-          this.logger.error(`SSE connection error for session ${sessionId}:`, error);
+          this.logger.error(`❌ SSE connection error for session ${sessionId}:`, {
+            sessionId,
+            error: error.message,
+            stack: error.stack
+          });
           this.transports.delete(sessionId);
         });
 
         // Connect MCP server to this transport
         this.mcpServer['server'].connect(transport).catch((error: any) => {
-          this.logger.error(`Failed to connect MCP server to SSE transport:`, error);
+          this.logger.error(`❌ Failed to connect MCP server to SSE transport:`, {
+            sessionId,
+            error: error.message,
+            stack: error.stack
+          });
           this.transports.delete(sessionId);
         });
 
       } catch (error) {
-        this.logger.error('Failed to establish SSE connection:', error);
+        this.logger.error('❌ Failed to establish SSE connection:', {
+          error: error instanceof Error ? error.message : 'Unknown error',
+          stack: error instanceof Error ? error.stack : undefined
+        });
         res.status(500).json({
           success: false,
           error: 'Failed to establish SSE connection',
@@ -128,10 +169,56 @@ export class AutotaskSseServer {
 
     // POST endpoint - handles client-to-server messages
     this.app.post('/messages', async (req, res) => {
+      const startTime = Date.now();
       try {
         const sessionId = req.query.sessionId as string;
         
+        // Enhanced debugging for tenant context flow
+        this.logger.info('📨 RAW MESSAGE STRUCTURE DEBUG', {
+          sessionId,
+          messageId: req.body?.id,
+          method: req.body?.method,
+          jsonrpc: req.body?.jsonrpc,
+          hasParams: !!req.body?.params,
+          paramsKeys: req.body?.params ? Object.keys(req.body.params) : 'none',
+          toolName: req.body?.params?.name,
+          hasArguments: !!(req.body?.params?.arguments),
+          argumentsKeys: req.body?.params?.arguments ? Object.keys(req.body.params.arguments) : 'none',
+          fullBody: req.body
+        });
+
+        // Check for tenant information in the message
+        if (req.body?.params?.arguments) {
+          const args = req.body.params.arguments;
+          const hasTenant = args._tenant || args.tenant || args.credentials;
+          
+          if (hasTenant) {
+            const tenantInfo = args._tenant || args.tenant || args.credentials;
+            this.logger.debug('🏢 Tenant credentials found in MCP message', {
+              sessionId,
+              messageId: req.body?.id,
+              method: req.body?.method,
+              tenantId: tenantInfo.tenantId,
+              username: tenantInfo.username ? `${tenantInfo.username.substring(0, 3)}***` : undefined,
+              hasSecret: !!tenantInfo.secret,
+              hasIntegrationCode: !!tenantInfo.integrationCode,
+              hasApiUrl: !!tenantInfo.apiUrl,
+              hasSessionId: !!tenantInfo.sessionId
+            });
+          } else {
+            this.logger.debug('🏠 No tenant credentials in MCP message (single-tenant mode)', {
+              sessionId,
+              messageId: req.body?.id,
+              method: req.body?.method
+            });
+          }
+        }
+        
         if (!sessionId) {
+          this.logger.warn('❌ Missing session ID in message request', {
+            query: req.query,
+            body: req.body
+          });
           return res.status(400).json({
             success: false,
             error: 'Session ID required',
@@ -141,6 +228,11 @@ export class AutotaskSseServer {
 
         const transport = this.transports.get(sessionId);
         if (!transport) {
+          this.logger.warn('❌ Session not found for message', {
+            sessionId,
+            activeSessions: Array.from(this.transports.keys()),
+            messageId: req.body?.id
+          });
           return res.status(404).json({
             success: false,
             error: 'Session not found',
@@ -148,14 +240,36 @@ export class AutotaskSseServer {
           });
         }
 
-        this.logger.debug(`Handling message for session ${sessionId}:`, req.body);
+        this.logger.debug(`🔄 Processing MCP message for session ${sessionId}`, {
+          sessionId,
+          messageId: req.body?.id,
+          method: req.body?.method,
+          processingStartTime: startTime
+        });
 
         // Handle the message through the SSE transport
         await transport.handlePostMessage(req, res, req.body);
+        
+        const processingTime = Date.now() - startTime;
+        this.logger.debug(`✅ MCP message processed successfully`, {
+          sessionId,
+          messageId: req.body?.id,
+          method: req.body?.method,
+          processingTimeMs: processingTime
+        });
+        
         return;
 
       } catch (error) {
-        this.logger.error('Failed to handle POST message:', error);
+        const processingTime = Date.now() - startTime;
+        this.logger.error('❌ Failed to handle POST message:', {
+          sessionId: req.query.sessionId,
+          messageId: req.body?.id,
+          method: req.body?.method,
+          error: error instanceof Error ? error.message : 'Unknown error',
+          stack: error instanceof Error ? error.stack : undefined,
+          processingTimeMs: processingTime
+        });
         return res.status(500).json({
           success: false,
           error: 'Internal server error',

@@ -111,18 +111,80 @@ export class AutotaskMcpServer {
 
     // Call a tool
     this.server.setRequestHandler(CallToolRequestSchema, async (request) => {
+      const startTime = Date.now();
+      const requestId = `mcp_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+      
       try {
-        this.logger.debug(`Handling tool call: ${request.params.name}`);
+        this.logger.info('🔧 MCP tool call received', {
+          requestId,
+          toolName: request.params.name,
+          hasArguments: !!request.params.arguments,
+          argumentKeys: request.params.arguments ? Object.keys(request.params.arguments) : [],
+          timestamp: new Date().toISOString()
+        });
+
+        // Check for tenant information in arguments
+        if (request.params.arguments) {
+          const args = request.params.arguments;
+          const hasTenant = args._tenant || args.tenant || args.credentials;
+          
+          if (hasTenant) {
+            const tenantInfo = (args._tenant || args.tenant || args.credentials) as any;
+            this.logger.info('🏢 MCP tool call includes tenant credentials', {
+              requestId,
+              toolName: request.params.name,
+              tenantId: tenantInfo.tenantId,
+              username: tenantInfo.username ? `${tenantInfo.username.substring(0, 3)}***` : undefined,
+              hasSecret: !!tenantInfo.secret,
+              hasIntegrationCode: !!tenantInfo.integrationCode,
+              hasApiUrl: !!tenantInfo.apiUrl
+            });
+          } else {
+            this.logger.debug('🏠 MCP tool call using single-tenant mode', {
+              requestId,
+              toolName: request.params.name
+            });
+          }
+        }
+
+        this.logger.debug(`🔧 Handling tool call: ${request.params.name}`, { requestId });
+        
+        // Enhanced debugging for tenant context flow
+        this.logger.info('🔧 MCP SERVER ARGS DEBUG', {
+          requestId,
+          toolName: request.params.name,
+          arguments: request.params.arguments,
+        });
+        
         const result = await this.toolHandler.callTool(
           request.params.name,
           request.params.arguments || {}
         );
+        
+        const executionTime = Date.now() - startTime;
+        this.logger.info('✅ MCP tool call completed', {
+          requestId,
+          toolName: request.params.name,
+          success: !result.isError,
+          executionTimeMs: executionTime,
+          hasContent: !!result.content,
+          contentCount: result.content?.length || 0
+        });
+
         return {
           content: result.content,
           isError: result.isError
         };
       } catch (error) {
-        this.logger.error(`Failed to call tool ${request.params.name}:`, error);
+        const executionTime = Date.now() - startTime;
+        this.logger.error(`❌ MCP tool call failed: ${request.params.name}`, {
+          requestId,
+          toolName: request.params.name,
+          error: error instanceof Error ? error.message : 'Unknown error',
+          stack: error instanceof Error ? error.stack : undefined,
+          errorObject: error,
+          executionTimeMs: executionTime
+        });
         throw new McpError(
           ErrorCode.InternalError,
           `Failed to call tool: ${error instanceof Error ? error.message : 'Unknown error'}`
