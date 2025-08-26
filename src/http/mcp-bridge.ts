@@ -46,7 +46,7 @@ export class McpHttpBridge {
    */
   async callTool(toolName: string, request: HttpToolRequest): Promise<HttpToolResponse> {
     try {
-      this.logger.debug(`HTTP tool call: ${toolName}`, { 
+      this.logger.info(`HTTP tool call: ${toolName}`, { 
         args: this.sanitizeArgsForLogging(request.arguments),
         hasTenant: !!request.tenant 
       });
@@ -82,7 +82,13 @@ export class McpHttpBridge {
    */
   async getAvailableTools() {
     try {
-      const tools = await this.toolHandler.listTools();
+      const tools = await this.toolHandler.listTools(); // No tenant context available for HTTP tool listing
+      
+      this.logger.info(`📋 HTTP: Listed ${tools.length} tools`, {
+        mode: 'default (write - no tenant context)',
+        toolNames: tools.map(t => t.name)
+      });
+      
       return {
         success: true,
         data: tools,
@@ -90,6 +96,34 @@ export class McpHttpBridge {
       };
     } catch (error) {
       this.logger.error('Failed to get available tools:', error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown error',
+        timestamp: new Date().toISOString()
+      };
+    }
+  }
+
+  /**
+   * Get list of available tools filtered by tenant context
+   */
+  async getAvailableToolsForTenant(tenantContext: any): Promise<HttpToolResponse> {
+    try {
+      const tools = await this.toolHandler.getToolsForTenant(tenantContext);
+      
+      this.logger.info(`📋 HTTP: Listed ${tools.length} tools for tenant`, {
+        tenantId: tenantContext.tenantId,
+        mode: tenantContext.mode,
+        toolNames: tools.map(t => t.name)
+      });
+      
+      return {
+        success: true,
+        data: tools,
+        timestamp: new Date().toISOString()
+      };
+    } catch (error) {
+      this.logger.error(`Failed to get available tools for tenant:`, error);
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Unknown error',

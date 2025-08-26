@@ -82,7 +82,7 @@ export class AutotaskSseServer {
       const hasTenantInQuery = req.query && (req.query._tenant || req.query.tenant || req.query.credentials);
       
       if (hasTenantInBody || hasTenantInQuery) {
-        this.logger.debug('🏢 Tenant credentials detected in request', {
+        this.logger.info('🏢 Tenant credentials detected in request', {
           inBody: hasTenantInBody,
           inQuery: hasTenantInQuery,
           tenantFields: {
@@ -194,7 +194,7 @@ export class AutotaskSseServer {
           
           if (hasTenant) {
             const tenantInfo = args._tenant || args.tenant || args.credentials;
-            this.logger.debug('🏢 Tenant credentials found in MCP message', {
+            this.logger.info('🏢 Tenant credentials found in MCP message', {
               sessionId,
               messageId: req.body?.id,
               method: req.body?.method,
@@ -206,7 +206,7 @@ export class AutotaskSseServer {
               hasSessionId: !!tenantInfo.sessionId
             });
           } else {
-            this.logger.debug('🏠 No tenant credentials in MCP message (single-tenant mode)', {
+            this.logger.info('🏠 No tenant credentials in MCP message (single-tenant mode)', {
               sessionId,
               messageId: req.body?.id,
               method: req.body?.method
@@ -240,7 +240,7 @@ export class AutotaskSseServer {
           });
         }
 
-        this.logger.debug(`🔄 Processing MCP message for session ${sessionId}`, {
+        this.logger.info(`🔄 Processing MCP message for session ${sessionId}`, {
           sessionId,
           messageId: req.body?.id,
           method: req.body?.method,
@@ -251,7 +251,7 @@ export class AutotaskSseServer {
         await transport.handlePostMessage(req, res, req.body);
         
         const processingTime = Date.now() - startTime;
-        this.logger.debug(`✅ MCP message processed successfully`, {
+        this.logger.info(`✅ MCP message processed successfully`, {
           sessionId,
           messageId: req.body?.id,
           method: req.body?.method,

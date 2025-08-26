@@ -69,6 +69,7 @@ export class AutotaskService {
       this.startClientCleanup();
     }
   }
+ 
 
   /**
    * Get or create Autotask client for tenant
@@ -76,7 +77,7 @@ export class AutotaskService {
   private async getClientForTenant(tenantContext?: TenantContext): Promise<AutotaskClient> {
     if (!this.isMultiTenant) {
       // Single-tenant mode: use default client
-      this.logger.debug('🏠 Using single-tenant mode - getting default client');
+      this.logger.info('🏠 Using single-tenant mode - getting default client');
       return this.ensureClient();
     }
 
@@ -95,7 +96,7 @@ export class AutotaskService {
     const tenantId = tenantContext.tenantId;
     const cacheKey = this.getTenantCacheKey(tenantContext.credentials);
 
-    this.logger.debug('🔍 Checking client pool for tenant', {
+    this.logger.info('🔍 Checking client pool for tenant', {
       tenantId,
       cacheKey: cacheKey.substring(0, 8) + '...',
       poolSize: this.clientPool.size,
@@ -116,7 +117,7 @@ export class AutotaskService {
     }
 
     if (poolEntry && !this.isClientValid(poolEntry)) {
-      this.logger.debug('⏰ Cached client expired for tenant, removing from pool', {
+      this.logger.info('⏰ Cached client expired for tenant, removing from pool', {
         tenantId,
         cacheKey: cacheKey.substring(0, 8) + '...',
         lastUsed: poolEntry.lastUsed
@@ -188,7 +189,7 @@ export class AutotaskService {
       }
 
       if (oldestKey) {
-        this.logger.debug(`Removing oldest client from pool: ${oldestKey}`);
+        this.logger.info(`Removing oldest client from pool: ${oldestKey}`);
         this.clientPool.delete(oldestKey);
       }
     }
@@ -210,7 +211,7 @@ export class AutotaskService {
       }
 
       expiredKeys.forEach(key => {
-        this.logger.debug(`Removing expired client from pool: ${key}`);
+        this.logger.info(`Removing expired client from pool: ${key}`);
         this.clientPool.delete(key);
       });
 
@@ -241,7 +242,7 @@ export class AutotaskService {
         throw new Error('Missing required Autotask credentials: username, secret, and integrationCode are required');
       }
 
-      this.logger.debug('Creating Autotask client for tenant...', { 
+      this.logger.info('Creating Autotask client for tenant...', { 
         impersonationResourceId: impersonationResourceId ? `[Resource ID: ${impersonationResourceId}]` : undefined 
       });
       
@@ -379,7 +380,7 @@ export class AutotaskService {
   async getCompany(id: number, tenantContext?: TenantContext): Promise<AutotaskCompany | null> {
     const startTime = Date.now();
     
-    this.logger.debug('🏢 Getting company by ID', {
+    this.logger.info('🏢 Getting company by ID', {
       companyId: id,
       hasTenantContext: !!tenantContext,
       tenantId: tenantContext?.tenantId,
@@ -389,7 +390,7 @@ export class AutotaskService {
     const client = await this.getClientForTenant(tenantContext);
     
     try {
-      this.logger.debug(`Getting company with ID: ${id}`, { tenant: tenantContext?.tenantId });
+      this.logger.info(`Getting company with ID: ${id}`, { tenant: tenantContext?.tenantId });
       const result = await client.accounts.get(id);
       
       const executionTime = Date.now() - startTime;
@@ -419,15 +420,29 @@ export class AutotaskService {
     this.logger.info('🔍 Searching companies', {
       hasTenantContext: !!tenantContext,
       tenantId: tenantContext?.tenantId,
+      impersonationResourceId: tenantContext?.impersonationResourceId,
       hasFilter: !!options.filter,
+      filterCount: options.filter?.length || 0,
       pageSize: options.pageSize,
       operation: 'searchCompanies'
+    });
+
+    // Log detailed API parameters
+    this.logger.info('📋 API Parameters for searchCompanies', {
+      tenantId: tenantContext?.tenantId,
+      impersonationResourceId: tenantContext?.impersonationResourceId,
+      queryOptions: {
+        filter: options.filter,
+        pageSize: options.pageSize,
+        ...options // Include any other options
+      },
+      apiEndpoint: 'client.accounts.list'
     });
 
     const client = await this.getClientForTenant(tenantContext);
     
     try {
-      this.logger.debug('Searching companies with options:', options);
+      this.logger.info('Searching companies with options:', options);
       
       // PAGINATION BY DEFAULT for data accuracy
       // Only limit results when user explicitly provides pageSize
@@ -438,7 +453,7 @@ export class AutotaskService {
           pageSize: Math.min(options.pageSize, 500) // Respect user limit, max 500 per request
         };
 
-        this.logger.debug('Single page request with user-specified limit:', queryOptions);
+        this.logger.info('Single page request with user-specified limit:', queryOptions);
         
         const result = await client.accounts.list(queryOptions as any);
         const companies = (result.data as AutotaskCompany[]) || [];
@@ -466,7 +481,7 @@ export class AutotaskService {
             page: currentPage
           };
 
-          this.logger.debug(`Fetching companies page ${currentPage}...`, {
+          this.logger.info(`Fetching companies page ${currentPage}...`, {
             tenantId: tenantContext?.tenantId,
             page: currentPage,
             pageSize
@@ -523,7 +538,27 @@ export class AutotaskService {
     const client = await this.getClientForTenant(tenantContext);
     
     try {
-      this.logger.debug('Creating company:', company);
+      this.logger.info('🏢 Creating company', {
+        tenantId: tenantContext?.tenantId,
+        impersonationResourceId: tenantContext?.impersonationResourceId,
+        operation: 'createCompany'
+      });
+
+      // Log detailed API parameters (excluding sensitive data)
+      this.logger.info('📋 API Parameters for createCompany', {
+        tenantId: tenantContext?.tenantId,
+        impersonationResourceId: tenantContext?.impersonationResourceId,
+        companyData: {
+          companyName: company.companyName,
+          companyType: company.companyType,
+          hasOwnerResourceID: !!company.ownerResourceID,
+          hasPhone: !!company.phone,
+          hasAddress: !!(company.address1 || company.address2),
+          fieldCount: Object.keys(company).length
+        },
+        apiEndpoint: 'client.accounts.create'
+      });
+
       const result = await client.accounts.create(company as any);
       const companyId = (result.data as any)?.id;
       this.logger.info(`Company created with ID: ${companyId}`);
@@ -538,7 +573,7 @@ export class AutotaskService {
     const client = await this.getClientForTenant(tenantContext);
     
     try {
-      this.logger.debug(`Updating company ${id}:`, updates);
+      this.logger.info(`Updating company ${id}:`, updates);
       await client.accounts.update(id, updates as any);
       this.logger.info(`Company ${id} updated successfully`);
     } catch (error) {
@@ -552,7 +587,7 @@ export class AutotaskService {
     const client = await this.getClientForTenant(tenantContext);
     
     try {
-      this.logger.debug(`Getting contact with ID: ${id}`);
+      this.logger.info(`Getting contact with ID: ${id}`);
       const result = await client.contacts.get(id);
       return result.data as AutotaskContact || null;
     } catch (error) {
@@ -565,7 +600,7 @@ export class AutotaskService {
     const client = await this.getClientForTenant(tenantContext);
     
     try {
-      this.logger.debug('Searching contacts with options:', options);
+      this.logger.info('Searching contacts with options:', options);
       
       // PAGINATION BY DEFAULT for data accuracy
       // Only limit results when user explicitly provides pageSize
@@ -576,7 +611,7 @@ export class AutotaskService {
           pageSize: Math.min(options.pageSize, 500) // Respect user limit, max 500 per request
         };
 
-        this.logger.debug('Single page request with user-specified limit:', queryOptions);
+        this.logger.info('Single page request with user-specified limit:', queryOptions);
         
         const result = await client.contacts.list(queryOptions as any);
         const contacts = (result.data as AutotaskContact[]) || [];
@@ -598,7 +633,7 @@ export class AutotaskService {
             page: currentPage
           };
 
-          this.logger.debug(`Fetching contacts page ${currentPage}...`);
+          this.logger.info(`Fetching contacts page ${currentPage}...`);
           
           const result = await client.contacts.list(queryOptions as any);
           const contacts = (result.data as AutotaskContact[]) || [];
@@ -636,7 +671,7 @@ export class AutotaskService {
     const client = await this.getClientForTenant(tenantContext);
     
     try {
-      this.logger.debug('Creating contact:', contact);
+      this.logger.info('Creating contact:', contact);
       const result = await client.contacts.create(contact as any);
       const contactId = (result.data as any)?.id;
       this.logger.info(`Contact created with ID: ${contactId}`);
@@ -651,7 +686,7 @@ export class AutotaskService {
     const client = await this.getClientForTenant(tenantContext);
     
     try {
-      this.logger.debug(`Updating contact ${id}:`, updates);
+      this.logger.info(`Updating contact ${id}:`, updates);
       await client.contacts.update(id, updates as any);
       this.logger.info(`Contact ${id} updated successfully`);
     } catch (error) {
@@ -665,7 +700,7 @@ export class AutotaskService {
     const client = await this.getClientForTenant(tenantContext);
     
     try {
-      this.logger.debug(`Getting ticket with ID: ${id}, fullDetails: ${fullDetails}`);
+      this.logger.info(`Getting ticket with ID: ${id}, fullDetails: ${fullDetails}`);
       
       const result = await client.tickets.get(id);
       const ticket = result.data as AutotaskTicket;
@@ -686,7 +721,28 @@ export class AutotaskService {
     const client = await this.getClientForTenant(tenantContext);
     
     try {
-      this.logger.debug('Searching tickets with options:', options);
+      this.logger.info('🎫 Searching tickets', {
+        tenantId: tenantContext?.tenantId,
+        impersonationResourceId: tenantContext?.impersonationResourceId,
+        hasSearchTerm: !!options.searchTerm,
+        hasStatusFilter: options.status !== undefined,
+        pageSize: options.pageSize,
+        operation: 'searchTickets'
+      });
+
+      // Log detailed API parameters
+      this.logger.info('📋 API Parameters for searchTickets', {
+        tenantId: tenantContext?.tenantId,
+        impersonationResourceId: tenantContext?.impersonationResourceId,
+        searchCriteria: {
+          searchTerm: options.searchTerm,
+          status: options.status,
+          pageSize: options.pageSize,
+          // Don't log the full filter array as it can be large, just summary
+          filterCount: 'will be calculated'
+        },
+        apiEndpoint: 'client.tickets.list'
+      });
       
       // Build proper filter array for Autotask API
       const filters: any[] = [];
@@ -755,14 +811,29 @@ export class AutotaskService {
           pageSize: Math.min(options.pageSize, 500) // Respect user limit, max 500 per request
         };
 
-        this.logger.debug('Single page request with user-specified limit:', queryOptions);
+        this.logger.info('Single page request with user-specified limit:', queryOptions);
         
         const result = await client.tickets.list(queryOptions);
         const tickets = (result.data as AutotaskTicket[]) || [];
         
+        // Log API call result
+        this.logger.info('📊 API Result for searchTickets', {
+          tenantId: tenantContext?.tenantId,
+          impersonationResourceId: tenantContext?.impersonationResourceId,
+          resultCount: tickets.length,
+          requestedPageSize: options.pageSize,
+          actualFilterCount: filters.length,
+          apiEndpoint: 'client.tickets.list',
+          hasResultData: !!result.data
+        });
+        
         const optimizedTickets = tickets.map(ticket => this.optimizeTicketDataAggressive(ticket));
         
-        this.logger.info(`Retrieved ${optimizedTickets.length} tickets (limited by user to ${options.pageSize})`);
+        this.logger.info(`✅ Retrieved ${optimizedTickets.length} tickets (limited by user to ${options.pageSize})`, {
+          tenantId: tenantContext?.tenantId,
+          impersonationResourceId: tenantContext?.impersonationResourceId,
+          resultCount: optimizedTickets.length
+        });
         return optimizedTickets;
         
       } else {
@@ -779,7 +850,7 @@ export class AutotaskService {
             page: currentPage
           };
 
-          this.logger.debug(`Fetching page ${currentPage} with filter:`, filters);
+          this.logger.info(`Fetching page ${currentPage} with filter:`, filters);
           
           const result = await client.tickets.list(queryOptions);
           const tickets = (result.data as AutotaskTicket[]) || [];
@@ -895,7 +966,7 @@ export class AutotaskService {
     const client = await this.getClientForTenant(tenantContext);
     
     try {
-      this.logger.debug('Creating ticket:', ticket);
+      this.logger.info('Creating ticket:', ticket);
       const result = await client.tickets.create(ticket as any);
       const ticketId = (result.data as any)?.id;
       this.logger.info(`Ticket created with ID: ${ticketId}`);
@@ -910,7 +981,7 @@ export class AutotaskService {
     const client = await this.getClientForTenant(tenantContext);
     
     try {
-      this.logger.debug(`Updating ticket ${id}:`, updates);
+      this.logger.info(`Updating ticket ${id}:`, updates);
       await client.tickets.update(id, updates as any);
       this.logger.info(`Ticket ${id} updated successfully`);
     } catch (error) {
@@ -924,7 +995,7 @@ export class AutotaskService {
     const client = await this.getClientForTenant(tenantContext);
     
     try {
-      this.logger.debug('Creating time entry:', timeEntry);
+      this.logger.info('Creating time entry:', timeEntry);
       const result = await client.timeEntries.create(timeEntry as any);
       const timeEntryId = (result.data as any)?.id;
       this.logger.info(`Time entry created with ID: ${timeEntryId}`);
@@ -939,7 +1010,7 @@ export class AutotaskService {
     const client = await this.getClientForTenant(tenantContext);
     
     try {
-      this.logger.debug('Getting time entries with options:', options);
+      this.logger.info('Getting time entries with options:', options);
       const result = await client.timeEntries.list(options as any);
       return (result.data as AutotaskTimeEntry[]) || [];
     } catch (error) {
@@ -953,7 +1024,7 @@ export class AutotaskService {
     const client = await this.getClientForTenant(tenantContext);
     
     try {
-      this.logger.debug(`Getting project with ID: ${id}`);
+      this.logger.info(`Getting project with ID: ${id}`);
       const result = await client.projects.get(id);
       return result.data as unknown as AutotaskProject || null;
     } catch (error) {
@@ -966,7 +1037,7 @@ export class AutotaskService {
     const client = await this.getClientForTenant(tenantContext);
     
     try {
-      this.logger.debug('Searching projects with options:', options);
+      this.logger.info('Searching projects with options:', options);
       
       // WORKAROUND: The autotask-node library's projects.list() method is broken
       // It uses GET with query params instead of POST with body like the working companies endpoint
@@ -1039,7 +1110,7 @@ export class AutotaskService {
       const finalPageSize = pageSize > 100 ? 100 : pageSize;
       searchBody.pageSize = finalPageSize;
 
-      this.logger.debug('Making direct API call to Projects/query with body:', searchBody);
+      this.logger.info('Making direct API call to Projects/query with body:', searchBody);
 
       // Make the correct API call directly using the axios instance from the client
       const response = await (client as any).axios.post('/Projects/query', searchBody);
@@ -1095,7 +1166,7 @@ export class AutotaskService {
     const client = await this.getClientForTenant(tenantContext);
     
     try {
-      this.logger.debug('Creating project:', project);
+      this.logger.info('Creating project:', project);
       const result = await client.projects.create(project as any);
       const projectId = (result.data as any)?.id;
       this.logger.info(`Project created with ID: ${projectId}`);
@@ -1110,7 +1181,7 @@ export class AutotaskService {
     const client = await this.getClientForTenant(tenantContext);
     
     try {
-      this.logger.debug(`Updating project ${id}:`, updates);
+      this.logger.info(`Updating project ${id}:`, updates);
       await client.projects.update(id, updates as any);
       this.logger.info(`Project ${id} updated successfully`);
     } catch (error) {
@@ -1124,7 +1195,7 @@ export class AutotaskService {
     const client = await this.getClientForTenant(tenantContext);
     
     try {
-      this.logger.debug(`Getting resource with ID: ${id}`);
+      this.logger.info(`Getting resource with ID: ${id}`);
       const result = await client.resources.get(id);
       return result.data as AutotaskResource || null;
     } catch (error) {
@@ -1137,7 +1208,7 @@ export class AutotaskService {
     const client = await this.getClientForTenant(tenantContext);
     
     try {
-      this.logger.debug('Searching resources with options:', options);
+      this.logger.info('Searching resources with options:', options);
       
       // PAGINATION BY DEFAULT for data accuracy
       // Only limit results when user explicitly provides pageSize
@@ -1148,7 +1219,7 @@ export class AutotaskService {
           pageSize: Math.min(options.pageSize, 500) // Respect user limit, max 500 per request
         };
 
-        this.logger.debug('Single page request with user-specified limit:', queryOptions);
+        this.logger.info('Single page request with user-specified limit:', queryOptions);
         
         const result = await client.resources.list(queryOptions as any);
         const resources = (result.data as AutotaskResource[]) || [];
@@ -1170,7 +1241,7 @@ export class AutotaskService {
             page: currentPage
           };
 
-          this.logger.debug(`Fetching resources page ${currentPage}...`);
+          this.logger.info(`Fetching resources page ${currentPage}...`);
           
           const result = await client.resources.list(queryOptions as any);
           const resources = (result.data as AutotaskResource[]) || [];
@@ -1209,7 +1280,7 @@ export class AutotaskService {
   //   const client = await this.ensureClient();
   //   
   //   try {
-  //     this.logger.debug(`Getting opportunity with ID: ${id}`);
+  //     this.logger.info(`Getting opportunity with ID: ${id}`);
   //     const result = await client.opportunities.get(id);
   //     return result.data as AutotaskOpportunity || null;
   //   } catch (error) {
@@ -1222,7 +1293,7 @@ export class AutotaskService {
   //   const client = await this.ensureClient();
   //   
   //   try {
-  //     this.logger.debug('Searching opportunities with options:', options);
+  //     this.logger.info('Searching opportunities with options:', options);
   //     const result = await client.opportunities.list(options as any);
   //     return (result.data as AutotaskOpportunity[]) || [];
   //   } catch (error) {
@@ -1235,7 +1306,7 @@ export class AutotaskService {
   //   const client = await this.ensureClient();
   //   
   //   try {
-  //     this.logger.debug('Creating opportunity:', opportunity);
+  //     this.logger.info('Creating opportunity:', opportunity);
   //     const result = await client.opportunities.create(opportunity as any);
   //     const opportunityId = (result.data as any)?.id;
   //     this.logger.info(`Opportunity created with ID: ${opportunityId}`);
@@ -1250,7 +1321,7 @@ export class AutotaskService {
   //   const client = await this.ensureClient();
   //   
   //   try {
-  //     this.logger.debug(`Updating opportunity ${id}:`, updates);
+  //     this.logger.info(`Updating opportunity ${id}:`, updates);
   //     await client.opportunities.update(id, updates as any);
   //     this.logger.info(`Opportunity ${id} updated successfully`);
   //   } catch (error) {
@@ -1264,7 +1335,7 @@ export class AutotaskService {
     const client = await this.getClientForTenant(tenantContext);
     
     try {
-      this.logger.debug(`Getting configuration item with ID: ${id}`);
+      this.logger.info(`Getting configuration item with ID: ${id}`);
       const result = await client.configurationItems.get(id);
       return result.data as AutotaskConfigurationItem || null;
     } catch (error) {
@@ -1277,7 +1348,7 @@ export class AutotaskService {
     const client = await this.getClientForTenant(tenantContext);
     
     try {
-      this.logger.debug('Searching configuration items with options:', options);
+      this.logger.info('Searching configuration items with options:', options);
       const result = await client.configurationItems.list(options as any);
       return (result.data as AutotaskConfigurationItem[]) || [];
     } catch (error) {
@@ -1290,7 +1361,7 @@ export class AutotaskService {
     const client = await this.getClientForTenant(tenantContext);
     
     try {
-      this.logger.debug('Creating configuration item:', configItem);
+      this.logger.info('Creating configuration item:', configItem);
       const result = await client.configurationItems.create(configItem as any);
       const configItemId = (result.data as any)?.id;
       this.logger.info(`Configuration item created with ID: ${configItemId}`);
@@ -1305,7 +1376,7 @@ export class AutotaskService {
     const client = await this.getClientForTenant(tenantContext);
     
     try {
-      this.logger.debug(`Updating configuration item ${id}:`, updates);
+      this.logger.info(`Updating configuration item ${id}:`, updates);
       await client.configurationItems.update(id, updates as any);
       this.logger.info(`Configuration item ${id} updated successfully`);
     } catch (error) {
@@ -1319,7 +1390,7 @@ export class AutotaskService {
   //   const client = await this.ensureClient();
   //   
   //   try {
-  //     this.logger.debug(`Getting product with ID: ${id}`);
+  //     this.logger.info(`Getting product with ID: ${id}`);
   //     const result = await client.products.get(id);
   //     return result.data as AutotaskProduct || null;
   //   } catch (error) {
@@ -1332,7 +1403,7 @@ export class AutotaskService {
   //   const client = await this.ensureClient();
   //   
   //   try {
-  //     this.logger.debug('Searching products with options:', options);
+  //     this.logger.info('Searching products with options:', options);
   //     const result = await client.products.list(options as any);
   //     return (result.data as AutotaskProduct[]) || [];
   //   } catch (error) {
@@ -1346,7 +1417,7 @@ export class AutotaskService {
     const client = await this.getClientForTenant(tenantContext);
     
     try {
-      this.logger.debug(`Getting contract with ID: ${id}`);
+      this.logger.info(`Getting contract with ID: ${id}`);
       const result = await client.contracts.get(id);
       return result.data as unknown as AutotaskContract || null;
     } catch (error) {
@@ -1359,7 +1430,7 @@ export class AutotaskService {
     const client = await this.getClientForTenant(tenantContext);
     
     try {
-      this.logger.debug('Searching contracts with options:', options);
+      this.logger.info('Searching contracts with options:', options);
       const result = await client.contracts.list(options as any);
       return (result.data as unknown as AutotaskContract[]) || [];
     } catch (error) {
@@ -1373,7 +1444,7 @@ export class AutotaskService {
     const client = await this.getClientForTenant(tenantContext);
     
     try {
-      this.logger.debug(`Getting invoice with ID: ${id}`);
+      this.logger.info(`Getting invoice with ID: ${id}`);
       const result = await client.invoices.get(id);
       return result.data as AutotaskInvoice || null;
     } catch (error) {
@@ -1386,7 +1457,7 @@ export class AutotaskService {
     const client = await this.getClientForTenant(tenantContext);
     
     try {
-      this.logger.debug('Searching invoices with options:', options);
+      this.logger.info('Searching invoices with options:', options);
       const result = await client.invoices.list(options as any);
       return (result.data as AutotaskInvoice[]) || [];
     } catch (error) {
@@ -1400,7 +1471,7 @@ export class AutotaskService {
     const client = await this.getClientForTenant(tenantContext);
     
     try {
-      this.logger.debug(`Getting task with ID: ${id}`);
+      this.logger.info(`Getting task with ID: ${id}`);
       const result = await client.tasks.get(id);
       return result.data as unknown as AutotaskTask || null;
     } catch (error) {
@@ -1413,7 +1484,7 @@ export class AutotaskService {
     const client = await this.getClientForTenant(tenantContext);
     
     try {
-      this.logger.debug('Searching tasks with options:', options);
+      this.logger.info('Searching tasks with options:', options);
       
       // Define essential task fields to minimize response size
       const essentialFields = [
@@ -1483,7 +1554,7 @@ export class AutotaskService {
     const client = await this.getClientForTenant(tenantContext);
     
     try {
-      this.logger.debug('Creating task:', task);
+      this.logger.info('Creating task:', task);
       const result = await client.tasks.create(task as any);
       const taskId = (result.data as any)?.id;
       this.logger.info(`Task created with ID: ${taskId}`);
@@ -1498,7 +1569,7 @@ export class AutotaskService {
     const client = await this.getClientForTenant(tenantContext);
     
     try {
-      this.logger.debug(`Updating task ${id}:`, updates);
+      this.logger.info(`Updating task ${id}:`, updates);
       await client.tasks.update(id, updates as any);
       this.logger.info(`Task ${id} updated successfully`);
     } catch (error) {
@@ -1589,7 +1660,7 @@ export class AutotaskService {
     const client = await this.getClientForTenant(tenantContext);
     
     try {
-      this.logger.debug(`Getting ticket note - TicketID: ${ticketId}, NoteID: ${noteId}`);
+      this.logger.info(`Getting ticket note - TicketID: ${ticketId}, NoteID: ${noteId}`);
       // Use generic notes endpoint with filtering
       const result = await client.notes.list({
         filter: [
@@ -1609,7 +1680,7 @@ export class AutotaskService {
     const client = await this.getClientForTenant(tenantContext);
     
     try {
-      this.logger.debug(`Searching ticket notes for ticket ${ticketId}:`, options);
+      this.logger.info(`Searching ticket notes for ticket ${ticketId}:`, options);
       
       // Set reasonable limits for notes
       const optimizedOptions = {
@@ -1634,7 +1705,7 @@ export class AutotaskService {
     const client = await this.getClientForTenant(tenantContext);
     
     try {
-      this.logger.debug(`Creating ticket note for ticket ${ticketId}:`, note);
+      this.logger.info(`Creating ticket note for ticket ${ticketId}:`, note);
       const noteData = {
         ...note,
         ticketId: ticketId
@@ -1653,7 +1724,7 @@ export class AutotaskService {
     const client = await this.getClientForTenant(tenantContext);
     
     try {
-      this.logger.debug(`Getting project note - ProjectID: ${projectId}, NoteID: ${noteId}`);
+      this.logger.info(`Getting project note - ProjectID: ${projectId}, NoteID: ${noteId}`);
       const result = await client.notes.list({
         filter: [
           { field: 'projectId', op: 'eq', value: projectId },
@@ -1672,7 +1743,7 @@ export class AutotaskService {
     const client = await this.getClientForTenant(tenantContext);
     
     try {
-      this.logger.debug(`Searching project notes for project ${projectId}:`, options);
+      this.logger.info(`Searching project notes for project ${projectId}:`, options);
       
       const optimizedOptions = {
         filter: [
@@ -1696,7 +1767,7 @@ export class AutotaskService {
     const client = await this.getClientForTenant(tenantContext);
     
     try {
-      this.logger.debug(`Creating project note for project ${projectId}:`, note);
+      this.logger.info(`Creating project note for project ${projectId}:`, note);
       const noteData = {
         ...note,
         projectId: projectId
@@ -1715,7 +1786,7 @@ export class AutotaskService {
     const client = await this.getClientForTenant(tenantContext);
     
     try {
-      this.logger.debug(`Getting company note - CompanyID: ${companyId}, NoteID: ${noteId}`);
+      this.logger.info(`Getting company note - CompanyID: ${companyId}, NoteID: ${noteId}`);
       const result = await client.notes.list({
         filter: [
           { field: 'accountId', op: 'eq', value: companyId },
@@ -1734,7 +1805,7 @@ export class AutotaskService {
     const client = await this.getClientForTenant(tenantContext);
     
     try {
-      this.logger.debug(`Searching company notes for company ${companyId}:`, options);
+      this.logger.info(`Searching company notes for company ${companyId}:`, options);
       
       const optimizedOptions = {
         filter: [
@@ -1758,7 +1829,7 @@ export class AutotaskService {
     const client = await this.getClientForTenant(tenantContext);
     
     try {
-      this.logger.debug(`Creating company note for company ${companyId}:`, note);
+      this.logger.info(`Creating company note for company ${companyId}:`, note);
       const noteData = {
         ...note,
         accountId: companyId
@@ -1778,7 +1849,7 @@ export class AutotaskService {
     const client = await this.getClientForTenant(tenantContext);
     
     try {
-      this.logger.debug(`Getting ticket attachment - TicketID: ${ticketId}, AttachmentID: ${attachmentId}, includeData: ${includeData}`);
+      this.logger.info(`Getting ticket attachment - TicketID: ${ticketId}, AttachmentID: ${attachmentId}, includeData: ${includeData}`);
       
       // Search for attachment by parent ID and attachment ID
       const result = await client.attachments.list({
@@ -1800,7 +1871,7 @@ export class AutotaskService {
     const client = await this.getClientForTenant(tenantContext);
     
     try {
-      this.logger.debug(`Searching ticket attachments for ticket ${ticketId}:`, options);
+      this.logger.info(`Searching ticket attachments for ticket ${ticketId}:`, options);
       
       const optimizedOptions = {
         filter: [
@@ -1825,7 +1896,7 @@ export class AutotaskService {
     const client = await this.getClientForTenant(tenantContext);
     
     try {
-      this.logger.debug(`Getting expense report with ID: ${id}`);
+      this.logger.info(`Getting expense report with ID: ${id}`);
       const result = await client.expenses.get(id);
       return result.data as unknown as AutotaskExpenseReport || null;
     } catch (error) {
@@ -1838,7 +1909,7 @@ export class AutotaskService {
     const client = await this.getClientForTenant(tenantContext);
     
     try {
-      this.logger.debug('Searching expense reports with options:', options);
+      this.logger.info('Searching expense reports with options:', options);
       
       // Build filter based on provided options
       const filters = [];
@@ -1869,7 +1940,7 @@ export class AutotaskService {
     const client = await this.getClientForTenant(tenantContext);
     
     try {
-      this.logger.debug('Creating expense report:', report);
+      this.logger.info('Creating expense report:', report);
       const result = await client.expenses.create(report as any);
       const reportId = (result.data as any)?.id;
       this.logger.info(`Expense report created with ID: ${reportId}`);
@@ -1902,7 +1973,7 @@ export class AutotaskService {
     const client = await this.getClientForTenant(tenantContext);
     
     try {
-      this.logger.debug(`Getting quote with ID: ${id}`);
+      this.logger.info(`Getting quote with ID: ${id}`);
       const result = await client.quotes.get(id);
       return result.data as AutotaskQuote || null;
     } catch (error) {
@@ -1915,7 +1986,7 @@ export class AutotaskService {
     const client = await this.getClientForTenant(tenantContext);
     
     try {
-      this.logger.debug('Searching quotes with options:', options);
+      this.logger.info('Searching quotes with options:', options);
       
       // Build filter based on provided options
       const filters = [];
@@ -1952,7 +2023,7 @@ export class AutotaskService {
     const client = await this.getClientForTenant(tenantContext);
     
     try {
-      this.logger.debug('Creating quote:', quote);
+      this.logger.info('Creating quote:', quote);
       const result = await client.quotes.create(quote as any);
       const quoteId = (result.data as any)?.id;
       this.logger.info(`Quote created with ID: ${quoteId}`);

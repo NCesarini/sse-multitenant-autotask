@@ -75,7 +75,7 @@ export class EnhancedAutotaskToolHandler {
    * Extract tenant context from tool arguments
    */
   private extractTenantContext(args: Record<string, any>): TenantContext | undefined {
-    this.logger.debug('🔍 Extracting tenant context from tool arguments', {
+    this.logger.info('🔍 Extracting tenant context from tool arguments', {
       hasArgs: !!args,
       argKeys: Object.keys(args || {}),
       has_tenant: !!(args && args._tenant),
@@ -134,7 +134,7 @@ export class EnhancedAutotaskToolHandler {
         delete args.tenant;
         delete args.credentials;
 
-        this.logger.debug('🧹 Cleaned tenant data from arguments', {
+        this.logger.info('🧹 Cleaned tenant data from arguments', {
           remainingArgKeys: Object.keys(args)
         });
 
@@ -152,7 +152,7 @@ export class EnhancedAutotaskToolHandler {
         });
       }
     } else {
-      this.logger.debug('🏠 No tenant credentials found - using single-tenant mode');
+      this.logger.info('🏠 No tenant credentials found - using single-tenant mode');
     }
 
     return undefined;
@@ -209,8 +209,8 @@ export class EnhancedAutotaskToolHandler {
     return 'read'; // Default to read for unknown tools
   }
 
-  async listTools(): Promise<McpTool[]> {
-    return [
+  async listTools(tenantContext?: TenantContext): Promise<McpTool[]> {
+    const allTools = [
       // Company tools
       EnhancedAutotaskToolHandler.createTool(
         'search_companies',
@@ -692,6 +692,39 @@ export class EnhancedAutotaskToolHandler {
         {}
       )
     ];
+
+    // Extract mode from tenant context
+    const mode = tenantContext?.mode || 'read'; // Default to write mode if no tenant context
+    
+    this.logger.info('MODE from tenant context', { 
+      mode, 
+      hasTenantContext: !!tenantContext,
+      tenantId: tenantContext?.tenantId 
+    });
+    
+    // Filter tools based on tenant mode
+    if (mode === 'read') {
+      // For read mode, only return tools that are read-only
+      return allTools.filter(tool => {
+        const toolOperationType = this.getToolOperationType(tool.name);
+        return toolOperationType === 'read';
+      });
+    }
+    
+    // For write mode or no tenant context specified, return all tools
+    return allTools;
+  }
+
+  /**
+   * Get tools filtered by tenant context (for cases where tenant context is known)
+   */
+  async getToolsForTenant(tenantContext: TenantContext): Promise<McpTool[]> {
+    this.logger.info('🔧 Getting tools for specific tenant', {
+      tenantId: tenantContext.tenantId,
+      mode: tenantContext.mode
+    });
+    
+    return await this.listTools(tenantContext);
   }
 
   async callTool(name: string, args: Record<string, any>): Promise<McpToolResult> {
@@ -783,103 +816,103 @@ export class EnhancedAutotaskToolHandler {
       switch (name) {
         // Company tools
         case 'search_companies':
-          this.logger.debug(`📊 Executing search_companies`, { toolCallId });
+          this.logger.info(`📊 Executing search_companies`, { toolCallId });
           result = await this.searchCompanies(args, tenantContext);
           break;
         
         case 'create_company':
-          this.logger.debug(`➕ Executing create_company`, { toolCallId });
+          this.logger.info(`➕ Executing create_company`, { toolCallId });
           result = await this.createCompany(args, tenantContext);
           break;
 
         case 'update_company':
-          this.logger.debug(`✏️ Executing update_company`, { toolCallId });
+          this.logger.info(`✏️ Executing update_company`, { toolCallId });
           result = await this.updateCompany(args, tenantContext);
           break;
 
         // Contact tools
         case 'search_contacts':
-          this.logger.debug(`📊 Executing search_contacts`, { toolCallId });
+          this.logger.info(`📊 Executing search_contacts`, { toolCallId });
           result = await this.searchContacts(args, tenantContext);
           break;
 
         case 'create_contact':
-          this.logger.debug(`➕ Executing create_contact`, { toolCallId });
+          this.logger.info(`➕ Executing create_contact`, { toolCallId });
           result = await this.createContact(args, tenantContext);
           break;
 
         case 'update_contact':
-          this.logger.debug(`✏️ Executing update_contact`, { toolCallId });
+          this.logger.info(`✏️ Executing update_contact`, { toolCallId });
           result = await this.updateContact(args, tenantContext);
           break;
 
         // Ticket tools
         case 'search_tickets':
-          this.logger.debug(`📊 Executing search_tickets`, { toolCallId });
+          this.logger.info(`📊 Executing search_tickets`, { toolCallId });
           result = await this.searchTickets(args, tenantContext);
           break;
 
         case 'create_ticket':
-          this.logger.debug(`➕ Executing create_ticket`, { toolCallId });
+          this.logger.info(`➕ Executing create_ticket`, { toolCallId });
           result = await this.createTicket(args, tenantContext);
           break;
 
         case 'update_ticket':
-          this.logger.debug(`✏️ Executing update_ticket`, { toolCallId });
+          this.logger.info(`✏️ Executing update_ticket`, { toolCallId });
           result = await this.updateTicket(args, tenantContext);
           break;
 
         // Time Entry tools
         case 'create_time_entry':
-          this.logger.debug(`⏰ Executing create_time_entry`, { toolCallId });
+          this.logger.info(`⏰ Executing create_time_entry`, { toolCallId });
           result = await this.createTimeEntry(args, tenantContext);
           break;
 
         // Project tools
         case 'search_projects':
-          this.logger.debug(`📊 Executing search_projects`, { toolCallId });
+          this.logger.info(`📊 Executing search_projects`, { toolCallId });
           result = await this.searchProjects(args, tenantContext);
           break;
 
         // Resource tools
         case 'search_resources':
-          this.logger.debug(`📊 Executing search_resources`, { toolCallId });
+          this.logger.info(`📊 Executing search_resources`, { toolCallId });
           result = await this.searchResources(args, tenantContext);
           break;
 
         // ID-to-Name Mapping tools
         case 'get_company_name':
-          this.logger.debug(`🏷️ Executing get_company_name`, { toolCallId });
+          this.logger.info(`🏷️ Executing get_company_name`, { toolCallId });
           result = await this.getCompanyName(args, tenantContext);
           break;
 
         case 'get_resource_name':
-          this.logger.debug(`🏷️ Executing get_resource_name`, { toolCallId });
+          this.logger.info(`🏷️ Executing get_resource_name`, { toolCallId });
           result = await this.getResourceName(args, tenantContext);
           break;
 
         case 'get_mapping_cache_stats':
-          this.logger.debug(`📈 Executing get_mapping_cache_stats`, { toolCallId });
+          this.logger.info(`📈 Executing get_mapping_cache_stats`, { toolCallId });
           result = await this.getMappingCacheStats(args, tenantContext);
           break;
 
         case 'clear_mapping_cache':
-          this.logger.debug(`🗑️ Executing clear_mapping_cache`, { toolCallId });
+          this.logger.info(`🗑️ Executing clear_mapping_cache`, { toolCallId });
           result = await this.clearMappingCache(args, tenantContext);
           break;
 
         case 'preload_mapping_cache':
-          this.logger.debug(`🚀 Executing preload_mapping_cache`, { toolCallId });
+          this.logger.info(`🚀 Executing preload_mapping_cache`, { toolCallId });
           result = await this.preloadMappingCache(args, tenantContext);
           break;
         
         case 'test_connection':
-          this.logger.debug(`🔗 Executing test_connection`, { toolCallId });
+          this.logger.info(`🔗 Executing test_connection`, { toolCallId });
           result = await this.testConnection(tenantContext);
           break;
 
         case 'test_zone_information':
-          this.logger.debug(`🌐 Executing test_zone_information`, { toolCallId });
+          this.logger.info(`🌐 Executing test_zone_information`, { toolCallId });
           result = await this.testZoneInformation(tenantContext);
           break;
 
@@ -962,7 +995,7 @@ export class EnhancedAutotaskToolHandler {
               enhanced._enhanced = enhanced._enhanced || {};
               enhanced._enhanced.ownerResourceName = await mappingService.getResourceName(company.ownerResourceID);
             } catch (error) {
-              this.logger.debug(`Failed to map owner resource ID ${company.ownerResourceID}:`, error);
+              this.logger.info(`Failed to map owner resource ID ${company.ownerResourceID}:`, error);
               enhanced._enhanced = enhanced._enhanced || {};
               enhanced._enhanced.ownerResourceName = `Unknown (${company.ownerResourceID})`;
             }
@@ -1084,7 +1117,7 @@ export class EnhancedAutotaskToolHandler {
               enhanced._enhanced = enhanced._enhanced || {};
               enhanced._enhanced.companyName = await mappingService.getCompanyName(contact.companyID);
             } catch (error) {
-              this.logger.debug(`Failed to map company ID ${contact.companyID}:`, error);
+              this.logger.info(`Failed to map company ID ${contact.companyID}:`, error);
               enhanced._enhanced = enhanced._enhanced || {};
               enhanced._enhanced.companyName = `Unknown (${contact.companyID})`;
             }
@@ -1217,7 +1250,7 @@ export class EnhancedAutotaskToolHandler {
               enhanced._enhanced = enhanced._enhanced || {};
               enhanced._enhanced.companyName = await mappingService.getCompanyName(ticket.companyID);
             } catch (error) {
-              this.logger.debug(`Failed to map company ID ${ticket.companyID}:`, error);
+              this.logger.info(`Failed to map company ID ${ticket.companyID}:`, error);
               enhanced._enhanced = enhanced._enhanced || {};
               enhanced._enhanced.companyName = `Unknown (${ticket.companyID})`;
             }
@@ -1229,7 +1262,7 @@ export class EnhancedAutotaskToolHandler {
               enhanced._enhanced = enhanced._enhanced || {};
               enhanced._enhanced.assignedResourceName = await mappingService.getResourceName(ticket.assignedResourceID);
             } catch (error) {
-              this.logger.debug(`Failed to map assigned resource ID ${ticket.assignedResourceID}:`, error);
+              this.logger.info(`Failed to map assigned resource ID ${ticket.assignedResourceID}:`, error);
               enhanced._enhanced = enhanced._enhanced || {};
               enhanced._enhanced.assignedResourceName = `Unknown (${ticket.assignedResourceID})`;
             }
@@ -1363,7 +1396,7 @@ export class EnhancedAutotaskToolHandler {
               enhanced._enhanced = enhanced._enhanced || {};
               enhanced._enhanced.companyName = await mappingService.getCompanyName(project.companyID);
             } catch (error) {
-              this.logger.debug(`Failed to map company ID ${project.companyID}:`, error);
+              this.logger.info(`Failed to map company ID ${project.companyID}:`, error);
               enhanced._enhanced = enhanced._enhanced || {};
               enhanced._enhanced.companyName = `Unknown (${project.companyID})`;
             }

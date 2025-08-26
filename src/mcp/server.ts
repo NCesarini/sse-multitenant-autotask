@@ -67,7 +67,7 @@ export class AutotaskMcpServer {
     // List available resources
     this.server.setRequestHandler(ListResourcesRequestSchema, async () => {
       try {
-        this.logger.debug('Handling list resources request');
+        this.logger.info('Handling list resources request');
         const resources = await this.resourceHandler.listResources();
         return { resources };
       } catch (error) {
@@ -82,7 +82,7 @@ export class AutotaskMcpServer {
     // Read a specific resource
     this.server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
       try {
-        this.logger.debug(`Handling read resource request for: ${request.params.uri}`);
+        this.logger.info(`Handling read resource request for: ${request.params.uri}`);
         const content = await this.resourceHandler.readResource(request.params.uri);
         return { contents: [content] };
       } catch (error) {
@@ -97,8 +97,14 @@ export class AutotaskMcpServer {
     // List available tools
     this.server.setRequestHandler(ListToolsRequestSchema, async () => {
       try {
-        this.logger.debug('Handling list tools request');
-        const tools = await this.toolHandler.listTools();
+        this.logger.info('Handling list tools request (no tenant context available at protocol level)');
+        const tools = await this.toolHandler.listTools(); // No tenant context available during listTools
+        
+        this.logger.info(`📋 Listed ${tools.length} tools`, {
+          mode: 'default (write - no tenant context)',
+          toolNames: tools.map(t => t.name)
+        });
+        
         return { tools };
       } catch (error) {
         this.logger.error('Failed to list tools:', error);
@@ -140,14 +146,14 @@ export class AutotaskMcpServer {
               hasApiUrl: !!tenantInfo.apiUrl
             });
           } else {
-            this.logger.debug('🏠 MCP tool call using single-tenant mode', {
+            this.logger.info('🏠 MCP tool call using single-tenant mode', {
               requestId,
               toolName: request.params.name
             });
           }
         }
 
-        this.logger.debug(`🔧 Handling tool call: ${request.params.name}`, { requestId });
+        this.logger.info(`🔧 Handling tool call: ${request.params.name}`, { requestId });
         
         // Enhanced debugging for tenant context flow
         this.logger.info('🔧 MCP SERVER ARGS DEBUG', {

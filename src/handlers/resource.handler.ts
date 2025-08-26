@@ -31,7 +31,7 @@ export class AutotaskResourceHandler {
    * List all available resources
    */
   async listResources(): Promise<McpResource[]> {
-    this.logger.debug('Listing available Autotask resources');
+    this.logger.info('Listing available Autotask resources');
 
     const resources: McpResource[] = [
       // Company resources
@@ -85,7 +85,7 @@ export class AutotaskResourceHandler {
       }
     ];
 
-    this.logger.debug(`Listed ${resources.length} available resources`);
+    this.logger.info(`Listed ${resources.length} available resources`);
     return resources;
   }
 
@@ -93,7 +93,7 @@ export class AutotaskResourceHandler {
    * Read a specific resource by URI
    */
   async readResource(uri: string): Promise<McpResourceContent> {
-    this.logger.debug(`Reading resource: ${uri}`);
+    this.logger.info(`Reading resource: ${uri}`);
 
     // Parse the URI to determine the resource type and ID
     const { resourceType, resourceId } = this.parseUri(uri);
@@ -166,7 +166,7 @@ export class AutotaskResourceHandler {
       }, null, 2)
     };
 
-    this.logger.debug(`Successfully read resource: ${uri}`);
+    this.logger.info(`Successfully read resource: ${uri}`);
     return content;
   }
 
