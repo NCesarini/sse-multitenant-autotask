@@ -245,24 +245,44 @@ This server provides access to Kaseya Autotask PSA data and operations through t
 - **autotask://tickets** - List all tickets
 
 ## Available Tools:
-- **search_companies** - Search for companies with filters
-- **create_company** - Create a new company
-- **update_company** - Update company information
-- **search_contacts** - Search for contacts with filters
-- **create_contact** - Create a new contact
-- **update_contact** - Update contact information
-- **search_tickets** - Search for tickets with filters
-- **create_ticket** - Create a new ticket
-- **update_ticket** - Update ticket information
-- **create_time_entry** - Log time against a ticket or project
-- **test_connection** - Test Autotask API connectivity
+### Company Operations
+- **search_companies** - Search for companies with filters (read-only)
+- **create_company** - Create a new company (write)
+- **update_company** - Update company information (modify)
+
+### Contact Operations
+- **search_contacts** - Search for contacts with filters (read-only)
+- **create_contact** - Create a new contact (write)
+- **update_contact** - Update contact information (modify)
+
+### Ticket Operations
+- **search_tickets** - Search for tickets with filters (read-only)
+- **create_ticket** - Create a new ticket (write)
+- **update_ticket** - Update ticket information (modify)
+
+### Project & Resource Operations
+- **search_projects** - Search for projects (read-only)
+- **search_resources** - Search for resources/employees (read-only)
+
+### Time Management
+- **create_time_entry** - Log time against a ticket or project (write)
+
+### Utility Operations
+- **test_connection** - Test Autotask API connectivity (read-only)
+- **test_zone_information** - Test zone information discovery (read-only)
 
 ## ID-to-Name Mapping Tools:
-- **get_company_name** - Get company name by ID
-- **get_resource_name** - Get resource name by ID
-- **get_mapping_cache_stats** - Get mapping cache statistics
-- **clear_mapping_cache** - Clear mapping cache
-- **preload_mapping_cache** - Preload mapping cache for better performance
+- **get_company_name** - Get company name by ID (read-only)
+- **get_resource_name** - Get resource name by ID (read-only)
+- **get_mapping_cache_stats** - Get mapping cache statistics (read-only)
+- **clear_mapping_cache** - Clear mapping cache (modify)
+- **preload_mapping_cache** - Preload mapping cache for better performance (modify)
+
+## Operation Types:
+Each tool includes an operationType attribute indicating its data access pattern:
+- **read**: Read-only operations that don't modify data
+- **write**: Creates new records in Autotask
+- **modify**: Updates existing records or system state
 
 ## Enhanced Features:
 All search and detail tools automatically include human-readable names for company and resource IDs in the enhanced field of each result.
@@ -272,6 +292,27 @@ This server requires valid Autotask API credentials. Ensure you have:
 - AUTOTASK_USERNAME (API user email)
 - AUTOTASK_SECRET (API secret key)
 - AUTOTASK_INTEGRATION_CODE (integration code)
+
+## User Impersonation:
+The server supports user impersonation as per Autotask REST API documentation. When using multi-tenant mode, you can include an optional impersonationResourceId in the tenant credentials to act on behalf of a specific user. This is useful for:
+- Creating entities that should be attributed to specific users rather than "API User"
+- Maintaining proper audit trails and ownership
+- Supporting applications that need to act on behalf of end users
+
+## Access Control Modes:
+The server supports access control modes to restrict operations per tenant session:
+- **write** (default): Full access to all operations (read, write, modify)  
+- **read**: Restricted to read-only operations only (searches, gets, tests)
+
+Include the mode in tenant credentials to enforce restrictions:
+- Mode "read" blocks all create, update, and modify operations
+- Mode "write" allows all operations
+- If no mode is specified, defaults to "write" for backward compatibility
+
+Requirements for impersonation:
+- Both the API user and the target user must have appropriate security permissions
+- The target user's security level must allow impersonation
+- The API user must have permission to impersonate for the specific entity types
 
 For more information, visit: https://github.com/your-org/autotask-mcp
 `.trim();

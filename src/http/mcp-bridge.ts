@@ -16,6 +16,8 @@ export interface HttpToolRequest {
     integrationCode: string;
     apiUrl?: string;
     sessionId?: string;
+    impersonationResourceId?: number;
+    mode?: 'read' | 'write';
   };
 }
 

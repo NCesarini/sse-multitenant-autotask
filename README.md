@@ -13,9 +13,14 @@ A [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) server that p
 - **🔍 Advanced Search**: Powerful search capabilities with filters across all entities
 - **📝 CRUD Operations**: Create, read, update operations for core Autotask entities
 - **👤 User Impersonation**: Act on behalf of specific users while maintaining proper permissions and audit trails
+- **🔒 Access Control Modes**: Enforce read-only or full access modes per tenant session for enhanced security
 - **🔄 ID-to-Name Mapping**: Automatic resolution of company and resource IDs to human-readable names
 - **⚡ Intelligent Caching**: Smart caching system for improved performance and reduced API calls
 - **🔒 Secure Authentication**: Enterprise-grade API security with Autotask credentials
+- **🏢 Multi-Tenant Support**: Support for multiple Autotask instances in a single deployment
+- **📊 Operation Type Labels**: Each tool is labeled with its access pattern (read/write/modify)
+- **🌐 HTTP REST Interface**: Alternative HTTP REST API interface alongside MCP protocol
+- **📡 Real-time Updates**: Server-Sent Events (SSE) support for real-time notifications
 - **🐳 Docker Ready**: Containerized deployment with Docker and docker-compose
 - **📊 Structured Logging**: Comprehensive logging with configurable levels and formats
 - **🧪 Test Coverage**: Comprehensive test suite with 80%+ coverage
@@ -235,6 +240,87 @@ npm run test:mapping
 ```
 
 For detailed mapping documentation, see [docs/mapping.md](docs/mapping.md).
+
+## User Impersonation
+
+The server supports user impersonation as per Autotask REST API documentation. This allows you to act on behalf of specific users while maintaining proper permissions and audit trails.
+
+To use impersonation, include the `impersonationResourceId` in your tenant credentials:
+
+```json
+{
+  "tool": "create_ticket",
+  "arguments": {
+    "companyID": 12345,
+    "title": "Test Ticket",
+    "_tenant": {
+      "username": "api@company.com",
+      "secret": "your-secret",
+      "integrationCode": "ABC123",
+      "impersonationResourceId": 67890
+    }
+  }
+}
+```
+
+## Access Control Modes
+
+The server supports access control modes to restrict operations per tenant session, providing an additional layer of security:
+
+### Available Modes
+
+- **`write`** (default): Full access to all operations (read, write, modify)
+- **`read`**: Restricted to read-only operations only (searches, gets, tests)
+
+### Usage
+
+Include the `mode` parameter in your tenant credentials to enforce restrictions:
+
+```json
+{
+  "tool": "search_companies", 
+  "arguments": {
+    "searchTerm": "Acme Corp",
+    "_tenant": {
+      "username": "api@company.com",
+      "secret": "your-secret", 
+      "integrationCode": "ABC123",
+      "mode": "read"
+    }
+  }
+}
+```
+
+### Mode Enforcement
+
+- **Read mode** (`"mode": "read"`): Only allows tools marked as `operationType: 'read'`
+  - Permitted: `search_companies`, `search_contacts`, `search_tickets`, `get_company_name`, `test_connection`, etc.
+  - Blocked: `create_company`, `update_ticket`, `create_time_entry`, etc.
+
+- **Write mode** (`"mode": "write"`): Allows all operations
+  - All tools are permitted regardless of operation type
+
+- **Default behavior**: If no mode is specified, defaults to `"write"` for backward compatibility
+
+### Error Handling
+
+When a tool is blocked by mode restrictions, you'll receive an error response:
+
+```json
+{
+  "content": [{
+    "type": "text", 
+    "text": "Operation not allowed: Tool \"create_ticket\" (write) is not permitted in \"read\" mode. Only read operations are allowed in read mode."
+  }],
+  "isError": true
+}
+```
+
+This feature is particularly useful for:
+- **Application security**: Prevent accidental data modifications in read-only contexts
+- **User role enforcement**: Implement application-level read-only users
+- **Integration safety**: Ensure reporting/dashboard integrations cannot modify data
+- **Development/testing**: Safe exploration of data without risk of changes
 
 ## Docker Deployment
 

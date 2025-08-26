@@ -14,6 +14,48 @@ export class EnhancedAutotaskToolHandler {
   private mappingService: MappingService | null = null;
   private logger: Logger;
 
+  // Common tenant schema for all tools
+  private static readonly TENANT_SCHEMA = {
+    type: 'object',
+    description: 'Tenant authentication credentials (for multi-tenant mode)',
+    properties: {
+      tenantId: { type: 'string', description: 'Unique tenant identifier' },
+      username: { type: 'string', description: 'Autotask API username' },
+      secret: { type: 'string', description: 'Autotask API secret' },
+      integrationCode: { type: 'string', description: 'Autotask integration code' },
+      apiUrl: { type: 'string', description: 'Optional Autotask API URL' },
+      sessionId: { type: 'string', description: 'Optional session identifier' },
+      impersonationResourceId: { type: 'number', description: 'Optional resource ID to impersonate for this request' },
+      mode: { type: 'string', enum: ['read', 'write'], description: 'Access mode: "read" for read-only operations, "write" for full access (default: write)' }
+    },
+    required: ['username', 'secret', 'integrationCode']
+  } as const;
+
+  /**
+   * Create a tool definition with tenant support
+   */
+  private static createTool(
+    name: string,
+    description: string,
+    operationType: 'read' | 'write' | 'modify',
+    properties: Record<string, any>,
+    required: string[] = []
+  ): McpTool {
+    return {
+      name,
+      description,
+      operationType,
+      inputSchema: {
+        type: 'object',
+        properties: {
+          ...properties,
+          _tenant: EnhancedAutotaskToolHandler.TENANT_SCHEMA
+        },
+        ...(required.length > 0 ? { required } : {})
+      }
+    };
+  }
+
   constructor(autotaskService: AutotaskService, logger: Logger) {
     this.autotaskService = autotaskService;
     this.logger = logger;
@@ -53,9 +95,13 @@ export class EnhancedAutotaskToolHandler {
         hasApiUrl: !!tenantData.apiUrl,
         hasTenantId: !!tenantData.tenantId,
         hasSessionId: !!tenantData.sessionId,
+        hasImpersonationResourceId: !!tenantData.impersonationResourceId,
+        hasMode: !!tenantData.mode,
         tenantId: tenantData.tenantId,
         username: tenantData.username ? `${tenantData.username.substring(0, 3)}***` : undefined,
-        apiUrl: tenantData.apiUrl
+        apiUrl: tenantData.apiUrl,
+        impersonationResourceId: tenantData.impersonationResourceId,
+        mode: tenantData.mode
       });
       
       if (tenantData.username && tenantData.secret && tenantData.integrationCode) {
@@ -69,14 +115,18 @@ export class EnhancedAutotaskToolHandler {
         const tenantContext: TenantContext = {
           tenantId: tenantData.tenantId || `tenant_${credentials.username}`,
           credentials,
-          sessionId: tenantData.sessionId
+          sessionId: tenantData.sessionId,
+          impersonationResourceId: tenantData.impersonationResourceId,
+          mode: tenantData.mode || 'write' // Default to write mode if not specified
         };
 
         this.logger.info('✅ Successfully extracted tenant context', {
           tenantId: tenantContext.tenantId,
           username: credentials.username ? `${credentials.username.substring(0, 3)}***` : undefined,
           hasApiUrl: !!credentials.apiUrl,
-          sessionId: tenantContext.sessionId
+          sessionId: tenantContext.sessionId,
+          impersonationResourceId: tenantContext.impersonationResourceId,
+          mode: tenantContext.mode
         });
 
         // Remove tenant data from args to avoid passing to service methods
@@ -108,781 +158,539 @@ export class EnhancedAutotaskToolHandler {
     return undefined;
   }
 
+  /**
+   * Check if a tool operation is allowed based on tenant mode
+   */
+  private isOperationAllowed(toolName: string, tenantContext?: TenantContext): boolean {
+    if (!tenantContext?.mode) {
+      return true; // No mode restriction
+    }
+    
+    if (tenantContext.mode === 'write') {
+      return true; // Write mode allows all operations
+    }
+    
+    if (tenantContext.mode === 'read') {
+      // Read mode only allows read operations
+      const toolOperationType = this.getToolOperationType(toolName);
+      return toolOperationType === 'read';
+    }
+    
+    return false;
+  }
 
+  /**
+   * Get the operation type for a tool
+   */
+  private getToolOperationType(toolName: string): 'read' | 'write' | 'modify' {
+    const readOnlyTools = [
+      'search_companies', 'search_contacts', 'search_tickets', 'search_projects', 'search_resources',
+      'get_company_name', 'get_resource_name', 'get_mapping_cache_stats',
+      'test_connection', 'test_zone_information'
+    ];
+    
+    const writeTools = [
+      'create_company', 'create_contact', 'create_ticket', 'create_time_entry'
+    ];
+    
+    const modifyTools = [
+      'update_company', 'update_contact', 'update_ticket',
+      'clear_mapping_cache', 'preload_mapping_cache'
+    ];
+    
+    if (readOnlyTools.includes(toolName)) {
+      return 'read';
+    } else if (writeTools.includes(toolName)) {
+      return 'write';
+    } else if (modifyTools.includes(toolName)) {
+      return 'modify';
+    }
+    
+    return 'read'; // Default to read for unknown tools
+  }
 
   async listTools(): Promise<McpTool[]> {
     return [
       // Company tools
-      {
-        name: 'search_companies',
-        description: 'Search for companies in Autotask with filters and enhanced name resolution',
-        inputSchema: {
-          type: 'object',
-          properties: {
-            searchTerm: {
-              type: 'string',
-              description: 'Search term to filter companies by name'
-            },
-            isActive: {
-              type: 'boolean',
-              description: 'Filter by active status'
-            },
-            pageSize: {
-              type: 'number',
-              description: 'Number of results to return (max 500, default: unlimited for complete results)',
-              minimum: 1,
-              maximum: 500
-            },
-            // Multi-tenant support
-            _tenant: {
-              type: 'object',
-              description: 'Tenant authentication credentials (for multi-tenant mode)',
-              properties: {
-                tenantId: { type: 'string', description: 'Unique tenant identifier' },
-                username: { type: 'string', description: 'Autotask API username' },
-                secret: { type: 'string', description: 'Autotask API secret' },
-                integrationCode: { type: 'string', description: 'Autotask integration code' },
-                apiUrl: { type: 'string', description: 'Optional Autotask API URL' },
-                sessionId: { type: 'string', description: 'Optional session identifier' }
-              },
-              required: ['username', 'secret', 'integrationCode']
-            }
+      EnhancedAutotaskToolHandler.createTool(
+        'search_companies',
+        'Search for companies in Autotask with filters and enhanced name resolution',
+        'read',
+        {
+          searchTerm: {
+            type: 'string',
+            description: 'Search term to filter companies by name'
+          },
+          isActive: {
+            type: 'boolean',
+            description: 'Filter by active status'
+          },
+          pageSize: {
+            type: 'number',
+            description: 'Number of results to return (max 500, default: unlimited for complete results)',
+            minimum: 1,
+            maximum: 500
           }
         }
-      },
-      {
-        name: 'create_company',
-        description: 'Create a new company in Autotask',
-        inputSchema: {
-          type: 'object',
-          properties: {
-            companyName: {
-              type: 'string',
-              description: 'Company name'
-            },
-            companyType: {
-              type: 'number',
-              description: 'Company type ID'
-            },
-            phone: {
-              type: 'string',
-              description: 'Phone number'
-            },
-            fax: {
-              type: 'string',
-              description: 'Fax number'
-            },
-            address1: {
-              type: 'string',
-              description: 'Address line 1'
-            },
-            address2: {
-              type: 'string',
-              description: 'Address line 2'
-            },
-            city: {
-              type: 'string',
-              description: 'City'
-            },
-            state: {
-              type: 'string',
-              description: 'State/Province'
-            },
-            postalCode: {
-              type: 'string',
-              description: 'Postal/ZIP code'
-            },
-            country: {
-              type: 'string',
-              description: 'Country'
-            },
-            ownerResourceID: {
-              type: 'number',
-              description: 'Owner resource ID'
-            },
-            _tenant: {
-              type: 'object',
-              description: 'Tenant authentication credentials (for multi-tenant mode)',
-              properties: {
-                tenantId: { type: 'string' },
-                username: { type: 'string' },
-                secret: { type: 'string' },
-                integrationCode: { type: 'string' },
-                apiUrl: { type: 'string' },
-                sessionId: { type: 'string' }
-              },
-              required: ['username', 'secret', 'integrationCode']
-            }
+      ),
+      EnhancedAutotaskToolHandler.createTool(
+        'create_company',
+        'Create a new company in Autotask',
+        'write',
+        {
+          companyName: {
+            type: 'string',
+            description: 'Company name'
           },
-          required: ['companyName', 'companyType']
-        }
-      },
-      {
-        name: 'update_company',
-        description: 'Update an existing company in Autotask',
-        inputSchema: {
-          type: 'object',
-          properties: {
-            id: {
-              type: 'number',
-              description: 'Company ID to update'
-            },
-            companyName: {
-              type: 'string',
-              description: 'Company name'
-            },
-            phone: {
-              type: 'string',
-              description: 'Phone number'
-            },
-            fax: {
-              type: 'string',
-              description: 'Fax number'
-            },
-            address1: {
-              type: 'string',
-              description: 'Address line 1'
-            },
-            address2: {
-              type: 'string',
-              description: 'Address line 2'
-            },
-            city: {
-              type: 'string',
-              description: 'City'
-            },
-            state: {
-              type: 'string',
-              description: 'State/Province'
-            },
-            postalCode: {
-              type: 'string',
-              description: 'Postal/ZIP code'
-            },
-            country: {
-              type: 'string',
-              description: 'Country'
-            },
-            ownerResourceID: {
-              type: 'number',
-              description: 'Owner resource ID'
-            },
-            _tenant: {
-              type: 'object',
-              description: 'Tenant authentication credentials (for multi-tenant mode)',
-              properties: {
-                tenantId: { type: 'string' },
-                username: { type: 'string' },
-                secret: { type: 'string' },
-                integrationCode: { type: 'string' },
-                apiUrl: { type: 'string' },
-                sessionId: { type: 'string' }
-              },
-              required: ['username', 'secret', 'integrationCode']
-            }
+          companyType: {
+            type: 'number',
+            description: 'Company type ID'
           },
-          required: ['id']
-        }
-      },
+          phone: {
+            type: 'string',
+            description: 'Phone number'
+          },
+          fax: {
+            type: 'string',
+            description: 'Fax number'
+          },
+          address1: {
+            type: 'string',
+            description: 'Address line 1'
+          },
+          address2: {
+            type: 'string',
+            description: 'Address line 2'
+          },
+          city: {
+            type: 'string',
+            description: 'City'
+          },
+          state: {
+            type: 'string',
+            description: 'State/Province'
+          },
+          postalCode: {
+            type: 'string',
+            description: 'Postal/ZIP code'
+          },
+          country: {
+            type: 'string',
+            description: 'Country'
+          },
+          ownerResourceID: {
+            type: 'number',
+            description: 'Owner resource ID'
+          }
+        },
+        ['companyName', 'companyType']
+      ),
+      EnhancedAutotaskToolHandler.createTool(
+        'update_company',
+        'Update an existing company in Autotask',
+        'modify',
+        {
+          id: {
+            type: 'number',
+            description: 'Company ID to update'
+          },
+          companyName: {
+            type: 'string',
+            description: 'Company name'
+          },
+          phone: {
+            type: 'string',
+            description: 'Phone number'
+          },
+          fax: {
+            type: 'string',
+            description: 'Fax number'
+          },
+          address1: {
+            type: 'string',
+            description: 'Address line 1'
+          },
+          address2: {
+            type: 'string',
+            description: 'Address line 2'
+          },
+          city: {
+            type: 'string',
+            description: 'City'
+          },
+          state: {
+            type: 'string',
+            description: 'State/Province'
+          },
+          postalCode: {
+            type: 'string',
+            description: 'Postal/ZIP code'
+          },
+          country: {
+            type: 'string',
+            description: 'Country'
+          },
+          ownerResourceID: {
+            type: 'number',
+            description: 'Owner resource ID'
+          }
+        },
+        ['id']
+      ),
 
       // Contact tools
-      {
-        name: 'search_contacts',
-        description: 'Search for contacts in Autotask with filters',
-        inputSchema: {
-          type: 'object',
-          properties: {
-            searchTerm: {
-              type: 'string',
-              description: 'Search term to filter contacts by name or email'
-            },
-            companyId: {
-              type: 'number',
-              description: 'Filter by company ID'
-            },
-            isActive: {
-              type: 'boolean',
-              description: 'Filter by active status'
-            },
-            pageSize: {
-              type: 'number',
-              description: 'Number of results to return (max 500)',
-              minimum: 1,
-              maximum: 500
-            },
-            _tenant: {
-              type: 'object',
-              description: 'Tenant authentication credentials (for multi-tenant mode)',
-              properties: {
-                tenantId: { type: 'string' },
-                username: { type: 'string' },
-                secret: { type: 'string' },
-                integrationCode: { type: 'string' },
-                apiUrl: { type: 'string' },
-                sessionId: { type: 'string' }
-              },
-              required: ['username', 'secret', 'integrationCode']
-            }
+      EnhancedAutotaskToolHandler.createTool(
+        'search_contacts',
+        'Search for contacts in Autotask with filters',
+        'read',
+        {
+          searchTerm: {
+            type: 'string',
+            description: 'Search term to filter contacts by name or email'
+          },
+          companyId: {
+            type: 'number',
+            description: 'Filter by company ID'
+          },
+          isActive: {
+            type: 'boolean',
+            description: 'Filter by active status'
+          },
+          pageSize: {
+            type: 'number',
+            description: 'Number of results to return (max 500)',
+            minimum: 1,
+            maximum: 500
           }
         }
-      },
-      {
-        name: 'create_contact',
-        description: 'Create a new contact in Autotask',
-        inputSchema: {
-          type: 'object',
-          properties: {
-            companyID: {
-              type: 'number',
-              description: 'Company ID for the contact'
-            },
-            firstName: {
-              type: 'string',
-              description: 'First name'
-            },
-            lastName: {
-              type: 'string',
-              description: 'Last name'
-            },
-            emailAddress: {
-              type: 'string',
-              description: 'Email address'
-            },
-            phone: {
-              type: 'string',
-              description: 'Phone number'
-            },
-            title: {
-              type: 'string',
-              description: 'Job title'
-            },
-            _tenant: {
-              type: 'object',
-              description: 'Tenant authentication credentials (for multi-tenant mode)',
-              properties: {
-                tenantId: { type: 'string' },
-                username: { type: 'string' },
-                secret: { type: 'string' },
-                integrationCode: { type: 'string' },
-                apiUrl: { type: 'string' },
-                sessionId: { type: 'string' }
-              },
-              required: ['username', 'secret', 'integrationCode']
-            }
+      ),
+      EnhancedAutotaskToolHandler.createTool(
+        'create_contact',
+        'Create a new contact in Autotask',
+        'write',
+        {
+          companyID: {
+            type: 'number',
+            description: 'Company ID for the contact'
           },
-          required: ['companyID', 'firstName', 'lastName']
-        }
-      },
-      {
-        name: 'update_contact',
-        description: 'Update an existing contact in Autotask',
-        inputSchema: {
-          type: 'object',
-          properties: {
-            id: {
-              type: 'number',
-              description: 'Contact ID to update'
-            },
-            firstName: {
-              type: 'string',
-              description: 'First name'
-            },
-            lastName: {
-              type: 'string',
-              description: 'Last name'
-            },
-            emailAddress: {
-              type: 'string',
-              description: 'Email address'
-            },
-            phone: {
-              type: 'string',
-              description: 'Phone number'
-            },
-            title: {
-              type: 'string',
-              description: 'Job title'
-            },
-            _tenant: {
-              type: 'object',
-              description: 'Tenant authentication credentials (for multi-tenant mode)',
-              properties: {
-                tenantId: { type: 'string' },
-                username: { type: 'string' },
-                secret: { type: 'string' },
-                integrationCode: { type: 'string' },
-                apiUrl: { type: 'string' },
-                sessionId: { type: 'string' }
-              },
-              required: ['username', 'secret', 'integrationCode']
-            }
+          firstName: {
+            type: 'string',
+            description: 'First name'
           },
-          required: ['id']
-        }
-      },
+          lastName: {
+            type: 'string',
+            description: 'Last name'
+          },
+          emailAddress: {
+            type: 'string',
+            description: 'Email address'
+          },
+          phone: {
+            type: 'string',
+            description: 'Phone number'
+          },
+          title: {
+            type: 'string',
+            description: 'Job title'
+          }
+        },
+        ['companyID', 'firstName', 'lastName']
+      ),
+      EnhancedAutotaskToolHandler.createTool(
+        'update_contact',
+        'Update an existing contact in Autotask',
+        'modify',
+        {
+          id: {
+            type: 'number',
+            description: 'Contact ID to update'
+          },
+          firstName: {
+            type: 'string',
+            description: 'First name'
+          },
+          lastName: {
+            type: 'string',
+            description: 'Last name'
+          },
+          emailAddress: {
+            type: 'string',
+            description: 'Email address'
+          },
+          phone: {
+            type: 'string',
+            description: 'Phone number'
+          },
+          title: {
+            type: 'string',
+            description: 'Job title'
+          }
+        },
+        ['id']
+      ),
 
       // Ticket tools
-      {
-        name: 'search_tickets',
-        description: 'Search for tickets in Autotask with filters',
-        inputSchema: {
-          type: 'object',
-          properties: {
-            searchTerm: {
-              type: 'string',
-              description: 'Search term to filter tickets by number or title'
-            },
-            status: {
-              type: 'number',
-              description: 'Filter by status ID'
-            },
-            companyId: {
-              type: 'number',
-              description: 'Filter by company ID'
-            },
-            assignedResourceID: {
-              type: 'number',
-              description: 'Filter by assigned resource ID'
-            },
-            unassigned: {
-              type: 'boolean',
-              description: 'Filter for unassigned tickets'
-            },
-            pageSize: {
-              type: 'number',
-              description: 'Number of results to return (max 500)',
-              minimum: 1,
-              maximum: 500
-            },
-            _tenant: {
-              type: 'object',
-              description: 'Tenant authentication credentials (for multi-tenant mode)',
-              properties: {
-                tenantId: { type: 'string' },
-                username: { type: 'string' },
-                secret: { type: 'string' },
-                integrationCode: { type: 'string' },
-                apiUrl: { type: 'string' },
-                sessionId: { type: 'string' }
-              },
-              required: ['username', 'secret', 'integrationCode']
-            }
+      EnhancedAutotaskToolHandler.createTool(
+        'search_tickets',
+        'Search for tickets in Autotask with filters',
+        'read',
+        {
+          searchTerm: {
+            type: 'string',
+            description: 'Search term to filter tickets by number or title'
+          },
+          status: {
+            type: 'number',
+            description: 'Filter by status ID'
+          },
+          companyId: {
+            type: 'number',
+            description: 'Filter by company ID'
+          },
+          assignedResourceID: {
+            type: 'number',
+            description: 'Filter by assigned resource ID'
+          },
+          unassigned: {
+            type: 'boolean',
+            description: 'Filter for unassigned tickets'
+          },
+          pageSize: {
+            type: 'number',
+            description: 'Number of results to return (max 500)',
+            minimum: 1,
+            maximum: 500
           }
         }
-      },
-      {
-        name: 'create_ticket',
-        description: 'Create a new ticket in Autotask',
-        inputSchema: {
-          type: 'object',
-          properties: {
-            companyID: {
-              type: 'number',
-              description: 'Company ID for the ticket'
-            },
-            title: {
-              type: 'string',
-              description: 'Ticket title'
-            },
-            description: {
-              type: 'string',
-              description: 'Ticket description'
-            },
-            priority: {
-              type: 'number',
-              description: 'Priority level'
-            },
-            status: {
-              type: 'number',
-              description: 'Status ID'
-            },
-            assignedResourceID: {
-              type: 'number',
-              description: 'Assigned resource ID'
-            },
-            contactID: {
-              type: 'number',
-              description: 'Contact ID'
-            },
-            _tenant: {
-              type: 'object',
-              description: 'Tenant authentication credentials (for multi-tenant mode)',
-              properties: {
-                tenantId: { type: 'string' },
-                username: { type: 'string' },
-                secret: { type: 'string' },
-                integrationCode: { type: 'string' },
-                apiUrl: { type: 'string' },
-                sessionId: { type: 'string' }
-              },
-              required: ['username', 'secret', 'integrationCode']
-            }
+      ),
+      EnhancedAutotaskToolHandler.createTool(
+        'create_ticket',
+        'Create a new ticket in Autotask',
+        'write',
+        {
+          companyID: {
+            type: 'number',
+            description: 'Company ID for the ticket'
           },
-          required: ['companyID', 'title']
-        }
-      },
-      {
-        name: 'update_ticket',
-        description: 'Update an existing ticket in Autotask',
-        inputSchema: {
-          type: 'object',
-          properties: {
-            id: {
-              type: 'number',
-              description: 'Ticket ID to update'
-            },
-            title: {
-              type: 'string',
-              description: 'Ticket title'
-            },
-            description: {
-              type: 'string',
-              description: 'Ticket description'
-            },
-            priority: {
-              type: 'number',
-              description: 'Priority level'
-            },
-            status: {
-              type: 'number',
-              description: 'Status ID'
-            },
-            assignedResourceID: {
-              type: 'number',
-              description: 'Assigned resource ID'
-            },
-            resolution: {
-              type: 'string',
-              description: 'Ticket resolution'
-            },
-            _tenant: {
-              type: 'object',
-              description: 'Tenant authentication credentials (for multi-tenant mode)',
-              properties: {
-                tenantId: { type: 'string' },
-                username: { type: 'string' },
-                secret: { type: 'string' },
-                integrationCode: { type: 'string' },
-                apiUrl: { type: 'string' },
-                sessionId: { type: 'string' }
-              },
-              required: ['username', 'secret', 'integrationCode']
-            }
+          title: {
+            type: 'string',
+            description: 'Ticket title'
           },
-          required: ['id']
-        }
-      },
+          description: {
+            type: 'string',
+            description: 'Ticket description'
+          },
+          priority: {
+            type: 'number',
+            description: 'Priority level'
+          },
+          status: {
+            type: 'number',
+            description: 'Status ID'
+          },
+          assignedResourceID: {
+            type: 'number',
+            description: 'Assigned resource ID'
+          },
+          contactID: {
+            type: 'number',
+            description: 'Contact ID'
+          }
+        },
+        ['companyID', 'title']
+      ),
+      EnhancedAutotaskToolHandler.createTool(
+        'update_ticket',
+        'Update an existing ticket in Autotask',
+        'modify',
+        {
+          id: {
+            type: 'number',
+            description: 'Ticket ID to update'
+          },
+          title: {
+            type: 'string',
+            description: 'Ticket title'
+          },
+          description: {
+            type: 'string',
+            description: 'Ticket description'
+          },
+          priority: {
+            type: 'number',
+            description: 'Priority level'
+          },
+          status: {
+            type: 'number',
+            description: 'Status ID'
+          },
+          assignedResourceID: {
+            type: 'number',
+            description: 'Assigned resource ID'
+          },
+          resolution: {
+            type: 'string',
+            description: 'Ticket resolution'
+          }
+        },
+        ['id']
+      ),
 
       // Time Entry tools
-      {
-        name: 'create_time_entry',
-        description: 'Log time against a ticket or project in Autotask',
-        inputSchema: {
-          type: 'object',
-          properties: {
-            ticketID: {
-              type: 'number',
-              description: 'Ticket ID (if logging time against a ticket)'
-            },
-            projectID: {
-              type: 'number',
-              description: 'Project ID (if logging time against a project)'
-            },
-            resourceID: {
-              type: 'number',
-              description: 'Resource ID (person logging time)'
-            },
-            dateWorked: {
-              type: 'string',
-              description: 'Date worked (YYYY-MM-DD format)'
-            },
-            startDateTime: {
-              type: 'string',
-              description: 'Start date/time (ISO format)'
-            },
-            endDateTime: {
-              type: 'string',
-              description: 'End date/time (ISO format)'
-            },
-            hoursWorked: {
-              type: 'number',
-              description: 'Hours worked'
-            },
-            summaryNotes: {
-              type: 'string',
-              description: 'Summary of work performed'
-            },
-            internalNotes: {
-              type: 'string',
-              description: 'Internal notes'
-            },
-            _tenant: {
-              type: 'object',
-              description: 'Tenant authentication credentials (for multi-tenant mode)',
-              properties: {
-                tenantId: { type: 'string' },
-                username: { type: 'string' },
-                secret: { type: 'string' },
-                integrationCode: { type: 'string' },
-                apiUrl: { type: 'string' },
-                sessionId: { type: 'string' }
-              },
-              required: ['username', 'secret', 'integrationCode']
-            }
+      EnhancedAutotaskToolHandler.createTool(
+        'create_time_entry',
+        'Log time against a ticket or project in Autotask',
+        'write',
+        {
+          ticketID: {
+            type: 'number',
+            description: 'Ticket ID (if logging time against a ticket)'
           },
-          required: ['resourceID', 'dateWorked', 'hoursWorked']
-        }
-      },
+          projectID: {
+            type: 'number',
+            description: 'Project ID (if logging time against a project)'
+          },
+          resourceID: {
+            type: 'number',
+            description: 'Resource ID (person logging time)'
+          },
+          dateWorked: {
+            type: 'string',
+            description: 'Date worked (YYYY-MM-DD format)'
+          },
+          startDateTime: {
+            type: 'string',
+            description: 'Start date/time (ISO format)'
+          },
+          endDateTime: {
+            type: 'string',
+            description: 'End date/time (ISO format)'
+          },
+          hoursWorked: {
+            type: 'number',
+            description: 'Hours worked'
+          },
+          summaryNotes: {
+            type: 'string',
+            description: 'Summary of work performed'
+          },
+          internalNotes: {
+            type: 'string',
+            description: 'Internal notes'
+          }
+        },
+        ['resourceID', 'dateWorked', 'hoursWorked']
+      ),
 
       // Project tools
-      {
-        name: 'search_projects',
-        description: 'Search for projects in Autotask',
-        inputSchema: {
-          type: 'object',
-          properties: {
-            searchTerm: {
-              type: 'string',
-              description: 'Search term to filter projects by name'
-            },
-            companyId: {
-              type: 'number',
-              description: 'Filter by company ID'
-            },
-            status: {
-              type: 'number',
-              description: 'Filter by status'
-            },
-            pageSize: {
-              type: 'number',
-              description: 'Number of results to return (max 100)',
-              minimum: 1,
-              maximum: 100
-            },
-            _tenant: {
-              type: 'object',
-              description: 'Tenant authentication credentials (for multi-tenant mode)',
-              properties: {
-                tenantId: { type: 'string' },
-                username: { type: 'string' },
-                secret: { type: 'string' },
-                integrationCode: { type: 'string' },
-                apiUrl: { type: 'string' },
-                sessionId: { type: 'string' }
-              },
-              required: ['username', 'secret', 'integrationCode']
-            }
+      EnhancedAutotaskToolHandler.createTool(
+        'search_projects',
+        'Search for projects in Autotask',
+        'read',
+        {
+          searchTerm: {
+            type: 'string',
+            description: 'Search term to filter projects by name'
+          },
+          companyId: {
+            type: 'number',
+            description: 'Filter by company ID'
+          },
+          status: {
+            type: 'number',
+            description: 'Filter by status'
+          },
+          pageSize: {
+            type: 'number',
+            description: 'Number of results to return (max 100)',
+            minimum: 1,
+            maximum: 100
           }
         }
-      },
+      ),
 
       // Resource tools
-      {
-        name: 'search_resources',
-        description: 'Search for resources (employees) in Autotask',
-        inputSchema: {
-          type: 'object',
-          properties: {
-            searchTerm: {
-              type: 'string',
-              description: 'Search term to filter resources by name'
-            },
-            isActive: {
-              type: 'boolean',
-              description: 'Filter by active status'
-            },
-            pageSize: {
-              type: 'number',
-              description: 'Number of results to return (max 500)',
-              minimum: 1,
-              maximum: 500
-            },
-            _tenant: {
-              type: 'object',
-              description: 'Tenant authentication credentials (for multi-tenant mode)',
-              properties: {
-                tenantId: { type: 'string' },
-                username: { type: 'string' },
-                secret: { type: 'string' },
-                integrationCode: { type: 'string' },
-                apiUrl: { type: 'string' },
-                sessionId: { type: 'string' }
-              },
-              required: ['username', 'secret', 'integrationCode']
-            }
+      EnhancedAutotaskToolHandler.createTool(
+        'search_resources',
+        'Search for resources (employees) in Autotask',
+        'read',
+        {
+          searchTerm: {
+            type: 'string',
+            description: 'Search term to filter resources by name'
+          },
+          isActive: {
+            type: 'boolean',
+            description: 'Filter by active status'
+          },
+          pageSize: {
+            type: 'number',
+            description: 'Number of results to return (max 500)',
+            minimum: 1,
+            maximum: 500
           }
         }
-      },
+      ),
 
       // ID-to-Name Mapping tools
-      {
-        name: 'get_company_name',
-        description: 'Get company name by ID',
-        inputSchema: {
-          type: 'object',
-          properties: {
-            id: {
-              type: 'number',
-              description: 'Company ID'
-            },
-            _tenant: {
-              type: 'object',
-              description: 'Tenant authentication credentials (for multi-tenant mode)',
-              properties: {
-                tenantId: { type: 'string' },
-                username: { type: 'string' },
-                secret: { type: 'string' },
-                integrationCode: { type: 'string' },
-                apiUrl: { type: 'string' },
-                sessionId: { type: 'string' }
-              },
-              required: ['username', 'secret', 'integrationCode']
-            }
-          },
-          required: ['id']
-        }
-      },
-      {
-        name: 'get_resource_name',
-        description: 'Get resource name by ID',
-        inputSchema: {
-          type: 'object',
-          properties: {
-            id: {
-              type: 'number',
-              description: 'Resource ID'
-            },
-            _tenant: {
-              type: 'object',
-              description: 'Tenant authentication credentials (for multi-tenant mode)',
-              properties: {
-                tenantId: { type: 'string' },
-                username: { type: 'string' },
-                secret: { type: 'string' },
-                integrationCode: { type: 'string' },
-                apiUrl: { type: 'string' },
-                sessionId: { type: 'string' }
-              },
-              required: ['username', 'secret', 'integrationCode']
-            }
-          },
-          required: ['id']
-        }
-      },
-      {
-        name: 'get_mapping_cache_stats',
-        description: 'Get mapping cache statistics',
-        inputSchema: {
-          type: 'object',
-          properties: {
-            _tenant: {
-              type: 'object',
-              description: 'Tenant authentication credentials (for multi-tenant mode)',
-              properties: {
-                tenantId: { type: 'string' },
-                username: { type: 'string' },
-                secret: { type: 'string' },
-                integrationCode: { type: 'string' },
-                apiUrl: { type: 'string' },
-                sessionId: { type: 'string' }
-              },
-              required: ['username', 'secret', 'integrationCode']
-            }
+      EnhancedAutotaskToolHandler.createTool(
+        'get_company_name',
+        'Get company name by ID',
+        'read',
+        {
+          id: {
+            type: 'number',
+            description: 'Company ID'
           }
-        }
-      },
-      {
-        name: 'clear_mapping_cache',
-        description: 'Clear mapping cache',
-        inputSchema: {
-          type: 'object',
-          properties: {
-            _tenant: {
-              type: 'object',
-              description: 'Tenant authentication credentials (for multi-tenant mode)',
-              properties: {
-                tenantId: { type: 'string' },
-                username: { type: 'string' },
-                secret: { type: 'string' },
-                integrationCode: { type: 'string' },
-                apiUrl: { type: 'string' },
-                sessionId: { type: 'string' }
-              },
-              required: ['username', 'secret', 'integrationCode']
-            }
+        },
+        ['id']
+      ),
+      EnhancedAutotaskToolHandler.createTool(
+        'get_resource_name',
+        'Get resource name by ID',
+        'read',
+        {
+          id: {
+            type: 'number',
+            description: 'Resource ID'
           }
-        }
-      },
-      {
-        name: 'preload_mapping_cache',
-        description: 'Preload mapping cache for better performance',
-        inputSchema: {
-          type: 'object',
-          properties: {
-            _tenant: {
-              type: 'object',
-              description: 'Tenant authentication credentials (for multi-tenant mode)',
-              properties: {
-                tenantId: { type: 'string' },
-                username: { type: 'string' },
-                secret: { type: 'string' },
-                integrationCode: { type: 'string' },
-                apiUrl: { type: 'string' },
-                sessionId: { type: 'string' }
-              },
-              required: ['username', 'secret', 'integrationCode']
-            }
-          }
-        }
-      },
+        },
+        ['id']
+      ),
+      EnhancedAutotaskToolHandler.createTool(
+        'get_mapping_cache_stats',
+        'Get mapping cache statistics',
+        'read',
+        {}
+      ),
+      EnhancedAutotaskToolHandler.createTool(
+        'clear_mapping_cache',
+        'Clear mapping cache',
+        'modify',
+        {}
+      ),
+      EnhancedAutotaskToolHandler.createTool(
+        'preload_mapping_cache',
+        'Preload mapping cache for better performance',
+        'modify',
+        {}
+      ),
 
       // Test connection tool
-      {
-        name: 'test_connection',
-        description: 'Test connectivity to the Autotask API',
-        inputSchema: {
-          type: 'object',
-          properties: {
-            _tenant: {
-              type: 'object',
-              description: 'Tenant authentication credentials (for multi-tenant mode)',
-              properties: {
-                tenantId: { type: 'string' },
-                username: { type: 'string' },
-                secret: { type: 'string' },
-                integrationCode: { type: 'string' },
-                apiUrl: { type: 'string' },
-                sessionId: { type: 'string' }
-              },
-              required: ['username', 'secret', 'integrationCode']
-            }
-          }
-        }
-      },
+      EnhancedAutotaskToolHandler.createTool(
+        'test_connection',
+        'Test connectivity to the Autotask API',
+        'read',
+        {}
+      ),
 
       // Zone information test tool
-      {
-        name: 'test_zone_information',
-        description: 'Test Autotask zone information discovery to debug API URL issues',
-        inputSchema: {
-          type: 'object',
-          properties: {
-            _tenant: {
-              type: 'object',
-              description: 'Tenant authentication credentials (for multi-tenant mode)',
-              properties: {
-                tenantId: { type: 'string' },
-                username: { type: 'string' },
-                secret: { type: 'string' },
-                integrationCode: { type: 'string' },
-                apiUrl: { type: 'string' },
-                sessionId: { type: 'string' }
-              },
-              required: ['username', 'secret', 'integrationCode']
-            }
-          }
-        }
-      }
+      EnhancedAutotaskToolHandler.createTool(
+        'test_zone_information',
+        'Test Autotask zone information discovery to debug API URL issues',
+        'read',
+        {}
+      )
     ];
   }
 
@@ -938,13 +746,36 @@ export class EnhancedAutotaskToolHandler {
           toolCallId,
           toolName: name,
           tenantId: tenantContext.tenantId,
-          sessionId: tenantContext.sessionId
+          sessionId: tenantContext.sessionId,
+          mode: tenantContext.mode
         });
       } else {
         this.logger.info(`🏠 Tool call using single-tenant mode`, {
           toolCallId,
           toolName: name
         });
+      }
+
+      // Check if operation is allowed based on tenant mode
+      if (!this.isOperationAllowed(name, tenantContext)) {
+        const operationType = this.getToolOperationType(name);
+        const errorMessage = `Operation not allowed: Tool "${name}" (${operationType}) is not permitted in "${tenantContext?.mode}" mode. Only read operations are allowed in read mode.`;
+        
+        this.logger.warn(`🚫 Tool operation blocked by mode restriction`, {
+          toolCallId,
+          toolName: name,
+          operationType,
+          tenantMode: tenantContext?.mode,
+          tenantId: tenantContext?.tenantId
+        });
+        
+        return {
+          content: [{
+            type: 'text',
+            text: errorMessage
+          }],
+          isError: true
+        };
       }
       
       let result: McpToolResult;
@@ -1723,14 +1554,15 @@ export class EnhancedAutotaskToolHandler {
         hasTenantContext: !!tenantContext,
         tenantContextKeys: tenantContext ? Object.keys(tenantContext) : 'none',
         tenantId: tenantContext?.tenantId,
-        hasCredentials: !!(tenantContext?.credentials)
+        hasCredentials: !!(tenantContext?.credentials),
+        impersonationResourceId: tenantContext?.impersonationResourceId
       });
 
       const isConnected = await this.autotaskService.testConnection(tenantContext);
       
       const message = isConnected 
         ? tenantContext 
-          ? `✅ Successfully connected to Autotask API for tenant: ${tenantContext.tenantId}`
+          ? `✅ Successfully connected to Autotask API for tenant: ${tenantContext.tenantId}${tenantContext.impersonationResourceId ? ` (impersonating resource ${tenantContext.impersonationResourceId})` : ''}`
           : '✅ Successfully connected to Autotask API'
         : tenantContext
           ? `❌ Failed to connect to Autotask API for tenant: ${tenantContext.tenantId}`
@@ -1754,14 +1586,15 @@ export class EnhancedAutotaskToolHandler {
         hasTenantContext: !!tenantContext,
         tenantContextKeys: tenantContext ? Object.keys(tenantContext) : 'none',
         tenantId: tenantContext?.tenantId,
-        hasCredentials: !!(tenantContext?.credentials)
+        hasCredentials: !!(tenantContext?.credentials),
+        impersonationResourceId: tenantContext?.impersonationResourceId
       });
 
       const zoneInfo = await this.autotaskService.testZoneInformation(tenantContext);
       
       if (zoneInfo) {
         const message = tenantContext 
-          ? `✅ Successfully discovered Autotask zone information for tenant: ${tenantContext.tenantId}\n\n` +
+          ? `✅ Successfully discovered Autotask zone information for tenant: ${tenantContext.tenantId}${tenantContext.impersonationResourceId ? ` (impersonating resource ${tenantContext.impersonationResourceId})` : ''}\n\n` +
             `Zone URL: ${zoneInfo.url || 'N/A'}\n` +
             `Web URL: ${zoneInfo.webUrl || 'N/A'}\n` +
             `Full Zone Info: ${JSON.stringify(zoneInfo, null, 2)}`
@@ -1804,4 +1637,4 @@ export class EnhancedAutotaskToolHandler {
       };
     }
   }
-} 
+}

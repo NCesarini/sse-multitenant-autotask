@@ -276,7 +276,10 @@ export class AutotaskService {
         authConfig.headers = {
           'ImpersonationResourceId': impersonationResourceId.toString()
         };
-        this.logger.debug(`Added impersonation header for resource ID: ${impersonationResourceId}`);
+        this.logger.info(`Added impersonation header for resource ID: ${impersonationResourceId}`, {
+          impersonationResourceId,
+          tenantUsername: username ? `${username.substring(0, 3)}***` : undefined
+        });
       }
 
       this.logger.info('Creating Autotask client with configuration:', {

@@ -34,6 +34,8 @@ export interface TenantContext {
   sessionId?: string;
   // User impersonation - which user this session acts as
   impersonationResourceId?: number;
+  // Access mode - restricts what operations this tenant can perform
+  mode?: 'read' | 'write';
 }
 
 // Enhanced tool call with tenant context
@@ -60,6 +62,13 @@ export interface McpResourceTemplate {
 export interface McpTool {
   name: string;
   description: string;
+  /**
+   * Indicates the data access pattern of the tool:
+   * - 'read': Read-only operations that don't modify data (e.g., search, get)
+   * - 'write': Creates new records in Autotask (e.g., create operations)
+   * - 'modify': Updates existing records or system state (e.g., update, cache operations)
+   */
+  operationType?: 'read' | 'write' | 'modify';
   inputSchema: {
     type: string;
     properties: Record<string, any>;
