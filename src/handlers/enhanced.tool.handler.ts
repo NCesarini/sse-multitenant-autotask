@@ -129,13 +129,12 @@ export class EnhancedAutotaskToolHandler {
           mode: tenantContext.mode
         });
 
-        // Remove tenant data from args to avoid passing to service methods
-        delete args._tenant;
-        delete args.tenant;
-        delete args.credentials;
-
-        this.logger.info('🧹 Cleaned tenant data from arguments', {
-          remainingArgKeys: Object.keys(args)
+        // NOTE: We intentionally DO NOT delete tenant data from args
+        // This preserves the original args for debugging and potential future use
+        // The tenant fields are harmless to pass to individual tool methods
+        this.logger.info('🔄 Keeping tenant data in arguments for debugging/tracing', {
+          argKeys: Object.keys(args),
+          preservedTenantField: args._tenant ? '_tenant' : args.tenant ? 'tenant' : 'credentials'
         });
 
         return tenantContext;
@@ -185,17 +184,26 @@ export class EnhancedAutotaskToolHandler {
   private getToolOperationType(toolName: string): 'read' | 'write' | 'modify' {
     const readOnlyTools = [
       'search_companies', 'search_contacts', 'search_tickets', 'search_projects', 'search_resources',
+      'get_company', 'get_contact', 'get_ticket', 'get_project', 'get_resource',
+      'search_time_entries', 'get_time_entry', 'search_tasks', 'get_task',
+      'search_ticket_notes', 'get_ticket_note', 'search_project_notes', 'get_project_note',
+      'search_company_notes', 'get_company_note', 'search_ticket_attachments', 'get_ticket_attachment',
+      'get_contract', 'search_contracts', 'get_invoice', 'search_invoices',
+      'get_quote', 'search_quotes', 'get_expense_report', 'search_expense_reports',
+      'get_configuration_item', 'search_configuration_items',
       'get_company_name', 'get_resource_name', 'get_mapping_cache_stats',
       'test_connection', 'test_zone_information'
     ];
     
     const writeTools = [
-      'create_company', 'create_contact', 'create_ticket', 'create_time_entry'
+      'create_company', 'create_contact', 'create_ticket', 'create_time_entry', 'create_task', 'create_project',
+      'create_ticket_note', 'create_project_note', 'create_company_note',
+      'create_quote', 'create_expense_report', 'create_configuration_item'
     ];
     
     const modifyTools = [
-      'update_company', 'update_contact', 'update_ticket',
-      'clear_mapping_cache', 'preload_mapping_cache'
+      'update_company', 'update_contact', 'update_ticket', 'update_task', 'update_project',
+      'update_configuration_item', 'clear_mapping_cache', 'preload_mapping_cache'
     ];
     
     if (readOnlyTools.includes(toolName)) {
@@ -632,6 +640,932 @@ export class EnhancedAutotaskToolHandler {
         }
       ),
 
+      // Individual Entity Getters
+      EnhancedAutotaskToolHandler.createTool(
+        'get_company',
+        'Get a specific company by ID with full details',
+        'read',
+        {
+          id: {
+            type: 'number',
+            description: 'Company ID to retrieve'
+          }
+        },
+        ['id']
+      ),
+      EnhancedAutotaskToolHandler.createTool(
+        'get_contact',
+        'Get a specific contact by ID with full details',
+        'read',
+        {
+          id: {
+            type: 'number',
+            description: 'Contact ID to retrieve'
+          }
+        },
+        ['id']
+      ),
+      EnhancedAutotaskToolHandler.createTool(
+        'get_ticket',
+        'Get a specific ticket by ID with full details',
+        'read',
+        {
+          id: {
+            type: 'number',
+            description: 'Ticket ID to retrieve'
+          },
+          fullDetails: {
+            type: 'boolean',
+            description: 'Whether to include full details (default: false for optimized response)'
+          }
+        },
+        ['id']
+      ),
+      EnhancedAutotaskToolHandler.createTool(
+        'get_project',
+        'Get a specific project by ID with full details',
+        'read',
+        {
+          id: {
+            type: 'number',
+            description: 'Project ID to retrieve'
+          }
+        },
+        ['id']
+      ),
+      EnhancedAutotaskToolHandler.createTool(
+        'get_resource',
+        'Get a specific resource (employee) by ID with full details',
+        'read',
+        {
+          id: {
+            type: 'number',
+            description: 'Resource ID to retrieve'
+          }
+        },
+        ['id']
+      ),
+      EnhancedAutotaskToolHandler.createTool(
+        'create_project',
+        'Create a new project in Autotask',
+        'write',
+        {
+          companyID: {
+            type: 'number',
+            description: 'Company ID for the project'
+          },
+          projectName: {
+            type: 'string',
+            description: 'Project name'
+          },
+          description: {
+            type: 'string',
+            description: 'Project description'
+          },
+          status: {
+            type: 'number',
+            description: 'Project status ID'
+          },
+          projectType: {
+            type: 'number',
+            description: 'Project type ID'
+          },
+          projectManagerResourceID: {
+            type: 'number',
+            description: 'Project manager resource ID'
+          },
+          startDateTime: {
+            type: 'string',
+            description: 'Project start date/time (ISO format)'
+          },
+          endDateTime: {
+            type: 'string',
+            description: 'Project end date/time (ISO format)'
+          },
+          estimatedHours: {
+            type: 'number',
+            description: 'Estimated hours for completion'
+          }
+        },
+        ['companyID', 'projectName']
+      ),
+      EnhancedAutotaskToolHandler.createTool(
+        'update_project',
+        'Update an existing project in Autotask',
+        'modify',
+        {
+          id: {
+            type: 'number',
+            description: 'Project ID to update'
+          },
+          projectName: {
+            type: 'string',
+            description: 'Project name'
+          },
+          description: {
+            type: 'string',
+            description: 'Project description'
+          },
+          status: {
+            type: 'number',
+            description: 'Project status ID'
+          },
+          projectManagerResourceID: {
+            type: 'number',
+            description: 'Project manager resource ID'
+          },
+          startDateTime: {
+            type: 'string',
+            description: 'Project start date/time (ISO format)'
+          },
+          endDateTime: {
+            type: 'string',
+            description: 'Project end date/time (ISO format)'
+          },
+          estimatedHours: {
+            type: 'number',
+            description: 'Estimated hours for completion'
+          }
+        },
+        ['id']
+      ),
+
+      // Time Entry Management
+      EnhancedAutotaskToolHandler.createTool(
+        'search_time_entries',
+        'Search for time entries in Autotask with filters',
+        'read',
+        {
+          ticketId: {
+            type: 'number',
+            description: 'Filter by ticket ID'
+          },
+          projectId: {
+            type: 'number',
+            description: 'Filter by project ID'
+          },
+          resourceId: {
+            type: 'number',
+            description: 'Filter by resource ID'
+          },
+          dateFrom: {
+            type: 'string',
+            description: 'Start date filter (YYYY-MM-DD format)'
+          },
+          dateTo: {
+            type: 'string',
+            description: 'End date filter (YYYY-MM-DD format)'
+          },
+          pageSize: {
+            type: 'number',
+            description: 'Number of results to return (max 500)',
+            minimum: 1,
+            maximum: 500
+          }
+        }
+      ),
+      EnhancedAutotaskToolHandler.createTool(
+        'get_time_entry',
+        'Get a specific time entry by ID with full details',
+        'read',
+        {
+          id: {
+            type: 'number',
+            description: 'Time entry ID to retrieve'
+          }
+        },
+        ['id']
+      ),
+
+      // Task Management
+      EnhancedAutotaskToolHandler.createTool(
+        'search_tasks',
+        'Search for tasks in Autotask with filters',
+        'read',
+        {
+          projectId: {
+            type: 'number',
+            description: 'Filter by project ID'
+          },
+          assignedResourceId: {
+            type: 'number',
+            description: 'Filter by assigned resource ID'
+          },
+          status: {
+            type: 'number',
+            description: 'Filter by status ID'
+          },
+          searchTerm: {
+            type: 'string',
+            description: 'Search term to filter tasks by title'
+          },
+          pageSize: {
+            type: 'number',
+            description: 'Number of results to return (max 100)',
+            minimum: 1,
+            maximum: 100
+          }
+        }
+      ),
+      EnhancedAutotaskToolHandler.createTool(
+        'get_task',
+        'Get a specific task by ID with full details',
+        'read',
+        {
+          id: {
+            type: 'number',
+            description: 'Task ID to retrieve'
+          }
+        },
+        ['id']
+      ),
+      EnhancedAutotaskToolHandler.createTool(
+        'create_task',
+        'Create a new task in Autotask',
+        'write',
+        {
+          projectID: {
+            type: 'number',
+            description: 'Project ID for the task'
+          },
+          title: {
+            type: 'string',
+            description: 'Task title'
+          },
+          description: {
+            type: 'string',
+            description: 'Task description'
+          },
+          assignedResourceID: {
+            type: 'number',
+            description: 'Assigned resource ID'
+          },
+          status: {
+            type: 'number',
+            description: 'Task status ID'
+          },
+          startDateTime: {
+            type: 'string',
+            description: 'Start date/time (ISO format)'
+          },
+          endDateTime: {
+            type: 'string',
+            description: 'End date/time (ISO format)'
+          },
+          estimatedHours: {
+            type: 'number',
+            description: 'Estimated hours for completion'
+          },
+          priorityLabel: {
+            type: 'string',
+            description: 'Priority label'
+          }
+        },
+        ['projectID', 'title']
+      ),
+      EnhancedAutotaskToolHandler.createTool(
+        'update_task',
+        'Update an existing task in Autotask',
+        'modify',
+        {
+          id: {
+            type: 'number',
+            description: 'Task ID to update'
+          },
+          title: {
+            type: 'string',
+            description: 'Task title'
+          },
+          description: {
+            type: 'string',
+            description: 'Task description'
+          },
+          assignedResourceID: {
+            type: 'number',
+            description: 'Assigned resource ID'
+          },
+          status: {
+            type: 'number',
+            description: 'Task status ID'
+          },
+          startDateTime: {
+            type: 'string',
+            description: 'Start date/time (ISO format)'
+          },
+          endDateTime: {
+            type: 'string',
+            description: 'End date/time (ISO format)'
+          },
+          estimatedHours: {
+            type: 'number',
+            description: 'Estimated hours for completion'
+          },
+          percentComplete: {
+            type: 'number',
+            description: 'Percentage complete (0-100)'
+          }
+        },
+        ['id']
+      ),
+
+      // Notes Management
+      EnhancedAutotaskToolHandler.createTool(
+        'search_ticket_notes',
+        'Search for notes on a specific ticket',
+        'read',
+        {
+          ticketId: {
+            type: 'number',
+            description: 'Ticket ID to search notes for'
+          },
+          pageSize: {
+            type: 'number',
+            description: 'Number of results to return (max 100)',
+            minimum: 1,
+            maximum: 100
+          }
+        },
+        ['ticketId']
+      ),
+      EnhancedAutotaskToolHandler.createTool(
+        'get_ticket_note',
+        'Get a specific ticket note by ticket ID and note ID',
+        'read',
+        {
+          ticketId: {
+            type: 'number',
+            description: 'Ticket ID'
+          },
+          noteId: {
+            type: 'number',
+            description: 'Note ID'
+          }
+        },
+        ['ticketId', 'noteId']
+      ),
+      EnhancedAutotaskToolHandler.createTool(
+        'create_ticket_note',
+        'Create a new note on a ticket',
+        'write',
+        {
+          ticketId: {
+            type: 'number',
+            description: 'Ticket ID to add note to'
+          },
+          title: {
+            type: 'string',
+            description: 'Note title'
+          },
+          description: {
+            type: 'string',
+            description: 'Note content/description'
+          },
+          noteType: {
+            type: 'number',
+            description: 'Note type ID'
+          },
+          publish: {
+            type: 'number',
+            description: 'Publish setting (1 = Internal Only, 2 = All Autotask Users, 3 = Client Portal)'
+          }
+        },
+        ['ticketId', 'description']
+      ),
+
+      EnhancedAutotaskToolHandler.createTool(
+        'search_project_notes',
+        'Search for notes on a specific project',
+        'read',
+        {
+          projectId: {
+            type: 'number',
+            description: 'Project ID to search notes for'
+          },
+          pageSize: {
+            type: 'number',
+            description: 'Number of results to return (max 100)',
+            minimum: 1,
+            maximum: 100
+          }
+        },
+        ['projectId']
+      ),
+      EnhancedAutotaskToolHandler.createTool(
+        'get_project_note',
+        'Get a specific project note by project ID and note ID',
+        'read',
+        {
+          projectId: {
+            type: 'number',
+            description: 'Project ID'
+          },
+          noteId: {
+            type: 'number',
+            description: 'Note ID'
+          }
+        },
+        ['projectId', 'noteId']
+      ),
+      EnhancedAutotaskToolHandler.createTool(
+        'create_project_note',
+        'Create a new note on a project',
+        'write',
+        {
+          projectId: {
+            type: 'number',
+            description: 'Project ID to add note to'
+          },
+          title: {
+            type: 'string',
+            description: 'Note title'
+          },
+          description: {
+            type: 'string',
+            description: 'Note content/description'
+          },
+          noteType: {
+            type: 'number',
+            description: 'Note type ID'
+          },
+          publish: {
+            type: 'number',
+            description: 'Publish setting (1 = Internal Only, 2 = All Autotask Users, 3 = Client Portal)'
+          }
+        },
+        ['projectId', 'description']
+      ),
+
+      EnhancedAutotaskToolHandler.createTool(
+        'search_company_notes',
+        'Search for notes on a specific company',
+        'read',
+        {
+          companyId: {
+            type: 'number',
+            description: 'Company ID to search notes for'
+          },
+          pageSize: {
+            type: 'number',
+            description: 'Number of results to return (max 100)',
+            minimum: 1,
+            maximum: 100
+          }
+        },
+        ['companyId']
+      ),
+      EnhancedAutotaskToolHandler.createTool(
+        'get_company_note',
+        'Get a specific company note by company ID and note ID',
+        'read',
+        {
+          companyId: {
+            type: 'number',
+            description: 'Company ID'
+          },
+          noteId: {
+            type: 'number',
+            description: 'Note ID'
+          }
+        },
+        ['companyId', 'noteId']
+      ),
+      EnhancedAutotaskToolHandler.createTool(
+        'create_company_note',
+        'Create a new note on a company',
+        'write',
+        {
+          companyId: {
+            type: 'number',
+            description: 'Company ID to add note to'
+          },
+          title: {
+            type: 'string',
+            description: 'Note title'
+          },
+          description: {
+            type: 'string',
+            description: 'Note content/description'
+          },
+          noteType: {
+            type: 'number',
+            description: 'Note type ID'
+          },
+          publish: {
+            type: 'number',
+            description: 'Publish setting (1 = Internal Only, 2 = All Autotask Users, 3 = Client Portal)'
+          }
+        },
+        ['companyId', 'description']
+      ),
+
+      // Attachments Management  
+      EnhancedAutotaskToolHandler.createTool(
+        'search_ticket_attachments',
+        'Search for attachments on a specific ticket',
+        'read',
+        {
+          ticketId: {
+            type: 'number',
+            description: 'Ticket ID to search attachments for'
+          },
+          pageSize: {
+            type: 'number',
+            description: 'Number of results to return (max 50)',
+            minimum: 1,
+            maximum: 50
+          }
+        },
+        ['ticketId']
+      ),
+      EnhancedAutotaskToolHandler.createTool(
+        'get_ticket_attachment',
+        'Get a specific ticket attachment by ticket ID and attachment ID',
+        'read',
+        {
+          ticketId: {
+            type: 'number',
+            description: 'Ticket ID'
+          },
+          attachmentId: {
+            type: 'number',
+            description: 'Attachment ID'
+          },
+          includeData: {
+            type: 'boolean',
+            description: 'Whether to include base64-encoded file data (default: false for metadata only)'
+          }
+        },
+        ['ticketId', 'attachmentId']
+      ),
+
+      // Financial Management
+      EnhancedAutotaskToolHandler.createTool(
+        'get_contract',
+        'Get a specific contract by ID with full details',
+        'read',
+        {
+          id: {
+            type: 'number',
+            description: 'Contract ID to retrieve'
+          }
+        },
+        ['id']
+      ),
+      EnhancedAutotaskToolHandler.createTool(
+        'search_contracts',
+        'Search for contracts in Autotask with filters',
+        'read',
+        {
+          companyId: {
+            type: 'number',
+            description: 'Filter by company ID'
+          },
+          status: {
+            type: 'number',
+            description: 'Filter by contract status'
+          },
+          contractType: {
+            type: 'number',
+            description: 'Filter by contract type'
+          },
+          searchTerm: {
+            type: 'string',
+            description: 'Search term to filter contracts by name'
+          },
+          pageSize: {
+            type: 'number',
+            description: 'Number of results to return (max 500)',
+            minimum: 1,
+            maximum: 500
+          }
+        }
+      ),
+
+      EnhancedAutotaskToolHandler.createTool(
+        'get_invoice',
+        'Get a specific invoice by ID with full details',
+        'read',
+        {
+          id: {
+            type: 'number',
+            description: 'Invoice ID to retrieve'
+          }
+        },
+        ['id']
+      ),
+      EnhancedAutotaskToolHandler.createTool(
+        'search_invoices',
+        'Search for invoices in Autotask with filters',
+        'read',
+        {
+          companyId: {
+            type: 'number',
+            description: 'Filter by company ID'
+          },
+          fromDate: {
+            type: 'string',
+            description: 'Start date filter (YYYY-MM-DD format)'
+          },
+          toDate: {
+            type: 'string',
+            description: 'End date filter (YYYY-MM-DD format)'
+          },
+          status: {
+            type: 'number',
+            description: 'Filter by invoice status'
+          },
+          pageSize: {
+            type: 'number',
+            description: 'Number of results to return (max 500)',
+            minimum: 1,
+            maximum: 500
+          }
+        }
+      ),
+
+      EnhancedAutotaskToolHandler.createTool(
+        'get_quote',
+        'Get a specific quote by ID with full details',
+        'read',
+        {
+          id: {
+            type: 'number',
+            description: 'Quote ID to retrieve'
+          }
+        },
+        ['id']
+      ),
+      EnhancedAutotaskToolHandler.createTool(
+        'search_quotes',
+        'Search for quotes in Autotask with filters',
+        'read',
+        {
+          companyId: {
+            type: 'number',
+            description: 'Filter by company ID'
+          },
+          contactId: {
+            type: 'number',
+            description: 'Filter by contact ID'
+          },
+          opportunityId: {
+            type: 'number',
+            description: 'Filter by opportunity ID'
+          },
+          searchTerm: {
+            type: 'string',
+            description: 'Search term to filter quotes by description'
+          },
+          pageSize: {
+            type: 'number',
+            description: 'Number of results to return (max 500)',
+            minimum: 1,
+            maximum: 500
+          }
+        }
+      ),
+      EnhancedAutotaskToolHandler.createTool(
+        'create_quote',
+        'Create a new quote in Autotask',
+        'write',
+        {
+          accountId: {
+            type: 'number',
+            description: 'Company/Account ID for the quote'
+          },
+          contactId: {
+            type: 'number',
+            description: 'Contact ID'
+          },
+          opportunityId: {
+            type: 'number',
+            description: 'Opportunity ID (if related to an opportunity)'
+          },
+          title: {
+            type: 'string',
+            description: 'Quote title'
+          },
+          description: {
+            type: 'string',
+            description: 'Quote description'
+          },
+          proposedWorkDescription: {
+            type: 'string',
+            description: 'Proposed work description'
+          },
+          paymentTerms: {
+            type: 'number',
+            description: 'Payment terms ID'
+          },
+          effectiveDate: {
+            type: 'string',
+            description: 'Quote effective date (YYYY-MM-DD format)'
+          },
+          expirationDate: {
+            type: 'string',
+            description: 'Quote expiration date (YYYY-MM-DD format)'
+          }
+        },
+        ['accountId', 'contactId', 'title']
+      ),
+
+      EnhancedAutotaskToolHandler.createTool(
+        'get_expense_report',
+        'Get a specific expense report by ID with full details',
+        'read',
+        {
+          id: {
+            type: 'number',
+            description: 'Expense report ID to retrieve'
+          }
+        },
+        ['id']
+      ),
+      EnhancedAutotaskToolHandler.createTool(
+        'search_expense_reports',
+        'Search for expense reports in Autotask with filters',
+        'read',
+        {
+          submitterId: {
+            type: 'number',
+            description: 'Filter by submitter resource ID'
+          },
+          status: {
+            type: 'number',
+            description: 'Filter by expense report status'
+          },
+          fromDate: {
+            type: 'string',
+            description: 'Start date filter (YYYY-MM-DD format)'
+          },
+          toDate: {
+            type: 'string',
+            description: 'End date filter (YYYY-MM-DD format)'
+          },
+          pageSize: {
+            type: 'number',
+            description: 'Number of results to return (max 500)',
+            minimum: 1,
+            maximum: 500
+          }
+        }
+      ),
+      EnhancedAutotaskToolHandler.createTool(
+        'create_expense_report',
+        'Create a new expense report in Autotask',
+        'write',
+        {
+          resourceId: {
+            type: 'number',
+            description: 'Resource ID (submitter of the expense report)'
+          },
+          name: {
+            type: 'string',
+            description: 'Expense report name/title'
+          },
+          weekEnding: {
+            type: 'string',
+            description: 'Week ending date (YYYY-MM-DD format)'
+          },
+          status: {
+            type: 'number',
+            description: 'Initial status of the expense report'
+          },
+          approverResourceId: {
+            type: 'number',
+            description: 'Approver resource ID'
+          },
+          submitDate: {
+            type: 'string',
+            description: 'Submit date (YYYY-MM-DD format)'
+          }
+        },
+        ['resourceId', 'name', 'weekEnding']
+      ),
+
+      // Configuration Items Management
+      EnhancedAutotaskToolHandler.createTool(
+        'get_configuration_item',
+        'Get a specific configuration item by ID with full details',
+        'read',
+        {
+          id: {
+            type: 'number',
+            description: 'Configuration item ID to retrieve'
+          }
+        },
+        ['id']
+      ),
+      EnhancedAutotaskToolHandler.createTool(
+        'search_configuration_items',
+        'Search for configuration items in Autotask with filters',
+        'read',
+        {
+          companyId: {
+            type: 'number',
+            description: 'Filter by company ID'
+          },
+          configurationItemType: {
+            type: 'number',
+            description: 'Filter by configuration item type'
+          },
+          serialNumber: {
+            type: 'string',
+            description: 'Filter by serial number'
+          },
+          referenceTitle: {
+            type: 'string',
+            description: 'Filter by reference title'
+          },
+          searchTerm: {
+            type: 'string',
+            description: 'Search term to filter configuration items'
+          },
+          pageSize: {
+            type: 'number',
+            description: 'Number of results to return (max 500)',
+            minimum: 1,
+            maximum: 500
+          }
+        }
+      ),
+      EnhancedAutotaskToolHandler.createTool(
+        'create_configuration_item',
+        'Create a new configuration item in Autotask',
+        'write',
+        {
+          companyID: {
+            type: 'number',
+            description: 'Company ID for the configuration item'
+          },
+          configurationItemType: {
+            type: 'number',
+            description: 'Configuration item type ID'
+          },
+          referenceTitle: {
+            type: 'string',
+            description: 'Reference title/name'
+          },
+          serialNumber: {
+            type: 'string',
+            description: 'Serial number'
+          },
+          installedProductID: {
+            type: 'number',
+            description: 'Installed product ID'
+          },
+          contactID: {
+            type: 'number',
+            description: 'Contact ID'
+          },
+          location: {
+            type: 'string',
+            description: 'Location description'
+          },
+          notes: {
+            type: 'string',
+            description: 'Additional notes'
+          }
+        },
+        ['companyID', 'configurationItemType', 'referenceTitle']
+      ),
+      EnhancedAutotaskToolHandler.createTool(
+        'update_configuration_item',
+        'Update an existing configuration item in Autotask',
+        'modify',
+        {
+          id: {
+            type: 'number',
+            description: 'Configuration item ID to update'
+          },
+          referenceTitle: {
+            type: 'string',
+            description: 'Reference title/name'
+          },
+          serialNumber: {
+            type: 'string',
+            description: 'Serial number'
+          },
+          installedProductID: {
+            type: 'number',
+            description: 'Installed product ID'
+          },
+          contactID: {
+            type: 'number',
+            description: 'Contact ID'
+          },
+          location: {
+            type: 'string',
+            description: 'Location description'
+          },
+          notes: {
+            type: 'string',
+            description: 'Additional notes'
+          }
+        },
+        ['id']
+      ),
+
       // ID-to-Name Mapping tools
       EnhancedAutotaskToolHandler.createTool(
         'get_company_name',
@@ -914,6 +1848,203 @@ export class EnhancedAutotaskToolHandler {
         case 'test_zone_information':
           this.logger.info(`🌐 Executing test_zone_information`, { toolCallId });
           result = await this.testZoneInformation(tenantContext);
+          break;
+
+        // Individual Entity Getters
+        case 'get_company':
+          this.logger.info(`🏢 Executing get_company`, { toolCallId });
+          result = await this.getCompany(args, tenantContext);
+          break;
+
+        case 'get_contact':
+          this.logger.info(`👤 Executing get_contact`, { toolCallId });
+          result = await this.getContact(args, tenantContext);
+          break;
+
+        case 'get_ticket':
+          this.logger.info(`🎫 Executing get_ticket`, { toolCallId });
+          result = await this.getTicket(args, tenantContext);
+          break;
+
+        case 'get_project':
+          this.logger.info(`📋 Executing get_project`, { toolCallId });
+          result = await this.getProject(args, tenantContext);
+          break;
+
+        case 'get_resource':
+          this.logger.info(`👨‍💼 Executing get_resource`, { toolCallId });
+          result = await this.getResource(args, tenantContext);
+          break;
+
+        case 'create_project':
+          this.logger.info(`➕ Executing create_project`, { toolCallId });
+          result = await this.createProject(args, tenantContext);
+          break;
+
+        case 'update_project':
+          this.logger.info(`✏️ Executing update_project`, { toolCallId });
+          result = await this.updateProject(args, tenantContext);
+          break;
+
+        // Time Entry Management
+        case 'search_time_entries':
+          this.logger.info(`⏰ Executing search_time_entries`, { toolCallId });
+          result = await this.searchTimeEntries(args, tenantContext);
+          break;
+
+        case 'get_time_entry':
+          this.logger.info(`⏰ Executing get_time_entry`, { toolCallId });
+          result = await this.getTimeEntry(args, tenantContext);
+          break;
+
+        // Task Management
+        case 'search_tasks':
+          this.logger.info(`📝 Executing search_tasks`, { toolCallId });
+          result = await this.searchTasks(args, tenantContext);
+          break;
+
+        case 'get_task':
+          this.logger.info(`📝 Executing get_task`, { toolCallId });
+          result = await this.getTask(args, tenantContext);
+          break;
+
+        case 'create_task':
+          this.logger.info(`➕ Executing create_task`, { toolCallId });
+          result = await this.createTask(args, tenantContext);
+          break;
+
+        case 'update_task':
+          this.logger.info(`✏️ Executing update_task`, { toolCallId });
+          result = await this.updateTask(args, tenantContext);
+          break;
+
+        // Notes Management
+        case 'search_ticket_notes':
+          this.logger.info(`📝 Executing search_ticket_notes`, { toolCallId });
+          result = await this.searchTicketNotes(args, tenantContext);
+          break;
+
+        case 'get_ticket_note':
+          this.logger.info(`📝 Executing get_ticket_note`, { toolCallId });
+          result = await this.getTicketNote(args, tenantContext);
+          break;
+
+        case 'create_ticket_note':
+          this.logger.info(`➕ Executing create_ticket_note`, { toolCallId });
+          result = await this.createTicketNote(args, tenantContext);
+          break;
+
+        case 'search_project_notes':
+          this.logger.info(`📝 Executing search_project_notes`, { toolCallId });
+          result = await this.searchProjectNotes(args, tenantContext);
+          break;
+
+        case 'get_project_note':
+          this.logger.info(`📝 Executing get_project_note`, { toolCallId });
+          result = await this.getProjectNote(args, tenantContext);
+          break;
+
+        case 'create_project_note':
+          this.logger.info(`➕ Executing create_project_note`, { toolCallId });
+          result = await this.createProjectNote(args, tenantContext);
+          break;
+
+        case 'search_company_notes':
+          this.logger.info(`📝 Executing search_company_notes`, { toolCallId });
+          result = await this.searchCompanyNotes(args, tenantContext);
+          break;
+
+        case 'get_company_note':
+          this.logger.info(`📝 Executing get_company_note`, { toolCallId });
+          result = await this.getCompanyNote(args, tenantContext);
+          break;
+
+        case 'create_company_note':
+          this.logger.info(`➕ Executing create_company_note`, { toolCallId });
+          result = await this.createCompanyNote(args, tenantContext);
+          break;
+
+        // Attachments Management
+        case 'search_ticket_attachments':
+          this.logger.info(`📎 Executing search_ticket_attachments`, { toolCallId });
+          result = await this.searchTicketAttachments(args, tenantContext);
+          break;
+
+        case 'get_ticket_attachment':
+          this.logger.info(`📎 Executing get_ticket_attachment`, { toolCallId });
+          result = await this.getTicketAttachment(args, tenantContext);
+          break;
+
+        // Financial Management
+        case 'get_contract':
+          this.logger.info(`📄 Executing get_contract`, { toolCallId });
+          result = await this.getContract(args, tenantContext);
+          break;
+
+        case 'search_contracts':
+          this.logger.info(`📄 Executing search_contracts`, { toolCallId });
+          result = await this.searchContracts(args, tenantContext);
+          break;
+
+        case 'get_invoice':
+          this.logger.info(`🧾 Executing get_invoice`, { toolCallId });
+          result = await this.getInvoice(args, tenantContext);
+          break;
+
+        case 'search_invoices':
+          this.logger.info(`🧾 Executing search_invoices`, { toolCallId });
+          result = await this.searchInvoices(args, tenantContext);
+          break;
+
+        case 'get_quote':
+          this.logger.info(`💰 Executing get_quote`, { toolCallId });
+          result = await this.getQuote(args, tenantContext);
+          break;
+
+        case 'search_quotes':
+          this.logger.info(`💰 Executing search_quotes`, { toolCallId });
+          result = await this.searchQuotes(args, tenantContext);
+          break;
+
+        case 'create_quote':
+          this.logger.info(`➕ Executing create_quote`, { toolCallId });
+          result = await this.createQuote(args, tenantContext);
+          break;
+
+        case 'get_expense_report':
+          this.logger.info(`💳 Executing get_expense_report`, { toolCallId });
+          result = await this.getExpenseReport(args, tenantContext);
+          break;
+
+        case 'search_expense_reports':
+          this.logger.info(`💳 Executing search_expense_reports`, { toolCallId });
+          result = await this.searchExpenseReports(args, tenantContext);
+          break;
+
+        case 'create_expense_report':
+          this.logger.info(`➕ Executing create_expense_report`, { toolCallId });
+          result = await this.createExpenseReport(args, tenantContext);
+          break;
+
+        // Configuration Items Management
+        case 'get_configuration_item':
+          this.logger.info(`🖥️ Executing get_configuration_item`, { toolCallId });
+          result = await this.getConfigurationItem(args, tenantContext);
+          break;
+
+        case 'search_configuration_items':
+          this.logger.info(`🖥️ Executing search_configuration_items`, { toolCallId });
+          result = await this.searchConfigurationItems(args, tenantContext);
+          break;
+
+        case 'create_configuration_item':
+          this.logger.info(`➕ Executing create_configuration_item`, { toolCallId });
+          result = await this.createConfigurationItem(args, tenantContext);
+          break;
+
+        case 'update_configuration_item':
+          this.logger.info(`✏️ Executing update_configuration_item`, { toolCallId });
+          result = await this.updateConfigurationItem(args, tenantContext);
           break;
 
         default:
@@ -1668,6 +2799,1463 @@ export class EnhancedAutotaskToolHandler {
         }],
         isError: true
       };
+    }
+  }
+
+  // ===================================
+  // Phase 1: Individual Entity Getters
+  // ===================================
+
+  private async getCompany(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
+    try {
+      const { id } = args;
+      
+      if (!id || typeof id !== 'number') {
+        throw new Error('Company ID is required and must be a number');
+      }
+
+      const company = await this.autotaskService.getCompany(id, tenantContext);
+      
+      if (!company) {
+        return {
+          content: [{
+            type: 'text',
+            text: `Company with ID ${id} not found`
+          }],
+          isError: false
+        };
+      }
+
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify(company, null, 2)
+        }],
+        isError: false
+      };
+    } catch (error) {
+      throw new Error(`Failed to get company: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+  private async getContact(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
+    try {
+      const { id } = args;
+      
+      if (!id || typeof id !== 'number') {
+        throw new Error('Contact ID is required and must be a number');
+      }
+
+      const contact = await this.autotaskService.getContact(id, tenantContext);
+      
+      if (!contact) {
+        return {
+          content: [{
+            type: 'text',
+            text: `Contact with ID ${id} not found`
+          }],
+          isError: false
+        };
+      }
+
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify(contact, null, 2)
+        }],
+        isError: false
+      };
+    } catch (error) {
+      throw new Error(`Failed to get contact: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+  private async getTicket(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
+    try {
+      const { id, fullDetails = false } = args;
+      
+      if (!id || typeof id !== 'number') {
+        throw new Error('Ticket ID is required and must be a number');
+      }
+
+      const ticket = await this.autotaskService.getTicket(id, fullDetails, tenantContext);
+      
+      if (!ticket) {
+        return {
+          content: [{
+            type: 'text',
+            text: `Ticket with ID ${id} not found`
+          }],
+          isError: false
+        };
+      }
+
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify(ticket, null, 2)
+        }],
+        isError: false
+      };
+    } catch (error) {
+      throw new Error(`Failed to get ticket: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+  private async getProject(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
+    try {
+      const { id } = args;
+      
+      if (!id || typeof id !== 'number') {
+        throw new Error('Project ID is required and must be a number');
+      }
+
+      const project = await this.autotaskService.getProject(id, tenantContext);
+      
+      if (!project) {
+        return {
+          content: [{
+            type: 'text',
+            text: `Project with ID ${id} not found`
+          }],
+          isError: false
+        };
+      }
+
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify(project, null, 2)
+        }],
+        isError: false
+      };
+    } catch (error) {
+      throw new Error(`Failed to get project: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+  private async getResource(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
+    try {
+      const { id } = args;
+      
+      if (!id || typeof id !== 'number') {
+        throw new Error('Resource ID is required and must be a number');
+      }
+
+      const resource = await this.autotaskService.getResource(id, tenantContext);
+      
+      if (!resource) {
+        return {
+          content: [{
+            type: 'text',
+            text: `Resource with ID ${id} not found`
+          }],
+          isError: false
+        };
+      }
+
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify(resource, null, 2)
+        }],
+        isError: false
+      };
+    } catch (error) {
+      throw new Error(`Failed to get resource: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+  private async createProject(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
+    try {
+      const { 
+        companyID, 
+        projectName, 
+        description, 
+        status, 
+        projectType, 
+        projectManagerResourceID, 
+        startDateTime, 
+        endDateTime, 
+        estimatedHours 
+      } = args;
+      
+      if (!companyID || !projectName) {
+        throw new Error('Company ID and project name are required');
+      }
+
+      const projectData = {
+        companyID,
+        projectName,
+        ...(description && { description }),
+        ...(status && { status }),
+        ...(projectType && { projectType }),
+        ...(projectManagerResourceID && { projectManagerResourceID }),
+        ...(startDateTime && { startDateTime }),
+        ...(endDateTime && { endDateTime }),
+        ...(estimatedHours && { estimatedHours })
+      };
+
+      const projectId = await this.autotaskService.createProject(projectData, tenantContext);
+      
+      return {
+        content: [{
+          type: 'text',
+          text: `Project created successfully with ID: ${projectId}`
+        }],
+        isError: false
+      };
+    } catch (error) {
+      throw new Error(`Failed to create project: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+  private async updateProject(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
+    try {
+      const { 
+        id, 
+        projectName, 
+        description, 
+        status, 
+        projectManagerResourceID, 
+        startDateTime, 
+        endDateTime, 
+        estimatedHours 
+      } = args;
+      
+      if (!id) {
+        throw new Error('Project ID is required');
+      }
+
+      const updateData: any = {};
+      
+      if (projectName !== undefined) updateData.projectName = projectName;
+      if (description !== undefined) updateData.description = description;
+      if (status !== undefined) updateData.status = status;
+      if (projectManagerResourceID !== undefined) updateData.projectManagerResourceID = projectManagerResourceID;
+      if (startDateTime !== undefined) updateData.startDateTime = startDateTime;
+      if (endDateTime !== undefined) updateData.endDateTime = endDateTime;
+      if (estimatedHours !== undefined) updateData.estimatedHours = estimatedHours;
+
+      if (Object.keys(updateData).length === 0) {
+        throw new Error('At least one field to update must be provided');
+      }
+
+      await this.autotaskService.updateProject(id, updateData, tenantContext);
+      
+      return {
+        content: [{
+          type: 'text',
+          text: `Project ${id} updated successfully`
+        }],
+        isError: false
+      };
+    } catch (error) {
+      throw new Error(`Failed to update project: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+  // ===================================
+  // Phase 1: Time Entry Management
+  // ===================================
+
+  private async searchTimeEntries(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
+    try {
+      const { ticketId, projectId, resourceId, dateFrom, dateTo, pageSize } = args;
+      
+      // Build filter for time entries search
+      const filter: any[] = [];
+      
+      if (ticketId) {
+        filter.push({ field: 'ticketId', op: 'eq', value: ticketId });
+      }
+      
+      if (projectId) {
+        filter.push({ field: 'projectId', op: 'eq', value: projectId });
+      }
+      
+      if (resourceId) {
+        filter.push({ field: 'resourceId', op: 'eq', value: resourceId });
+      }
+      
+      if (dateFrom) {
+        filter.push({ field: 'dateWorked', op: 'gte', value: dateFrom });
+      }
+      
+      if (dateTo) {
+        filter.push({ field: 'dateWorked', op: 'lte', value: dateTo });
+      }
+      
+      // If no specific filters, get recent entries
+      if (filter.length === 0) {
+        // Get entries from last 30 days by default
+        const thirtyDaysAgo = new Date();
+        thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+        filter.push({ field: 'dateWorked', op: 'gte', value: thirtyDaysAgo.toISOString().split('T')[0] });
+      }
+
+      const queryOptions = {
+        filter,
+        ...(pageSize && { pageSize })
+      };
+
+      const timeEntries = await this.autotaskService.getTimeEntries(queryOptions, tenantContext);
+      
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify(timeEntries, null, 2)
+        }],
+        isError: false
+      };
+    } catch (error) {
+      throw new Error(`Failed to search time entries: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+  private async getTimeEntry(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
+    try {
+      const { id } = args;
+      
+      if (!id || typeof id !== 'number') {
+        throw new Error('Time Entry ID is required and must be a number');
+      }
+
+      // Since autotask service doesn't have getTimeEntry, we'll search by ID
+      const queryOptions = {
+        filter: [{ field: 'id', op: 'eq', value: id }],
+        pageSize: 1
+      };
+
+      const timeEntries = await this.autotaskService.getTimeEntries(queryOptions, tenantContext);
+      
+      if (!timeEntries || timeEntries.length === 0) {
+        return {
+          content: [{
+            type: 'text',
+            text: `Time entry with ID ${id} not found`
+          }],
+          isError: false
+        };
+      }
+
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify(timeEntries[0], null, 2)
+        }],
+        isError: false
+      };
+    } catch (error) {
+      throw new Error(`Failed to get time entry: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+  // ===================================
+  // Phase 1: Task Management
+  // ===================================
+
+  private async searchTasks(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
+    try {
+      const { projectId, assignedResourceId, status, searchTerm, pageSize } = args;
+      
+      // Build filter for tasks search
+      const filter: any[] = [];
+      
+      if (projectId) {
+        filter.push({ field: 'projectID', op: 'eq', value: projectId });
+      }
+      
+      if (assignedResourceId) {
+        filter.push({ field: 'assignedResourceID', op: 'eq', value: assignedResourceId });
+      }
+      
+      if (status !== undefined) {
+        filter.push({ field: 'status', op: 'eq', value: status });
+      }
+      
+      if (searchTerm) {
+        filter.push({ field: 'title', op: 'contains', value: searchTerm });
+      }
+      
+      // If no specific filters, get all active tasks
+      if (filter.length === 0) {
+        filter.push({ field: 'id', op: 'gte', value: 0 });
+      }
+
+      const queryOptions = {
+        filter,
+        ...(pageSize && { pageSize })
+      };
+
+      const tasks = await this.autotaskService.searchTasks(queryOptions, tenantContext);
+      
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify(tasks, null, 2)
+        }],
+        isError: false
+      };
+    } catch (error) {
+      throw new Error(`Failed to search tasks: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+  private async getTask(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
+    try {
+      const { id } = args;
+      
+      if (!id || typeof id !== 'number') {
+        throw new Error('Task ID is required and must be a number');
+      }
+
+      const task = await this.autotaskService.getTask(id, tenantContext);
+      
+      if (!task) {
+        return {
+          content: [{
+            type: 'text',
+            text: `Task with ID ${id} not found`
+          }],
+          isError: false
+        };
+      }
+
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify(task, null, 2)
+        }],
+        isError: false
+      };
+    } catch (error) {
+      throw new Error(`Failed to get task: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+  private async createTask(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
+    try {
+      const { 
+        projectID, 
+        title, 
+        description, 
+        assignedResourceID, 
+        status, 
+        startDateTime, 
+        endDateTime, 
+        estimatedHours, 
+        priorityLabel 
+      } = args;
+      
+      if (!projectID || !title) {
+        throw new Error('Project ID and title are required');
+      }
+
+      const taskData = {
+        projectID,
+        title,
+        ...(description && { description }),
+        ...(assignedResourceID && { assignedResourceID }),
+        ...(status && { status }),
+        ...(startDateTime && { startDateTime }),
+        ...(endDateTime && { endDateTime }),
+        ...(estimatedHours && { estimatedHours }),
+        ...(priorityLabel && { priorityLabel })
+      };
+
+      const taskId = await this.autotaskService.createTask(taskData, tenantContext);
+      
+      return {
+        content: [{
+          type: 'text',
+          text: `Task created successfully with ID: ${taskId}`
+        }],
+        isError: false
+      };
+    } catch (error) {
+      throw new Error(`Failed to create task: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+  private async updateTask(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
+    try {
+      const { 
+        id, 
+        title, 
+        description, 
+        assignedResourceID, 
+        status, 
+        startDateTime, 
+        endDateTime, 
+        estimatedHours, 
+        percentComplete 
+      } = args;
+      
+      if (!id) {
+        throw new Error('Task ID is required');
+      }
+
+      const updateData: any = {};
+      
+      if (title !== undefined) updateData.title = title;
+      if (description !== undefined) updateData.description = description;
+      if (assignedResourceID !== undefined) updateData.assignedResourceID = assignedResourceID;
+      if (status !== undefined) updateData.status = status;
+      if (startDateTime !== undefined) updateData.startDateTime = startDateTime;
+      if (endDateTime !== undefined) updateData.endDateTime = endDateTime;
+      if (estimatedHours !== undefined) updateData.estimatedHours = estimatedHours;
+      if (percentComplete !== undefined) updateData.percentComplete = percentComplete;
+
+      if (Object.keys(updateData).length === 0) {
+        throw new Error('At least one field to update must be provided');
+      }
+
+      await this.autotaskService.updateTask(id, updateData, tenantContext);
+      
+      return {
+        content: [{
+          type: 'text',
+          text: `Task ${id} updated successfully`
+        }],
+        isError: false
+      };
+    } catch (error) {
+      throw new Error(`Failed to update task: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+  // ===================================
+  // Phase 2: Notes Management
+  // ===================================
+
+  private async searchTicketNotes(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
+    try {
+      const { ticketId, pageSize } = args;
+      
+      if (!ticketId || typeof ticketId !== 'number') {
+        throw new Error('Ticket ID is required and must be a number');
+      }
+
+      const queryOptions = {
+        ...(pageSize && { pageSize })
+      };
+
+      const notes = await this.autotaskService.searchTicketNotes(ticketId, queryOptions, tenantContext);
+      
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify(notes, null, 2)
+        }],
+        isError: false
+      };
+    } catch (error) {
+      throw new Error(`Failed to search ticket notes: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+  private async getTicketNote(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
+    try {
+      const { ticketId, noteId } = args;
+      
+      if (!ticketId || typeof ticketId !== 'number') {
+        throw new Error('Ticket ID is required and must be a number');
+      }
+      
+      if (!noteId || typeof noteId !== 'number') {
+        throw new Error('Note ID is required and must be a number');
+      }
+
+      const note = await this.autotaskService.getTicketNote(ticketId, noteId, tenantContext);
+      
+      if (!note) {
+        return {
+          content: [{
+            type: 'text',
+            text: `Ticket note with ID ${noteId} not found for ticket ${ticketId}`
+          }],
+          isError: false
+        };
+      }
+
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify(note, null, 2)
+        }],
+        isError: false
+      };
+    } catch (error) {
+      throw new Error(`Failed to get ticket note: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+  private async createTicketNote(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
+    try {
+      const { ticketId, title, description, noteType, publish } = args;
+      
+      if (!ticketId || typeof ticketId !== 'number') {
+        throw new Error('Ticket ID is required and must be a number');
+      }
+      
+      if (!description) {
+        throw new Error('Description is required');
+      }
+
+      const noteData = {
+        ...(title && { title }),
+        description,
+        ...(noteType && { noteType }),
+        ...(publish && { publish })
+      };
+
+      const noteId = await this.autotaskService.createTicketNote(ticketId, noteData, tenantContext);
+      
+      return {
+        content: [{
+          type: 'text',
+          text: `Ticket note created successfully with ID: ${noteId}`
+        }],
+        isError: false
+      };
+    } catch (error) {
+      throw new Error(`Failed to create ticket note: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+  private async searchProjectNotes(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
+    try {
+      const { projectId, pageSize } = args;
+      
+      if (!projectId || typeof projectId !== 'number') {
+        throw new Error('Project ID is required and must be a number');
+      }
+
+      const queryOptions = {
+        ...(pageSize && { pageSize })
+      };
+
+      const notes = await this.autotaskService.searchProjectNotes(projectId, queryOptions, tenantContext);
+      
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify(notes, null, 2)
+        }],
+        isError: false
+      };
+    } catch (error) {
+      throw new Error(`Failed to search project notes: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+  private async getProjectNote(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
+    try {
+      const { projectId, noteId } = args;
+      
+      if (!projectId || typeof projectId !== 'number') {
+        throw new Error('Project ID is required and must be a number');
+      }
+      
+      if (!noteId || typeof noteId !== 'number') {
+        throw new Error('Note ID is required and must be a number');
+      }
+
+      const note = await this.autotaskService.getProjectNote(projectId, noteId, tenantContext);
+      
+      if (!note) {
+        return {
+          content: [{
+            type: 'text',
+            text: `Project note with ID ${noteId} not found for project ${projectId}`
+          }],
+          isError: false
+        };
+      }
+
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify(note, null, 2)
+        }],
+        isError: false
+      };
+    } catch (error) {
+      throw new Error(`Failed to get project note: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+  private async createProjectNote(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
+    try {
+      const { projectId, title, description, noteType, publish } = args;
+      
+      if (!projectId || typeof projectId !== 'number') {
+        throw new Error('Project ID is required and must be a number');
+      }
+      
+      if (!description) {
+        throw new Error('Description is required');
+      }
+
+      const noteData = {
+        ...(title && { title }),
+        description,
+        ...(noteType && { noteType }),
+        ...(publish && { publish })
+      };
+
+      const noteId = await this.autotaskService.createProjectNote(projectId, noteData, tenantContext);
+      
+      return {
+        content: [{
+          type: 'text',
+          text: `Project note created successfully with ID: ${noteId}`
+        }],
+        isError: false
+      };
+    } catch (error) {
+      throw new Error(`Failed to create project note: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+  private async searchCompanyNotes(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
+    try {
+      const { companyId, pageSize } = args;
+      
+      if (!companyId || typeof companyId !== 'number') {
+        throw new Error('Company ID is required and must be a number');
+      }
+
+      const queryOptions = {
+        ...(pageSize && { pageSize })
+      };
+
+      const notes = await this.autotaskService.searchCompanyNotes(companyId, queryOptions, tenantContext);
+      
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify(notes, null, 2)
+        }],
+        isError: false
+      };
+    } catch (error) {
+      throw new Error(`Failed to search company notes: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+  private async getCompanyNote(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
+    try {
+      const { companyId, noteId } = args;
+      
+      if (!companyId || typeof companyId !== 'number') {
+        throw new Error('Company ID is required and must be a number');
+      }
+      
+      if (!noteId || typeof noteId !== 'number') {
+        throw new Error('Note ID is required and must be a number');
+      }
+
+      const note = await this.autotaskService.getCompanyNote(companyId, noteId, tenantContext);
+      
+      if (!note) {
+        return {
+          content: [{
+            type: 'text',
+            text: `Company note with ID ${noteId} not found for company ${companyId}`
+          }],
+          isError: false
+        };
+      }
+
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify(note, null, 2)
+        }],
+        isError: false
+      };
+    } catch (error) {
+      throw new Error(`Failed to get company note: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+  private async createCompanyNote(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
+    try {
+      const { companyId, title, description, noteType, publish } = args;
+      
+      if (!companyId || typeof companyId !== 'number') {
+        throw new Error('Company ID is required and must be a number');
+      }
+      
+      if (!description) {
+        throw new Error('Description is required');
+      }
+
+      const noteData = {
+        ...(title && { title }),
+        description,
+        ...(noteType && { noteType }),
+        ...(publish && { publish })
+      };
+
+      const noteId = await this.autotaskService.createCompanyNote(companyId, noteData, tenantContext);
+      
+      return {
+        content: [{
+          type: 'text',
+          text: `Company note created successfully with ID: ${noteId}`
+        }],
+        isError: false
+      };
+    } catch (error) {
+      throw new Error(`Failed to create company note: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+  // ===================================
+  // Phase 2: Attachments Management
+  // ===================================
+
+  private async searchTicketAttachments(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
+    try {
+      const { ticketId, pageSize } = args;
+      
+      if (!ticketId || typeof ticketId !== 'number') {
+        throw new Error('Ticket ID is required and must be a number');
+      }
+
+      const queryOptions = {
+        ...(pageSize && { pageSize })
+      };
+
+      const attachments = await this.autotaskService.searchTicketAttachments(ticketId, queryOptions, tenantContext);
+      
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify(attachments, null, 2)
+        }],
+        isError: false
+      };
+    } catch (error) {
+      throw new Error(`Failed to search ticket attachments: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+  private async getTicketAttachment(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
+    try {
+      const { ticketId, attachmentId, includeData = false } = args;
+      
+      if (!ticketId || typeof ticketId !== 'number') {
+        throw new Error('Ticket ID is required and must be a number');
+      }
+      
+      if (!attachmentId || typeof attachmentId !== 'number') {
+        throw new Error('Attachment ID is required and must be a number');
+      }
+
+      const attachment = await this.autotaskService.getTicketAttachment(ticketId, attachmentId, includeData, tenantContext);
+      
+      if (!attachment) {
+        return {
+          content: [{
+            type: 'text',
+            text: `Ticket attachment with ID ${attachmentId} not found for ticket ${ticketId}`
+          }],
+          isError: false
+        };
+      }
+
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify(attachment, null, 2)
+        }],
+        isError: false
+      };
+    } catch (error) {
+      throw new Error(`Failed to get ticket attachment: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+  // ===================================
+  // Phase 3: Financial Management
+  // ===================================
+
+  private async getContract(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
+    try {
+      const { id } = args;
+      
+      if (!id || typeof id !== 'number') {
+        throw new Error('Contract ID is required and must be a number');
+      }
+
+      const contract = await this.autotaskService.getContract(id, tenantContext);
+      
+      if (!contract) {
+        return {
+          content: [{
+            type: 'text',
+            text: `Contract with ID ${id} not found`
+          }],
+          isError: false
+        };
+      }
+
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify(contract, null, 2)
+        }],
+        isError: false
+      };
+    } catch (error) {
+      throw new Error(`Failed to get contract: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+  private async searchContracts(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
+    try {
+      const { companyId, status, contractType, searchTerm, pageSize } = args;
+      
+      // Build filter for contracts search
+      const filter: any[] = [];
+      
+      if (companyId) {
+        filter.push({ field: 'companyID', op: 'eq', value: companyId });
+      }
+      
+      if (status !== undefined) {
+        filter.push({ field: 'status', op: 'eq', value: status });
+      }
+      
+      if (contractType !== undefined) {
+        filter.push({ field: 'contractType', op: 'eq', value: contractType });
+      }
+      
+      if (searchTerm) {
+        filter.push({ field: 'contractName', op: 'contains', value: searchTerm });
+      }
+      
+      // If no specific filters, get all contracts
+      if (filter.length === 0) {
+        filter.push({ field: 'id', op: 'gte', value: 0 });
+      }
+
+      const queryOptions = {
+        filter,
+        ...(pageSize && { pageSize })
+      };
+
+      const contracts = await this.autotaskService.searchContracts(queryOptions, tenantContext);
+      
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify(contracts, null, 2)
+        }],
+        isError: false
+      };
+    } catch (error) {
+      throw new Error(`Failed to search contracts: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+  private async getInvoice(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
+    try {
+      const { id } = args;
+      
+      if (!id || typeof id !== 'number') {
+        throw new Error('Invoice ID is required and must be a number');
+      }
+
+      const invoice = await this.autotaskService.getInvoice(id, tenantContext);
+      
+      if (!invoice) {
+        return {
+          content: [{
+            type: 'text',
+            text: `Invoice with ID ${id} not found`
+          }],
+          isError: false
+        };
+      }
+
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify(invoice, null, 2)
+        }],
+        isError: false
+      };
+    } catch (error) {
+      throw new Error(`Failed to get invoice: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+  private async searchInvoices(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
+    try {
+      const { companyId, fromDate, toDate, status, pageSize } = args;
+      
+      // Build filter for invoices search
+      const filter: any[] = [];
+      
+      if (companyId) {
+        filter.push({ field: 'accountID', op: 'eq', value: companyId });
+      }
+      
+      if (fromDate) {
+        filter.push({ field: 'invoiceDate', op: 'gte', value: fromDate });
+      }
+      
+      if (toDate) {
+        filter.push({ field: 'invoiceDate', op: 'lte', value: toDate });
+      }
+      
+      if (status !== undefined) {
+        filter.push({ field: 'status', op: 'eq', value: status });
+      }
+      
+      // If no specific filters, get recent invoices (last 30 days)
+      if (filter.length === 0) {
+        const thirtyDaysAgo = new Date();
+        thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+        filter.push({ field: 'invoiceDate', op: 'gte', value: thirtyDaysAgo.toISOString().split('T')[0] });
+      }
+
+      const queryOptions = {
+        filter,
+        ...(pageSize && { pageSize })
+      };
+
+      const invoices = await this.autotaskService.searchInvoices(queryOptions, tenantContext);
+      
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify(invoices, null, 2)
+        }],
+        isError: false
+      };
+    } catch (error) {
+      throw new Error(`Failed to search invoices: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+  private async getQuote(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
+    try {
+      const { id } = args;
+      
+      if (!id || typeof id !== 'number') {
+        throw new Error('Quote ID is required and must be a number');
+      }
+
+      const quote = await this.autotaskService.getQuote(id, tenantContext);
+      
+      if (!quote) {
+        return {
+          content: [{
+            type: 'text',
+            text: `Quote with ID ${id} not found`
+          }],
+          isError: false
+        };
+      }
+
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify(quote, null, 2)
+        }],
+        isError: false
+      };
+    } catch (error) {
+      throw new Error(`Failed to get quote: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+  private async searchQuotes(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
+    try {
+      const { companyId, contactId, opportunityId, searchTerm, pageSize } = args;
+      
+      // Build filter for quotes search
+      const filter: any[] = [];
+      
+      if (companyId) {
+        filter.push({ field: 'accountId', op: 'eq', value: companyId });
+      }
+      
+      if (contactId) {
+        filter.push({ field: 'contactId', op: 'eq', value: contactId });
+      }
+      
+      if (opportunityId) {
+        filter.push({ field: 'opportunityId', op: 'eq', value: opportunityId });
+      }
+      
+      if (searchTerm) {
+        filter.push({ field: 'description', op: 'contains', value: searchTerm });
+      }
+      
+      // If no specific filters, get all quotes
+      if (filter.length === 0) {
+        filter.push({ field: 'id', op: 'gte', value: 0 });
+      }
+
+      const queryOptions = {
+        filter,
+        ...(pageSize && { pageSize })
+      };
+
+      const quotes = await this.autotaskService.searchQuotes(queryOptions, tenantContext);
+      
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify(quotes, null, 2)
+        }],
+        isError: false
+      };
+    } catch (error) {
+      throw new Error(`Failed to search quotes: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+  private async createQuote(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
+    try {
+      const { 
+        accountId, 
+        contactId, 
+        title, 
+        description, 
+        opportunityId, 
+        proposedWorkDescription, 
+        paymentTerms, 
+        effectiveDate, 
+        expirationDate 
+      } = args;
+      
+      if (!accountId || !contactId || !title) {
+        throw new Error('Account ID, contact ID, and title are required');
+      }
+
+      const quoteData = {
+        accountId,
+        contactId,
+        title,
+        ...(description && { description }),
+        ...(opportunityId && { opportunityId }),
+        ...(proposedWorkDescription && { proposedWorkDescription }),
+        ...(paymentTerms && { paymentTerms }),
+        ...(effectiveDate && { effectiveDate }),
+        ...(expirationDate && { expirationDate })
+      };
+
+      const quoteId = await this.autotaskService.createQuote(quoteData, tenantContext);
+      
+      return {
+        content: [{
+          type: 'text',
+          text: `Quote created successfully with ID: ${quoteId}`
+        }],
+        isError: false
+      };
+    } catch (error) {
+      throw new Error(`Failed to create quote: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+  private async getExpenseReport(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
+    try {
+      const { id } = args;
+      
+      if (!id || typeof id !== 'number') {
+        throw new Error('Expense report ID is required and must be a number');
+      }
+
+      const expenseReport = await this.autotaskService.getExpenseReport(id, tenantContext);
+      
+      if (!expenseReport) {
+        return {
+          content: [{
+            type: 'text',
+            text: `Expense report with ID ${id} not found`
+          }],
+          isError: false
+        };
+      }
+
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify(expenseReport, null, 2)
+        }],
+        isError: false
+      };
+    } catch (error) {
+      throw new Error(`Failed to get expense report: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+  private async searchExpenseReports(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
+    try {
+      const { submitterId, status, fromDate, toDate, pageSize } = args;
+      
+      // Build filter for expense reports search
+      const filter: any[] = [];
+      
+      if (submitterId) {
+        filter.push({ field: 'resourceId', op: 'eq', value: submitterId });
+      }
+      
+      if (status !== undefined) {
+        filter.push({ field: 'status', op: 'eq', value: status });
+      }
+      
+      if (fromDate) {
+        filter.push({ field: 'submitDate', op: 'gte', value: fromDate });
+      }
+      
+      if (toDate) {
+        filter.push({ field: 'submitDate', op: 'lte', value: toDate });
+      }
+      
+      // If no specific filters, get recent expense reports (last 30 days)
+      if (filter.length === 0) {
+        const thirtyDaysAgo = new Date();
+        thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+        filter.push({ field: 'submitDate', op: 'gte', value: thirtyDaysAgo.toISOString().split('T')[0] });
+      }
+
+      const queryOptions = {
+        submitterId,
+        status,
+        ...(pageSize && { pageSize })
+      };
+
+      const expenseReports = await this.autotaskService.searchExpenseReports(queryOptions, tenantContext);
+      
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify(expenseReports, null, 2)
+        }],
+        isError: false
+      };
+    } catch (error) {
+      throw new Error(`Failed to search expense reports: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+  private async createExpenseReport(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
+    try {
+      const { 
+        resourceId, 
+        name, 
+        weekEnding, 
+        status, 
+        approverResourceId, 
+        submitDate 
+      } = args;
+      
+      if (!resourceId || !name || !weekEnding) {
+        throw new Error('Resource ID, name, and week ending date are required');
+      }
+
+      const expenseReportData = {
+        resourceId,
+        name,
+        weekEnding,
+        ...(status && { status }),
+        ...(approverResourceId && { approverResourceId }),
+        ...(submitDate && { submitDate })
+      };
+
+      const expenseReportId = await this.autotaskService.createExpenseReport(expenseReportData, tenantContext);
+      
+      return {
+        content: [{
+          type: 'text',
+          text: `Expense report created successfully with ID: ${expenseReportId}`
+        }],
+        isError: false
+      };
+    } catch (error) {
+      throw new Error(`Failed to create expense report: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+  // ===================================
+  // Configuration Items Management  
+  // ===================================
+
+  private async getConfigurationItem(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
+    try {
+      const { id } = args;
+      
+      if (!id || typeof id !== 'number') {
+        throw new Error('Configuration item ID is required and must be a number');
+      }
+
+      const configItem = await this.autotaskService.getConfigurationItem(id, tenantContext);
+      
+      if (!configItem) {
+        return {
+          content: [{
+            type: 'text',
+            text: `Configuration item with ID ${id} not found`
+          }],
+          isError: false
+        };
+      }
+
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify(configItem, null, 2)
+        }],
+        isError: false
+      };
+    } catch (error) {
+      throw new Error(`Failed to get configuration item: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+  private async searchConfigurationItems(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
+    try {
+      const { companyId, configurationItemType, serialNumber, referenceTitle, searchTerm, pageSize } = args;
+      
+      // Build filter for configuration items search
+      const filter: any[] = [];
+      
+      if (companyId) {
+        filter.push({ field: 'companyID', op: 'eq', value: companyId });
+      }
+      
+      if (configurationItemType !== undefined) {
+        filter.push({ field: 'configurationItemType', op: 'eq', value: configurationItemType });
+      }
+      
+      if (serialNumber) {
+        filter.push({ field: 'serialNumber', op: 'contains', value: serialNumber });
+      }
+      
+      if (referenceTitle) {
+        filter.push({ field: 'referenceTitle', op: 'contains', value: referenceTitle });
+      }
+      
+      if (searchTerm) {
+        filter.push({ field: 'referenceTitle', op: 'contains', value: searchTerm });
+      }
+      
+      // If no specific filters, get all configuration items
+      if (filter.length === 0) {
+        filter.push({ field: 'id', op: 'gte', value: 0 });
+      }
+
+      const queryOptions = {
+        filter,
+        ...(pageSize && { pageSize })
+      };
+
+      const configItems = await this.autotaskService.searchConfigurationItems(queryOptions, tenantContext);
+      
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify(configItems, null, 2)
+        }],
+        isError: false
+      };
+    } catch (error) {
+      throw new Error(`Failed to search configuration items: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+  private async createConfigurationItem(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
+    try {
+      const { 
+        companyID, 
+        configurationItemType, 
+        referenceTitle, 
+        serialNumber, 
+        installedProductID, 
+        contactID, 
+        location, 
+        notes 
+      } = args;
+      
+      if (!companyID || !configurationItemType || !referenceTitle) {
+        throw new Error('Company ID, configuration item type, and reference title are required');
+      }
+
+      const configItemData = {
+        companyID,
+        configurationItemType,
+        referenceTitle,
+        ...(serialNumber && { serialNumber }),
+        ...(installedProductID && { installedProductID }),
+        ...(contactID && { contactID }),
+        ...(location && { location }),
+        ...(notes && { notes })
+      };
+
+      const configItemId = await this.autotaskService.createConfigurationItem(configItemData, tenantContext);
+      
+      return {
+        content: [{
+          type: 'text',
+          text: `Configuration item created successfully with ID: ${configItemId}`
+        }],
+        isError: false
+      };
+    } catch (error) {
+      throw new Error(`Failed to create configuration item: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+  private async updateConfigurationItem(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
+    try {
+      const { 
+        id, 
+        referenceTitle, 
+        serialNumber, 
+        installedProductID, 
+        contactID, 
+        location, 
+        notes 
+      } = args;
+      
+      if (!id) {
+        throw new Error('Configuration item ID is required');
+      }
+
+      const updateData: any = {};
+      
+      if (referenceTitle !== undefined) updateData.referenceTitle = referenceTitle;
+      if (serialNumber !== undefined) updateData.serialNumber = serialNumber;
+      if (installedProductID !== undefined) updateData.installedProductID = installedProductID;
+      if (contactID !== undefined) updateData.contactID = contactID;
+      if (location !== undefined) updateData.location = location;
+      if (notes !== undefined) updateData.notes = notes;
+
+      if (Object.keys(updateData).length === 0) {
+        throw new Error('At least one field to update must be provided');
+      }
+
+      await this.autotaskService.updateConfigurationItem(id, updateData, tenantContext);
+      
+      return {
+        content: [{
+          type: 'text',
+          text: `Configuration item ${id} updated successfully`
+        }],
+        isError: false
+      };
+    } catch (error) {
+      throw new Error(`Failed to update configuration item: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   }
 }
