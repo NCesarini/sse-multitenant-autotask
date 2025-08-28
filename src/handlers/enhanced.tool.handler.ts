@@ -190,6 +190,7 @@ export class EnhancedAutotaskToolHandler {
       'search_company_notes', 'get_company_note', 'search_ticket_attachments', 'get_ticket_attachment',
       'get_contract', 'search_contracts', 'get_invoice', 'search_invoices',
       'get_quote', 'search_quotes', 'get_expense_report', 'search_expense_reports',
+      'search_expense_items', 'get_expense_item',
       'get_configuration_item', 'search_configuration_items',
       'get_company_name', 'get_resource_name', 'get_mapping_cache_stats',
       'test_connection', 'test_zone_information'
@@ -198,12 +199,12 @@ export class EnhancedAutotaskToolHandler {
     const writeTools = [
       'create_company', 'create_contact', 'create_ticket', 'create_time_entry', 'create_task', 'create_project',
       'create_ticket_note', 'create_project_note', 'create_company_note',
-      'create_quote', 'create_expense_report', 'create_configuration_item'
+      'create_quote', 'create_expense_report', 'create_expense_item', 'create_configuration_item'
     ];
     
     const modifyTools = [
       'update_company', 'update_contact', 'update_ticket', 'update_task', 'update_project',
-      'update_configuration_item', 'clear_mapping_cache', 'preload_mapping_cache'
+      'update_expense_report', 'update_expense_item', 'update_configuration_item', 'clear_mapping_cache', 'preload_mapping_cache'
     ];
     
     if (readOnlyTools.includes(toolName)) {
@@ -1442,6 +1443,282 @@ export class EnhancedAutotaskToolHandler {
         },
         ['resourceId', 'name', 'weekEnding']
       ),
+      EnhancedAutotaskToolHandler.createTool(
+        'update_expense_report',
+        'Update an existing expense report in Autotask',
+        'modify',
+        {
+          id: {
+            type: 'number',
+            description: 'Expense report ID to update'
+          },
+          name: {
+            type: 'string',
+            description: 'Expense report name/title'
+          },
+          status: {
+            type: 'number',
+            description: 'Expense report status'
+          },
+          approverResourceId: {
+            type: 'number',
+            description: 'Approver resource ID'
+          },
+          submitDate: {
+            type: 'string',
+            description: 'Submit date (YYYY-MM-DD format)'
+          },
+          weekEnding: {
+            type: 'string',
+            description: 'Week ending date (YYYY-MM-DD format)'
+          }
+        },
+        ['id']
+      ),
+
+      // Expense Items Management
+      EnhancedAutotaskToolHandler.createTool(
+        'search_expense_items',
+        'Search for expense items in a specific expense report (parent-child relationship)',
+        'read',
+        {
+          expenseReportId: {
+            type: 'number',
+            description: 'Expense report ID (required - parent entity)'
+          },
+          companyId: {
+            type: 'number',
+            description: 'Filter by company ID'
+          },
+          projectId: {
+            type: 'number',
+            description: 'Filter by project ID'
+          },
+          taskId: {
+            type: 'number',
+            description: 'Filter by task ID'
+          },
+          ticketId: {
+            type: 'number',
+            description: 'Filter by ticket ID'
+          },
+          expenseCategory: {
+            type: 'number',
+            description: 'Filter by expense category'
+          },
+          fromDate: {
+            type: 'string',
+            description: 'Start date filter (YYYY-MM-DD format)'
+          },
+          toDate: {
+            type: 'string',
+            description: 'End date filter (YYYY-MM-DD format)'
+          },
+          pageSize: {
+            type: 'number',
+            description: 'Number of results to return (max 500)',
+            minimum: 1,
+            maximum: 500
+          }
+        },
+        ['expenseReportId']
+      ),
+      EnhancedAutotaskToolHandler.createTool(
+        'get_expense_item',
+        'Get a specific expense item by ID from an expense report (parent-child relationship)',
+        'read',
+        {
+          id: {
+            type: 'number',
+            description: 'Expense item ID to retrieve'
+          },
+          expenseReportId: {
+            type: 'number',
+            description: 'Expense report ID (required - parent entity)'
+          }
+        },
+        ['id', 'expenseReportId']
+      ),
+      EnhancedAutotaskToolHandler.createTool(
+        'create_expense_item',
+        'Create a new expense item in Autotask',
+        'write',
+        {
+          expenseReportID: {
+            type: 'number',
+            description: 'Expense report ID'
+          },
+          companyID: {
+            type: 'number',
+            description: 'Company ID'
+          },
+          description: {
+            type: 'string',
+            description: 'Expense description'
+          },
+          expenseCategory: {
+            type: 'number',
+            description: 'Expense category ID'
+          },
+          expenseDate: {
+            type: 'string',
+            description: 'Expense date (YYYY-MM-DD format)'
+          },
+          expenseCurrencyExpenseAmount: {
+            type: 'number',
+            description: 'Amount in expense currency'
+          },
+          expenseCurrencyID: {
+            type: 'number',
+            description: 'Expense currency ID'
+          },
+          projectID: {
+            type: 'number',
+            description: 'Project ID (if billable to project)'
+          },
+          taskID: {
+            type: 'number',
+            description: 'Task ID (if billable to task)'
+          },
+          ticketID: {
+            type: 'number',
+            description: 'Ticket ID (if billable to ticket)'
+          },
+          isBillableToCompany: {
+            type: 'boolean',
+            description: 'Whether expense is billable to company'
+          },
+          isReimbursable: {
+            type: 'boolean',
+            description: 'Whether expense is reimbursable'
+          },
+          haveReceipt: {
+            type: 'boolean',
+            description: 'Whether receipt is available'
+          },
+          paymentType: {
+            type: 'number',
+            description: 'Payment type ID'
+          },
+          workType: {
+            type: 'number',
+            description: 'Work type ID'
+          },
+          miles: {
+            type: 'number',
+            description: 'Miles (for travel expenses)'
+          },
+          origin: {
+            type: 'string',
+            description: 'Origin location (for travel expenses)'
+          },
+          destination: {
+            type: 'string',
+            description: 'Destination location (for travel expenses)'
+          },
+          entertainmentLocation: {
+            type: 'string',
+            description: 'Entertainment location'
+          },
+          purchaseOrderNumber: {
+            type: 'string',
+            description: 'Purchase order number'
+          },
+          glCode: {
+            type: 'string',
+            description: 'GL code'
+          }
+        },
+        ['expenseReportID', 'companyID', 'description', 'expenseCategory', 'expenseDate']
+      ),
+      EnhancedAutotaskToolHandler.createTool(
+        'update_expense_item',
+        'Update an existing expense item in an expense report (parent-child relationship)',
+        'modify',
+        {
+          id: {
+            type: 'number',
+            description: 'Expense item ID to update'
+          },
+          expenseReportId: {
+            type: 'number',
+            description: 'Expense report ID (recommended - parent entity)'
+          },
+          description: {
+            type: 'string',
+            description: 'Expense description'
+          },
+          expenseCategory: {
+            type: 'number',
+            description: 'Expense category ID'
+          },
+          expenseDate: {
+            type: 'string',
+            description: 'Expense date (YYYY-MM-DD format)'
+          },
+          expenseCurrencyExpenseAmount: {
+            type: 'number',
+            description: 'Amount in expense currency'
+          },
+          projectID: {
+            type: 'number',
+            description: 'Project ID (if billable to project)'
+          },
+          taskID: {
+            type: 'number',
+            description: 'Task ID (if billable to task)'
+          },
+          ticketID: {
+            type: 'number',
+            description: 'Ticket ID (if billable to ticket)'
+          },
+          isBillableToCompany: {
+            type: 'boolean',
+            description: 'Whether expense is billable to company'
+          },
+          isReimbursable: {
+            type: 'boolean',
+            description: 'Whether expense is reimbursable'
+          },
+          haveReceipt: {
+            type: 'boolean',
+            description: 'Whether receipt is available'
+          },
+          paymentType: {
+            type: 'number',
+            description: 'Payment type ID'
+          },
+          workType: {
+            type: 'number',
+            description: 'Work type ID'
+          },
+          miles: {
+            type: 'number',
+            description: 'Miles (for travel expenses)'
+          },
+          origin: {
+            type: 'string',
+            description: 'Origin location (for travel expenses)'
+          },
+          destination: {
+            type: 'string',
+            description: 'Destination location (for travel expenses)'
+          },
+          entertainmentLocation: {
+            type: 'string',
+            description: 'Entertainment location'
+          },
+          purchaseOrderNumber: {
+            type: 'string',
+            description: 'Purchase order number'
+          },
+          glCode: {
+            type: 'string',
+            description: 'GL code'
+          }
+        },
+        ['id']
+      ),
 
       // Configuration Items Management
       EnhancedAutotaskToolHandler.createTool(
@@ -2024,6 +2301,32 @@ export class EnhancedAutotaskToolHandler {
         case 'create_expense_report':
           this.logger.info(`➕ Executing create_expense_report`, { toolCallId });
           result = await this.createExpenseReport(args, tenantContext);
+          break;
+
+        case 'update_expense_report':
+          this.logger.info(`✏️ Executing update_expense_report`, { toolCallId });
+          result = await this.updateExpenseReport(args, tenantContext);
+          break;
+
+        // Expense Items Management
+        case 'search_expense_items':
+          this.logger.info(`💳 Executing search_expense_items`, { toolCallId });
+          result = await this.searchExpenseItems(args, tenantContext);
+          break;
+
+        case 'get_expense_item':
+          this.logger.info(`💳 Executing get_expense_item`, { toolCallId });
+          result = await this.getExpenseItem(args, tenantContext);
+          break;
+
+        case 'create_expense_item':
+          this.logger.info(`➕ Executing create_expense_item`, { toolCallId });
+          result = await this.createExpenseItem(args, tenantContext);
+          break;
+
+        case 'update_expense_item':
+          this.logger.info(`✏️ Executing update_expense_item`, { toolCallId });
+          result = await this.updateExpenseItem(args, tenantContext);
           break;
 
         // Configuration Items Management
@@ -3797,32 +4100,28 @@ export class EnhancedAutotaskToolHandler {
 
   private async searchInvoices(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
     try {
-      const { companyId, fromDate, toDate, status, pageSize } = args;
-      
+      const { companyId, fromDate, toDate, pageSize } = args;
       // Build filter for invoices search
       const filter: any[] = [];
       
       if (companyId) {
-        filter.push({ field: 'accountID', op: 'eq', value: companyId });
+        filter.push({ field: 'companyID', op: 'eq', value: companyId });
       }
       
       if (fromDate) {
-        filter.push({ field: 'invoiceDate', op: 'gte', value: fromDate });
+        filter.push({ field: 'invoiceDateTime', op: 'gte', value: fromDate });
       }
       
       if (toDate) {
-        filter.push({ field: 'invoiceDate', op: 'lte', value: toDate });
+        filter.push({ field: 'invoiceDateTime', op: 'lte', value: toDate });
       }
-      
-      if (status !== undefined) {
-        filter.push({ field: 'status', op: 'eq', value: status });
-      }
+       
       
       // If no specific filters, get recent invoices (last 30 days)
       if (filter.length === 0) {
         const thirtyDaysAgo = new Date();
         thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-        filter.push({ field: 'invoiceDate', op: 'gte', value: thirtyDaysAgo.toISOString().split('T')[0] });
+        filter.push({ field: 'invoiceDateTime', op: 'gte', value: thirtyDaysAgo.toISOString().split('T')[0] });
       }
 
       const queryOptions = {
@@ -4087,6 +4386,47 @@ export class EnhancedAutotaskToolHandler {
     }
   }
 
+  private async updateExpenseReport(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
+    try {
+      const { 
+        id, 
+        name, 
+        status, 
+        approverResourceId, 
+        submitDate, 
+        weekEnding 
+      } = args;
+      
+      if (!id || typeof id !== 'number') {
+        throw new Error('Expense report ID is required and must be a number');
+      }
+
+      const updateData: any = {};
+      
+      if (name !== undefined) updateData.name = name;
+      if (status !== undefined) updateData.status = status;
+      if (approverResourceId !== undefined) updateData.approverResourceId = approverResourceId;
+      if (submitDate !== undefined) updateData.submitDate = submitDate;
+      if (weekEnding !== undefined) updateData.weekEnding = weekEnding;
+
+      if (Object.keys(updateData).length === 0) {
+        throw new Error('At least one field to update must be provided');
+      }
+
+      await this.autotaskService.updateExpenseReport(id, updateData, tenantContext);
+      
+      return {
+        content: [{
+          type: 'text',
+          text: `Expense report ${id} updated successfully`
+        }],
+        isError: false
+      };
+    } catch (error) {
+      throw new Error(`Failed to update expense report: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
   // ===================================
   // Configuration Items Management  
   // ===================================
@@ -4256,6 +4596,165 @@ export class EnhancedAutotaskToolHandler {
       };
     } catch (error) {
       throw new Error(`Failed to update configuration item: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+  // ===================================
+  // Expense Items Management  
+  // ===================================
+
+  private async searchExpenseItems(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
+    try {
+      const { expenseReportId, pageSize } = args;
+      
+      // ExpenseItems are child entities of ExpenseReports and require the parent ID
+      if (!expenseReportId || typeof expenseReportId !== 'number') {
+        throw new Error('Expense report ID is required for searching expense items (parent-child relationship)');
+      }
+
+      // Log tenant context usage like other search methods
+      this.logger.info(`🏢 Searching expense items for expense report ${expenseReportId}`, {
+        tenant: tenantContext,
+        sessionId: tenantContext?.sessionId,
+        expenseReportId,
+        pageSize
+      });
+
+      // Build query options
+      const queryOptions: any = {};
+      if (pageSize) {
+        queryOptions.pageSize = pageSize;
+      }
+
+      const expenseItems = await this.autotaskService.searchExpenseItems(expenseReportId, queryOptions, tenantContext);
+
+      const resultsText = expenseItems.length > 0 
+        ? `Found ${expenseItems.length} expense items in expense report ${expenseReportId}:\n\n${JSON.stringify(expenseItems, null, 2)}`
+        : `No expense items found in expense report ${expenseReportId}`;
+
+      return {
+        content: [{
+          type: 'text',
+          text: resultsText
+        }],
+        isError: false
+      };
+    } catch (error) {
+      throw new Error(`Failed to search expense items: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+  private async getExpenseItem(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
+    try {
+      const { id, expenseReportId } = args;
+      
+      if (!id || typeof id !== 'number') {
+        throw new Error('Expense item ID is required and must be a number');
+      }
+
+      // ExpenseItems are child entities requiring both expense report ID and item ID
+      if (!expenseReportId || typeof expenseReportId !== 'number') {
+        throw new Error('Expense report ID is required for accessing expense items (parent-child relationship)');
+      }
+
+      // Log tenant context usage like other get methods
+      this.logger.info(`🏢 Getting expense item ${id} from expense report ${expenseReportId}`, {
+        tenant: tenantContext,
+        sessionId: tenantContext?.sessionId,
+        expenseItemId: id,
+        expenseReportId
+      });
+
+      const expenseItem = await this.autotaskService.getExpenseItem(expenseReportId, id, tenantContext);
+
+      if (!expenseItem) {
+        return {
+          content: [{
+            type: 'text',
+            text: `Expense item with ID ${id} not found in expense report ${expenseReportId}`
+          }],
+          isError: false
+        };
+      }
+
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify(expenseItem, null, 2)
+        }],
+        isError: false
+      };
+    } catch (error) {
+      throw new Error(`Failed to get expense item: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+  private async createExpenseItem(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
+    try {
+      const { expenseReportID, ...itemData } = args;
+      
+      if (!expenseReportID || typeof expenseReportID !== 'number') {
+        throw new Error('Expense report ID is required for creating expense items (parent-child relationship)');
+      }
+
+      // Log tenant context usage like other create methods
+      this.logger.info(`🏢 Creating expense item in expense report ${expenseReportID}`, {
+        tenant: tenantContext,
+        sessionId: tenantContext?.sessionId,
+        expenseReportId: expenseReportID,
+        providedFields: Object.keys(args)
+      });
+
+      const expenseItemId = await this.autotaskService.createExpenseItem(expenseReportID, itemData, tenantContext);
+
+      return {
+        content: [{
+          type: 'text',
+          text: `Expense item created successfully with ID: ${expenseItemId} in expense report ${expenseReportID}`
+        }],
+        isError: false
+      };
+    } catch (error) {
+      throw new Error(`Failed to create expense item: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+  private async updateExpenseItem(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
+    try {
+      const { id, expenseReportId, ...updateData } = args;
+      
+      if (!id || typeof id !== 'number') {
+        throw new Error('Expense item ID is required');
+      }
+
+      if (!expenseReportId || typeof expenseReportId !== 'number') {
+        throw new Error('Expense report ID is required for updating expense items (parent-child relationship)');
+      }
+
+      // Log tenant context usage like other update methods
+      this.logger.info(`🏢 Updating expense item ${id}`, {
+        tenant: tenantContext,
+        sessionId: tenantContext?.sessionId,
+        expenseItemId: id,
+        expenseReportId: expenseReportId,
+        updateFields: Object.keys(updateData)
+      });
+
+      if (Object.keys(updateData).length === 0) {
+        throw new Error('At least one field to update must be provided');
+      }
+
+      await this.autotaskService.updateExpenseItem(expenseReportId, id, updateData, tenantContext);
+
+      return {
+        content: [{
+          type: 'text',
+          text: `Expense item ${id} updated successfully in expense report ${expenseReportId}`
+        }],
+        isError: false
+      };
+    } catch (error) {
+      throw new Error(`Failed to update expense item: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   }
 }
