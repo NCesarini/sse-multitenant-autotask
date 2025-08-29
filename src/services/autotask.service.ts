@@ -1011,10 +1011,105 @@ export class AutotaskService {
     
     try {
       this.logger.info('Getting time entries with options:', options);
-      const result = await client.timeEntries.list(options as any);
-      return (result.data as AutotaskTimeEntry[]) || [];
+      
+      // Prepare search body
+      const searchBody: any = {};
+      
+      // Ensure there's a filter - Autotask API requires a filter
+      if (!options.filter || (Array.isArray(options.filter) && options.filter.length === 0) || 
+          (!Array.isArray(options.filter) && Object.keys(options.filter).length === 0)) {
+        searchBody.filter = [
+          {
+            "op": "gte",
+            "field": "id",
+            "value": 0
+          }
+        ];
+      } else {
+        // If filter is provided as an object, convert to array format expected by API
+        if (!Array.isArray(options.filter)) {
+          const filterArray = [];
+          for (const [field, value] of Object.entries(options.filter)) {
+            filterArray.push({
+              "op": "eq",
+              "field": field,
+              "value": value
+            });
+          }
+          searchBody.filter = filterArray;
+        } else {
+          searchBody.filter = options.filter;
+        }
+      }
+
+      // Add other search parameters
+      if (options.sort) searchBody.sort = options.sort;
+      if (options.page) searchBody.page = options.page;
+      if (options.pageSize) searchBody.pageSize = options.pageSize;
+      
+      // Set default pagination
+      const pageSize = options.pageSize || 25;
+      const finalPageSize = pageSize > 500 ? 500 : pageSize; // Time entries can have higher limits
+      searchBody.pageSize = finalPageSize;
+
+      this.logger.info('Making direct API call to TimeEntries/query with body:', searchBody);
+
+      // Use the correct TimeEntries/query endpoint
+      const response = await (client as any).axios.post('/TimeEntries/query', searchBody);
+      
+      // Extract time entries from response
+      let timeEntries: AutotaskTimeEntry[] = [];
+      if (response.data && response.data.items) {
+        timeEntries = response.data.items;
+      } else if (Array.isArray(response.data)) {
+        timeEntries = response.data;
+      } else {
+        this.logger.warn('Unexpected response format from time entries API:', response.data);
+        timeEntries = [];
+      }
+      
+      this.logger.info(`Retrieved ${timeEntries.length} time entries`);
+      return timeEntries;
     } catch (error) {
       this.logger.error('Failed to get time entries:', error);
+      throw error;
+    }
+  }
+
+  async getTimeEntry(id: number, tenantContext?: TenantContext): Promise<AutotaskTimeEntry | null> {
+    const client = await this.getClientForTenant(tenantContext);
+    
+    try {
+      this.logger.info(`Getting time entry with ID: ${id}`);
+      
+      const searchBody = {
+        filter: [
+          { field: 'id', op: 'eq', value: id }
+        ]
+      };
+
+      this.logger.info('Making direct API call to TimeEntries/query for single time entry:', searchBody);
+
+      // Use the correct TimeEntries/query endpoint
+      const response = await (client as any).axios.post('/TimeEntries/query', searchBody);
+      
+      // Extract time entry from response
+      let timeEntry: AutotaskTimeEntry | null = null;
+      if (response.data && response.data.items && response.data.items.length > 0) {
+        timeEntry = response.data.items[0];
+      } else if (Array.isArray(response.data) && response.data.length > 0) {
+        timeEntry = response.data[0];
+      }
+      
+      if (timeEntry) {
+        this.logger.info(`Retrieved time entry ${id}`);
+        return timeEntry;
+      }
+      
+      this.logger.info(`Time entry ${id} not found`);
+      return null;
+    } catch (error) {
+      this.logger.error(`Failed to get time entry ${id}:`, error);
       throw error;
     }
   }
@@ -1651,8 +1746,33 @@ export class AutotaskService {
     
     try {
       this.logger.info(`Getting task with ID: ${id}`);
-      const result = await client.tasks.get(id);
-      return result.data as unknown as AutotaskTask || null;
+      
+      const searchBody = {
+        filter: [
+          { field: 'id', op: 'eq', value: id }
+        ]
+      };
+
+      this.logger.info('Making direct API call to Tasks/query for single task:', searchBody);
+
+      // Use the correct Tasks/query endpoint
+      const response = await (client as any).axios.post('/Tasks/query', searchBody);
+      
+      // Extract task from response
+      let task: AutotaskTask | null = null;
+      if (response.data && response.data.items && response.data.items.length > 0) {
+        task = response.data.items[0];
+      } else if (Array.isArray(response.data) && response.data.length > 0) {
+        task = response.data[0];
+      }
+      
+      if (task) {
+        this.logger.info(`Retrieved task ${id}`);
+        return task;
+      }
+      
+      this.logger.info(`Task ${id} not found`);
+      return null;
     } catch (error) {
       this.logger.error(`Failed to get task ${id}:`, error);
       throw error;
@@ -1665,21 +1785,70 @@ export class AutotaskService {
     try {
       this.logger.info('Searching tasks with options:', options);
       
-      // Set default pagination without field restrictions
-      // Let the API return all available fields to avoid field availability issues
-      const optimizedOptions = {
-        ...options,
-        pageSize: options.pageSize || 25,
-        ...(options.pageSize && options.pageSize > 100 && { pageSize: 100 })
-      };
+      // Prepare search body
+      const searchBody: any = {};
+      
+      // Ensure there's a filter - Autotask API requires a filter
+      if (!options.filter || (Array.isArray(options.filter) && options.filter.length === 0) || 
+          (!Array.isArray(options.filter) && Object.keys(options.filter).length === 0)) {
+        searchBody.filter = [
+          {
+            "op": "gte",
+            "field": "id",
+            "value": 0
+          }
+        ];
+      } else {
+        // If filter is provided as an object, convert to array format expected by API
+        if (!Array.isArray(options.filter)) {
+          const filterArray = [];
+          for (const [field, value] of Object.entries(options.filter)) {
+            filterArray.push({
+              "op": "eq",
+              "field": field,
+              "value": value
+            });
+          }
+          searchBody.filter = filterArray;
+        } else {
+          searchBody.filter = options.filter;
+        }
+      }
 
-      const result = await client.tasks.list(optimizedOptions as any);
-      const tasks = (result.data as unknown as AutotaskTask[]) || [];
+      // Add other search parameters
+      if (options.sort) searchBody.sort = options.sort;
+      if (options.page) searchBody.page = options.page;
+      if (options.pageSize) searchBody.pageSize = options.pageSize;
+      
+      // Set default pagination
+      const pageSize = options.pageSize || 25;
+      const finalPageSize = pageSize > 100 ? 100 : pageSize;
+      searchBody.pageSize = finalPageSize;
+
+      this.logger.info('Making direct API call to Tasks/query with body:', searchBody);
+
+      // Use the correct Tasks/query endpoint
+      const response = await (client as any).axios.post('/Tasks/query', searchBody);
+      
+      // Extract tasks from response
+      let tasks: AutotaskTask[] = [];
+      if (response.data && response.data.items) {
+        tasks = response.data.items;
+      } else if (Array.isArray(response.data)) {
+        tasks = response.data;
+      } else {
+        this.logger.warn('Unexpected response format from Tasks/query:', response.data);
+        tasks = [];
+      }
       
       // Transform tasks to optimize data size
       const optimizedTasks = tasks.map(task => this.optimizeTaskData(task));
       
-      this.logger.info(`Retrieved ${optimizedTasks.length} tasks (optimized for size)`);
+      this.logger.info(`✅ Tasks search successful:`, {
+        resultCount: optimizedTasks.length,
+        fieldsReturned: tasks.length > 0 ? Object.keys(tasks[0]).length : 0
+      });
+      
       return optimizedTasks;
     } catch (error) {
       this.logger.error('Failed to search tasks:', error);
@@ -2085,8 +2254,26 @@ export class AutotaskService {
     
     try {
       this.logger.info(`Getting expense report with ID: ${id}`);
-      const result = await client.expenses.get(id);
-      return result.data as unknown as AutotaskExpenseReport || null;
+      
+      const searchBody = {
+        filter: [
+          { field: 'id', op: 'eq', value: id }
+        ]
+      };
+
+      this.logger.info('Making direct API call to ExpenseReports/query for single report:', searchBody);
+
+      // Use the correct ExpenseReports/query endpoint
+      const response = await (client as any).axios.post('/ExpenseReports/query', searchBody);
+      const reports = response?.data?.items || [];
+      
+      if (reports.length > 0) {
+        this.logger.info(`Retrieved expense report ${id}`);
+        return reports[0] as AutotaskExpenseReport;
+      }
+      
+      this.logger.info(`Expense report ${id} not found`);
+      return null;
     } catch (error) {
       this.logger.error(`Failed to get expense report ${id}:`, error);
       throw error;
@@ -2102,19 +2289,27 @@ export class AutotaskService {
       // Build filter based on provided options
       const filters = [];
       if (options.submitterId) {
-        filters.push({ field: 'resourceId', op: 'eq', value: options.submitterId });
+        filters.push({ field: 'resourceID', op: 'eq', value: options.submitterId });
       }
       if (options.status) {
         filters.push({ field: 'status', op: 'eq', value: options.status });
       }
       
-      const queryOptions = {
-        filter: filters.length > 0 ? filters : [{ field: 'id', op: 'gte', value: 0 }],
+      // Ensure there's always a filter - Autotask API requires a filter
+      if (filters.length === 0) {
+        filters.push({ field: 'id', op: 'gte', value: 0 });
+      }
+      
+      const searchBody = {
+        filter: filters,
         pageSize: options.pageSize || 25
       };
 
-      const result = await client.expenses.list(queryOptions);
-      const reports = (result.data as any[]) || [];
+      this.logger.info('Making direct API call to ExpenseReports/query with body:', searchBody);
+
+      // Use the correct ExpenseReports/query endpoint
+      const response = await (client as any).axios.post('/ExpenseReports/query', searchBody);
+      const reports = response?.data?.items || [];
       
       this.logger.info(`Retrieved ${reports.length} expense reports`);
       return reports as AutotaskExpenseReport[];
@@ -2159,23 +2354,27 @@ export class AutotaskService {
     try {
       this.logger.info(`Getting expense item - ExpenseReportID: ${expenseReportId}, ItemID: ${itemId}`);
       
-      // Make direct API call using parent-child relationship pattern
-      const response = await (client as any).axios.get(`/Expenses/${expenseReportId}/Items/${itemId}`);
+      const searchBody = {
+        filter: [
+          { field: 'expenseReportID', op: 'eq', value: expenseReportId },
+          { field: 'id', op: 'eq', value: itemId }
+        ]
+      };
+
+      this.logger.info('Making direct API call to ExpenseItems/query for single item:', searchBody);
+
+      // Use the correct ExpenseItems/query endpoint
+      const response = await (client as any).axios.post('/ExpenseItems/query', searchBody);
+      const items = response?.data?.items || [];
       
-      if (response.data && response.data.item) {
+      if (items.length > 0) {
         this.logger.info(`Retrieved expense item ${itemId} from expense report ${expenseReportId}`);
-        return response.data.item as AutotaskExpenseItem;
-      } else if (response.data) {
-        // Sometimes the item is returned directly
-        return response.data as AutotaskExpenseItem;
+        return items[0] as AutotaskExpenseItem;
       }
       
+      this.logger.info(`Expense item ${itemId} not found in expense report ${expenseReportId}`);
       return null;
     } catch (error: any) {
-      if (error.response && error.response.status === 404) {
-        this.logger.info(`Expense item ${itemId} not found in expense report ${expenseReportId}`);
-        return null;
-      }
       this.logger.error(`Failed to get expense item ${itemId} from expense report ${expenseReportId}:`, error);
       throw error;
     }
@@ -2187,51 +2386,22 @@ export class AutotaskService {
     try {
       this.logger.info(`Searching expense items for expense report ${expenseReportId}:`, options);
       
-      // Build query parameters for the child entity
-      const queryParams: any = {};
-      
-      if (options.pageSize) {
-        queryParams.pageSize = Math.min(options.pageSize, 500);
-      } else {
-        queryParams.pageSize = 25; // Default page size
-      }
-      
-      if (options.filter && Array.isArray(options.filter)) {
-        // Convert filter array to query string format if needed
-        queryParams.filter = JSON.stringify(options.filter);
-      }
+      const searchBody = {
+        filter: [
+          { field: 'expenseReportID', op: 'eq', value: expenseReportId }
+        ],
+        pageSize: options.pageSize || 25
+      };
 
-      this.logger.info(`Making API call to /Expenses/${expenseReportId}/Items with params:`, queryParams);
+      this.logger.info('Making direct API call to ExpenseItems/query with body:', searchBody);
+
+      // Use the correct ExpenseItems/query endpoint
+      const response = await (client as any).axios.post('/ExpenseItems/query', searchBody);
+      const items = response?.data?.items || [];
       
-      // Make direct API call to the parent-child endpoint
-      const response = await (client as any).axios.get(`/Expenses/${expenseReportId}/Items`, {
-        params: queryParams
-      });
-      
-      let expenseItems: AutotaskExpenseItem[] = [];
-      
-      if (response.data && response.data.items) {
-        expenseItems = response.data.items;
-        this.logger.info(`Retrieved ${expenseItems.length} expense items from response.data.items`);
-      } else if (Array.isArray(response.data)) {
-        expenseItems = response.data;
-        this.logger.info(`Retrieved ${expenseItems.length} expense items from response.data (direct array)`);
-      } else {
-        this.logger.warn('Unexpected response format from expense items API:', response.data);
-        expenseItems = [];
-      }
-      
-      this.logger.info(`Retrieved ${expenseItems.length} expense items for expense report ${expenseReportId}`);
-      return expenseItems;
+      this.logger.info(`Retrieved ${items.length} expense items for expense report ${expenseReportId}`);
+      return items as AutotaskExpenseItem[];
     } catch (error: any) {
-      if (error.response && error.response.status === 404) {
-        this.logger.info(`Expense report ${expenseReportId} not found or has no items`);
-        return [];
-      }
-      if (error.response && error.response.status === 405) {
-        this.logger.warn('Expense items endpoint may not support listing via API (405 Method Not Allowed). This is common with some Autotask configurations.');
-        return [];
-      }
       this.logger.error(`Failed to search expense items for expense report ${expenseReportId}:`, error);
       throw error;
     }

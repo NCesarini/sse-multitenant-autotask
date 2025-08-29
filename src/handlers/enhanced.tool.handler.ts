@@ -3424,15 +3424,9 @@ export class EnhancedAutotaskToolHandler {
         throw new Error('Time Entry ID is required and must be a number');
       }
 
-      // Since autotask service doesn't have getTimeEntry, we'll search by ID
-      const queryOptions = {
-        filter: [{ field: 'id', op: 'eq', value: id }],
-        pageSize: 1
-      };
-
-      const timeEntries = await this.autotaskService.getTimeEntries(queryOptions, tenantContext);
+      const timeEntry = await this.autotaskService.getTimeEntry(id, tenantContext);
       
-      if (!timeEntries || timeEntries.length === 0) {
+      if (!timeEntry) {
         return {
           content: [{
             type: 'text',
@@ -3445,7 +3439,7 @@ export class EnhancedAutotaskToolHandler {
       return {
         content: [{
           type: 'text',
-          text: JSON.stringify(timeEntries[0], null, 2)
+          text: JSON.stringify(timeEntry, null, 2)
         }],
         isError: false
       };
