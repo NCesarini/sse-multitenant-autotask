@@ -2157,7 +2157,7 @@ export class AutotaskService {
       
       const searchBody = {
         filter: [
-          { field: 'accountID', op: 'eq', value: companyId }
+          { field: 'companyID', op: 'eq', value: companyId }
         ],
         pageSize: options.pageSize || 25
       };

@@ -1868,24 +1868,6 @@ export class EnhancedAutotaskToolHandler {
         },
         ['id']
       ),
-      EnhancedAutotaskToolHandler.createTool(
-        'get_mapping_cache_stats',
-        'Get mapping cache statistics',
-        'read',
-        {}
-      ),
-      EnhancedAutotaskToolHandler.createTool(
-        'clear_mapping_cache',
-        'Clear mapping cache',
-        'modify',
-        {}
-      ),
-      EnhancedAutotaskToolHandler.createTool(
-        'preload_mapping_cache',
-        'Preload mapping cache for better performance',
-        'modify',
-        {}
-      ),
 
       // Test connection tool
       EnhancedAutotaskToolHandler.createTool(
@@ -1895,13 +1877,6 @@ export class EnhancedAutotaskToolHandler {
         {}
       ),
 
-      // Zone information test tool
-      EnhancedAutotaskToolHandler.createTool(
-        'test_zone_information',
-        'Test Autotask zone information discovery to debug API URL issues',
-        'read',
-        {}
-      )
     ];
 
     // Extract mode from tenant context
