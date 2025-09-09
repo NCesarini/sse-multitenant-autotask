@@ -268,7 +268,7 @@ This server provides access to Kaseya Autotask PSA data and operations through t
 
 ### Project & Resource Operations
 - **search_projects** - Search for projects (read-only)
-- **search_resources** - Search for resources/employees (read-only)
+- **search_resources** - Search for resources/employees with optional field-specific filters (firstName, lastName, email) (read-only)
 
 ### Time Management
 - **create_time_entry** - Log time against a ticket or project (write)

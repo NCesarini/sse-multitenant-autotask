@@ -624,9 +624,21 @@ export class EnhancedAutotaskToolHandler {
         'Search for resources (employees) in Autotask',
         'read',
         {
+          firstName: {
+            type: 'string',
+            description: 'Filter by first name (partial match supported)'
+          },
+          lastName: {
+            type: 'string',
+            description: 'Filter by last name (partial match supported)'
+          },
+          email: {
+            type: 'string',
+            description: 'Filter by email address (partial match supported)'
+          },
           searchTerm: {
             type: 'string',
-            description: 'Search term to filter resources by name'
+            description: 'Fallback search term - searches firstName only (use specific field parameters for better control)'
           },
           isActive: {
             type: 'boolean',
@@ -2836,25 +2848,62 @@ export class EnhancedAutotaskToolHandler {
     try {
       const options: any = {};
       
-      if (args.searchTerm) {
-        options.filter = [{
+      // Build filters based on provided search criteria
+      const filters: any[] = [];
+      
+      // Individual field searches (optional)
+      if (args.firstName) {
+        filters.push({
+          field: 'firstName',
+          op: 'contains',
+          value: args.firstName
+        });
+      }
+      
+      if (args.lastName) {
+        filters.push({
+          field: 'lastName',
+          op: 'contains',
+          value: args.lastName
+        });
+      }
+      
+      if (args.email) {
+        filters.push({
+          field: 'email',
+          op: 'contains',
+          value: args.email
+        });
+      }
+      
+      // Fallback: if searchTerm is provided but no specific fields, search across name fields
+      // Note: This will use AND logic, so it's better to use specific field parameters
+      if (args.searchTerm && !args.firstName && !args.lastName && !args.email) {
+        filters.push({
           field: 'firstName',
           op: 'contains',
           value: args.searchTerm
-        }, {
-          field: 'lastName',
-          op: 'contains',
-          value: args.searchTerm
-        }];
+        });
+        // Note: Commented out lastName search to avoid AND logic issues
+        // To search lastName, use the lastName parameter instead
+        // filters.push({
+        //   field: 'lastName',
+        //   op: 'contains',
+        //   value: args.searchTerm
+        // });
       }
       
       if (typeof args.isActive === 'boolean') {
-        if (!options.filter) options.filter = [];
-        options.filter.push({
+        filters.push({
           field: 'isActive',
           op: 'eq',
           value: args.isActive
         });
+      }
+      
+      // Only set filter if we have conditions
+      if (filters.length > 0) {
+        options.filter = filters;
       }
       
       if (args.pageSize) {
