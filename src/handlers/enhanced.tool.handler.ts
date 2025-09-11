@@ -236,9 +236,21 @@ export class EnhancedAutotaskToolHandler {
           },
           pageSize: {
             type: 'number',
-            description: 'Number of results to return (max 500, default: unlimited for complete results)',
+            description: 'Number of results to return per page (default: 50, max: 2000). Use smaller values for faster responses.',
             minimum: 1,
-            maximum: 500
+            maximum: 2000,
+            default: 50
+          },
+          page: {
+            type: 'number',
+            description: 'Page number to retrieve (1-based). Use this to get additional results beyond the first page.',
+            minimum: 1,
+            default: 1
+          },
+          getAllPages: {
+            type: 'boolean',
+            description: 'Set to true to get all available data across multiple pages (may be slow for large datasets)',
+            default: false
           }
         }
       ),
@@ -348,31 +360,32 @@ export class EnhancedAutotaskToolHandler {
       ),
 
       // Contact tools
-      EnhancedAutotaskToolHandler.createTool(
-        'search_contacts',
-        'Search for contacts in Autotask with filters',
-        'read',
-        {
-          searchTerm: {
-            type: 'string',
-            description: 'Search term to filter contacts by name or email'
-          },
-          companyId: {
-            type: 'number',
-            description: 'Filter by company ID'
-          },
-          isActive: {
-            type: 'boolean',
-            description: 'Filter by active status'
-          },
-          pageSize: {
-            type: 'number',
-            description: 'Number of results to return (max 500)',
-            minimum: 1,
-            maximum: 500
-          }
-        }
-      ),
+                  EnhancedAutotaskToolHandler.createTool(
+              'search_contacts',
+              'Search for contacts in Autotask with filters',
+              'read',
+              {
+                searchTerm: {
+                  type: 'string',
+                  description: 'Search term to filter contacts by name or email'
+                },
+                companyId: {
+                  type: 'number',
+                  description: 'Filter by company ID'
+                },
+                isActive: {
+                  type: 'boolean',
+                  description: 'Filter by active status'
+                },
+                pageSize: {
+                  type: 'number',
+                  description: 'Number of results to return (default: 50, max: 2000)',
+                  minimum: 1,
+                  maximum: 2000,
+                  default: 50
+                }
+              }
+            ),
       EnhancedAutotaskToolHandler.createTool(
         'create_contact',
         'Create a new contact in Autotask',
@@ -439,39 +452,40 @@ export class EnhancedAutotaskToolHandler {
       ),
 
       // Ticket tools
-      EnhancedAutotaskToolHandler.createTool(
-        'search_tickets',
-        'Search for tickets in Autotask with filters',
-        'read',
-        {
-          searchTerm: {
-            type: 'string',
-            description: 'Search term to filter tickets by number or title'
-          },
-          status: {
-            type: 'number',
-            description: 'Filter by status ID'
-          },
-          companyId: {
-            type: 'number',
-            description: 'Filter by company ID'
-          },
-          assignedResourceID: {
-            type: 'number',
-            description: 'Filter by assigned resource ID'
-          },
-          unassigned: {
-            type: 'boolean',
-            description: 'Filter for unassigned tickets'
-          },
-          pageSize: {
-            type: 'number',
-            description: 'Number of results to return (max 500)',
-            minimum: 1,
-            maximum: 500
-          }
-        }
-      ),
+                  EnhancedAutotaskToolHandler.createTool(
+              'search_tickets',
+              'Search for tickets in Autotask with filters',
+              'read',
+              {
+                searchTerm: {
+                  type: 'string',
+                  description: 'Search term to filter tickets by number or title'
+                },
+                status: {
+                  type: 'number',
+                  description: 'Filter by status ID'
+                },
+                companyId: {
+                  type: 'number',
+                  description: 'Filter by company ID'
+                },
+                assignedResourceID: {
+                  type: 'number',
+                  description: 'Filter by assigned resource ID'
+                },
+                unassigned: {
+                  type: 'boolean',
+                  description: 'Filter for unassigned tickets'
+                },
+                pageSize: {
+                  type: 'number',
+                  description: 'Number of results to return (default: 50, max: 2000)',
+                  minimum: 1,
+                  maximum: 2000,
+                  default: 50
+                }
+              }
+            ),
       EnhancedAutotaskToolHandler.createTool(
         'create_ticket',
         'Create a new ticket in Autotask',
@@ -592,66 +606,68 @@ export class EnhancedAutotaskToolHandler {
       ),
 
       // Project tools
-      EnhancedAutotaskToolHandler.createTool(
-        'search_projects',
-        'Search for projects in Autotask',
-        'read',
-        {
-          searchTerm: {
-            type: 'string',
-            description: 'Search term to filter projects by name'
-          },
-          companyId: {
-            type: 'number',
-            description: 'Filter by company ID'
-          },
-          status: {
-            type: 'number',
-            description: 'Filter by status'
-          },
-          pageSize: {
-            type: 'number',
-            description: 'Number of results to return (max 100)',
-            minimum: 1,
-            maximum: 100
-          }
-        }
-      ),
+                  EnhancedAutotaskToolHandler.createTool(
+              'search_projects',
+              'Search for projects in Autotask',
+              'read',
+              {
+                searchTerm: {
+                  type: 'string',
+                  description: 'Search term to filter projects by name'
+                },
+                companyId: {
+                  type: 'number',
+                  description: 'Filter by company ID'
+                },
+                status: {
+                  type: 'number',
+                  description: 'Filter by status'
+                },
+                pageSize: {
+                  type: 'number',
+                  description: 'Number of results to return (default: 50, max: 2000)',
+                  minimum: 1,
+                  maximum: 2000,
+                  default: 50
+                }
+              }
+            ),
 
       // Resource tools
-      EnhancedAutotaskToolHandler.createTool(
-        'search_resources',
-        'Search for resources (employees) in Autotask',
-        'read',
-        {
-          firstName: {
-            type: 'string',
-            description: 'Filter by first name (partial match supported)'
-          },
-          lastName: {
-            type: 'string',
-            description: 'Filter by last name (partial match supported)'
-          },
-          email: {
-            type: 'string',
-            description: 'Filter by email address (partial match supported)'
-          },
-          searchTerm: {
-            type: 'string',
-            description: 'Fallback search term - searches firstName only (use specific field parameters for better control)'
-          },
-          isActive: {
-            type: 'boolean',
-            description: 'Filter by active status'
-          },
-          pageSize: {
-            type: 'number',
-            description: 'Number of results to return (max 500)',
-            minimum: 1,
-            maximum: 500
-          }
-        }
-      ),
+                  EnhancedAutotaskToolHandler.createTool(
+              'search_resources',
+              'Search for resources (employees) in Autotask',
+              'read',
+              {
+                firstName: {
+                  type: 'string',
+                  description: 'Filter by first name (partial match supported)'
+                },
+                lastName: {
+                  type: 'string',
+                  description: 'Filter by last name (partial match supported)'
+                },
+                email: {
+                  type: 'string',
+                  description: 'Filter by email address (partial match supported)'
+                },
+                searchTerm: {
+                  type: 'string',
+                  description: 'Fallback search term - searches firstName only (use specific field parameters for better control)'
+                },
+                isActive: {
+                  type: 'boolean',
+                  description: 'Filter by active status'
+                },
+                pageSize: {
+                  type: 'number',
+                  description: 'Number of results to return (default: 50, max: 2000)',
+                  minimum: 1,
+                  maximum: 2000,
+                  default: 50
+                }
+              }
+            ),
 
       // Individual Entity Getters
       EnhancedAutotaskToolHandler.createTool(
@@ -1881,6 +1897,36 @@ export class EnhancedAutotaskToolHandler {
         ['id']
       ),
 
+      // Pagination helper tools
+      EnhancedAutotaskToolHandler.createTool(
+        'get_companies_page',
+        'Get a specific page of companies (optimized for pagination)',
+        'read',
+        {
+          page: {
+            type: 'number',
+            description: 'Page number to retrieve (1-based)',
+            minimum: 1,
+            default: 1
+          },
+                     pageSize: {
+             type: 'number',
+             description: 'Number of companies per page (default: 50, max: 2000)',
+             minimum: 1,
+             maximum: 2000,
+             default: 50
+           },
+          searchTerm: {
+            type: 'string',
+            description: 'Optional search term to filter companies by name'
+          },
+          isActive: {
+            type: 'boolean',
+            description: 'Optional filter by active status'
+          }
+        }
+      ),
+
       // Test connection tool
       EnhancedAutotaskToolHandler.createTool(
         'test_connection',
@@ -2337,6 +2383,12 @@ export class EnhancedAutotaskToolHandler {
           result = await this.updateConfigurationItem(args, tenantContext);
           break;
 
+        // Pagination helper tools
+        case 'get_companies_page':
+          this.logger.info(`📄 Executing get_companies_page`, { toolCallId });
+          result = await this.getCompaniesPage(args, tenantContext);
+          break;
+
         default:
           this.logger.error(`❌ Unknown tool: ${name}`, { toolCallId, toolName: name });
           throw new Error(`Unknown tool: ${name}`);
@@ -2398,8 +2450,20 @@ export class EnhancedAutotaskToolHandler {
         });
       }
       
+      // Handle pagination parameters
       if (args.pageSize) {
         options.pageSize = args.pageSize;
+      }
+      
+      if (args.page) {
+        options.page = args.page;
+      }
+      
+      // Handle getAllPages flag - if true, override pagination limits
+      if (args.getAllPages === true) {
+        // Remove page size limit to get all data (use old behavior)
+        delete options.pageSize;
+        this.logger.info('getAllPages=true: Will fetch all available companies (may be slow)');
       }
 
       const companies = await this.autotaskService.searchCompanies(options, tenantContext);
@@ -2426,11 +2490,32 @@ export class EnhancedAutotaskToolHandler {
         })
       );
 
-      const resultsText = enhancedCompanies.length > 0 
-        ? `Found ${enhancedCompanies.length} companies:\n\n${enhancedCompanies.map(company => 
-            `ID: ${company.id}\nName: ${company.companyName}\nType: ${company.companyType}\nActive: ${company.isActive}\nOwner: ${company._enhanced?.ownerResourceName || 'Unknown'}\n`
-          ).join('\n')}`
-        : 'No companies found matching the criteria';
+      // Prepare pagination info
+      const currentPage = args.page || 1;
+      const pageSize = args.pageSize || 50;
+      const isLimitedResults = enhancedCompanies.length === pageSize && !args.getAllPages;
+      
+      let resultsText = '';
+      if (enhancedCompanies.length > 0) {
+        resultsText = `Found ${enhancedCompanies.length} companies`;
+        
+        // Add pagination context
+        if (currentPage > 1) {
+          resultsText += ` (page ${currentPage})`;
+        }
+        if (isLimitedResults) {
+          resultsText += ` - use page=${currentPage + 1} to get more results`;
+        }
+        
+        resultsText += `:\n\n${enhancedCompanies.map(company => 
+          `ID: ${company.id}\nName: ${company.companyName}\nType: ${company.companyType}\nActive: ${company.isActive}\nOwner: ${company._enhanced?.ownerResourceName || 'Unknown'}\n`
+        ).join('\n')}`;
+      } else {
+        resultsText = 'No companies found matching the criteria';
+        if (currentPage > 1) {
+          resultsText += ` on page ${currentPage}. Try page=1 or adjust your search criteria.`;
+        }
+      }
 
       return {
         content: [{
@@ -4614,6 +4699,92 @@ export class EnhancedAutotaskToolHandler {
       };
     } catch (error) {
       throw new Error(`Failed to update configuration item: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+  // ===================================
+  // Pagination Helper Methods  
+  // ===================================
+
+  private async getCompaniesPage(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
+    try {
+             // This is essentially the same as searchCompanies but optimized for pagination
+       const options: any = {
+         page: args.page || 1,
+         pageSize: Math.min(args.pageSize || 50, 2000) // Respect the new 2000 limit
+       };
+      
+      if (args.searchTerm) {
+        options.filter = [{
+          field: 'companyName',
+          op: 'contains',
+          value: args.searchTerm
+        }];
+      }
+      
+      if (typeof args.isActive === 'boolean') {
+        if (!options.filter) options.filter = [];
+        options.filter.push({
+          field: 'isActive',
+          op: 'eq',
+          value: args.isActive
+        });
+      }
+
+      const companies = await this.autotaskService.searchCompanies(options, tenantContext);
+      
+      // Enhanced results with mapped names
+      const mappingService = await this.getMappingService();
+      const enhancedCompanies = await Promise.all(
+        companies.map(async (company: any) => {
+          const enhanced: any = { ...company };
+          
+          // Add owner resource name if available
+          if (company.ownerResourceID) {
+            try {
+              enhanced._enhanced = enhanced._enhanced || {};
+              enhanced._enhanced.ownerResourceName = await mappingService.getResourceName(company.ownerResourceID);
+            } catch (error) {
+              this.logger.info(`Failed to map owner resource ID ${company.ownerResourceID}:`, error);
+              enhanced._enhanced = enhanced._enhanced || {};
+              enhanced._enhanced.ownerResourceName = `Unknown (${company.ownerResourceID})`;
+            }
+          }
+          
+          return enhanced;
+        })
+      );
+
+      // Prepare pagination-aware response
+      const currentPage = args.page || 1;
+      const pageSize = args.pageSize || 50;
+      const hasMore = enhancedCompanies.length === pageSize;
+      
+      let resultsText = `Companies (Page ${currentPage}, ${enhancedCompanies.length} results)`;
+      
+      if (hasMore) {
+        resultsText += `\n📄 More results available - use get_companies_page with page=${currentPage + 1}`;
+      }
+      
+      if (enhancedCompanies.length > 0) {
+        resultsText += `:\n\n${enhancedCompanies.map(company => 
+          `ID: ${company.id}\nName: ${company.companyName}\nType: ${company.companyType}\nActive: ${company.isActive}\nOwner: ${company._enhanced?.ownerResourceName || 'Unknown'}\n`
+        ).join('\n')}`;
+      } else {
+        resultsText += '\n\nNo companies found on this page.';
+        if (currentPage > 1) {
+          resultsText += ` Try page=1 or adjust search criteria.`;
+        }
+      }
+
+      return {
+        content: [{
+          type: 'text',
+          text: resultsText
+        }]
+      };
+    } catch (error) {
+      throw new Error(`Failed to get companies page: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   }
 

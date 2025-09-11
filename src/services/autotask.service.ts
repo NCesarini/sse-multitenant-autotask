@@ -415,27 +415,21 @@ export class AutotaskService {
   }
 
   async searchCompanies(options: AutotaskQueryOptions = {}, tenantContext?: TenantContext): Promise<AutotaskCompany[]> {
-    const startTime = Date.now();
     
+    const startTime = Date.now();
     this.logger.info('🔍 Searching companies', {
       hasTenantContext: !!tenantContext,
       tenantId: tenantContext?.tenantId,
-      impersonationResourceId: tenantContext?.impersonationResourceId,
-      hasFilter: !!options.filter,
-      filterCount: options.filter?.length || 0,
-      pageSize: options.pageSize,
+      impersonationResourceId: tenantContext?.impersonationResourceId?.toString(),
+      hasFilter: !!(options.filter && (Array.isArray(options.filter) ? options.filter.length > 0 : Object.keys(options.filter).length > 0)),
+      filterCount: options.filter ? (Array.isArray(options.filter) ? options.filter.length : Object.keys(options.filter).length) : 0,
       operation: 'searchCompanies'
     });
 
-    // Log detailed API parameters
     this.logger.info('📋 API Parameters for searchCompanies', {
       tenantId: tenantContext?.tenantId,
-      impersonationResourceId: tenantContext?.impersonationResourceId,
-      queryOptions: {
-        filter: options.filter,
-        pageSize: options.pageSize,
-        ...options // Include any other options
-      },
+      impersonationResourceId: tenantContext?.impersonationResourceId?.toString(),
+      queryOptions: options,
       apiEndpoint: 'client.accounts.list'
     });
 
@@ -444,37 +438,73 @@ export class AutotaskService {
     try {
       this.logger.info('Searching companies with options:', options);
       
-      // PAGINATION BY DEFAULT for data accuracy
-      // Only limit results when user explicitly provides pageSize
-      if (options.pageSize !== undefined && options.pageSize > 0) {
-        // User wants limited results
+      // SMART PAGINATION: Use sensible defaults instead of fetching everything
+      const DEFAULT_PAGE_SIZE = 50; // Reasonable default for UI display
+      const MAX_PAGE_SIZE = 500; // API limit per request
+      const MAX_TOTAL_RESULTS = 2000; // Maximum total results to prevent huge responses
+      const MAX_PAGES = 10; // Maximum pages to fetch
+      
+      let requestedPageSize = options.pageSize;
+      
+      // If no pageSize specified, use default (don't fetch everything!)
+      if (!requestedPageSize) {
+        requestedPageSize = DEFAULT_PAGE_SIZE;
+        this.logger.info(`No pageSize specified, using default: ${DEFAULT_PAGE_SIZE}`);
+      }
+      
+      // Handle specific page requests (single page)
+      if (options.page && options.page > 1) {
         const queryOptions = {
           ...options,
-          pageSize: Math.min(options.pageSize, 500) // Respect user limit, max 500 per request
+          pageSize: Math.min(requestedPageSize, MAX_PAGE_SIZE),
+          page: options.page
         };
 
-        this.logger.info('Single page request with user-specified limit:', queryOptions);
+        this.logger.info(`Fetching specific page ${options.page} with ${requestedPageSize} results`);
         
         const result = await client.accounts.list(queryOptions as any);
         const companies = (result.data as AutotaskCompany[]) || [];
         
         const executionTime = Date.now() - startTime;
-        this.logger.info(`✅ Retrieved ${companies.length} companies (limited by user to ${options.pageSize})`, {
+        this.logger.info(`✅ Retrieved ${companies.length} companies (page ${options.page})`, {
           tenantId: tenantContext?.tenantId,
           resultCount: companies.length,
-          requestedPageSize: options.pageSize,
+          page: options.page,
+          requestedPageSize,
+          executionTimeMs: executionTime
+        });
+        return companies;
+      }
+      
+      // If user wants a small number, just do a single request
+      if (requestedPageSize <= MAX_PAGE_SIZE) {
+        const queryOptions = {
+          ...options,
+          pageSize: Math.min(requestedPageSize, MAX_PAGE_SIZE)
+        };
+
+        this.logger.info('Single page request with limited results:', queryOptions);
+        
+        const result = await client.accounts.list(queryOptions as any);
+        const companies = (result.data as AutotaskCompany[]) || [];
+        
+        const executionTime = Date.now() - startTime;
+        this.logger.info(`✅ Retrieved ${companies.length} companies (single page)`, {
+          tenantId: tenantContext?.tenantId,
+          resultCount: companies.length,
+          requestedPageSize,
           executionTimeMs: executionTime
         });
         return companies;
         
       } else {
-        // DEFAULT: Get ALL matching companies via pagination for complete accuracy
+        // Multi-page request with safety limits
         let allCompanies: AutotaskCompany[] = [];
-        const pageSize = 500; // Use max safe page size for efficiency
+        const pageSize = MAX_PAGE_SIZE; // Use max safe page size for efficiency
         let currentPage = 1;
         let hasMorePages = true;
         
-        while (hasMorePages) {
+        while (hasMorePages && currentPage <= MAX_PAGES && allCompanies.length < MAX_TOTAL_RESULTS) {
           const queryOptions = {
             ...options,
             pageSize: pageSize,
@@ -484,7 +514,8 @@ export class AutotaskService {
           this.logger.info(`Fetching companies page ${currentPage}...`, {
             tenantId: tenantContext?.tenantId,
             page: currentPage,
-            pageSize
+            pageSize,
+            currentTotal: allCompanies.length
           });
           
           const result = await client.accounts.list(queryOptions as any);
@@ -495,30 +526,40 @@ export class AutotaskService {
           } else {
             allCompanies.push(...companies);
             
-            // Check if we got a full page - if not, we're done
-            if (companies.length < pageSize) {
+            // Check if we've reached the requested amount
+            if (allCompanies.length >= requestedPageSize) {
+              // Trim to exact requested size
+              allCompanies = allCompanies.slice(0, requestedPageSize);
+              hasMorePages = false;
+              this.logger.info(`Reached requested page size limit: ${requestedPageSize}`);
+            } else if (companies.length < pageSize) {
+              // Got less than full page - we're done
               hasMorePages = false;
             } else {
               currentPage++;
             }
           }
           
-          // Safety check to prevent infinite loops
-          if (currentPage > 50) {
-            this.logger.warn('Company pagination safety limit reached at 50 pages (25,000 companies)', {
+          // Safety check for response size (prevent huge responses)
+          if (allCompanies.length >= MAX_TOTAL_RESULTS) {
+            this.logger.warn(`Response size limit reached: ${MAX_TOTAL_RESULTS} companies`, {
               tenantId: tenantContext?.tenantId,
-              totalCompanies: allCompanies.length
+              totalCompanies: allCompanies.length,
+              requestedPageSize
             });
             hasMorePages = false;
           }
         }
         
         const executionTime = Date.now() - startTime;
-        this.logger.info(`✅ Retrieved ${allCompanies.length} companies across ${currentPage} pages (COMPLETE dataset for accuracy)`, {
+        this.logger.info(`✅ Retrieved ${allCompanies.length} companies across ${currentPage} pages`, {
           tenantId: tenantContext?.tenantId,
           resultCount: allCompanies.length,
           pagesRetrieved: currentPage,
-          executionTimeMs: executionTime
+          requestedPageSize,
+          executionTimeMs: executionTime,
+          limitedByMaxResults: allCompanies.length >= MAX_TOTAL_RESULTS,
+          limitedByMaxPages: currentPage > MAX_PAGES
         });
         return allCompanies;
       }
@@ -602,31 +643,43 @@ export class AutotaskService {
     try {
       this.logger.info('Searching contacts with options:', options);
       
-      // PAGINATION BY DEFAULT for data accuracy
-      // Only limit results when user explicitly provides pageSize
-      if (options.pageSize !== undefined && options.pageSize > 0) {
-        // User wants limited results
+      // SMART PAGINATION: Use sensible defaults instead of fetching everything
+      const DEFAULT_PAGE_SIZE = 50; // Reasonable default for UI display
+      const MAX_PAGE_SIZE = 500; // API limit per request
+      const MAX_TOTAL_RESULTS = 2000; // Maximum total results to prevent huge responses
+      const MAX_PAGES = 5; // Maximum pages to fetch
+      
+      let requestedPageSize = options.pageSize;
+      
+      // If no pageSize specified, use default (don't fetch everything!)
+      if (!requestedPageSize) {
+        requestedPageSize = DEFAULT_PAGE_SIZE;
+        this.logger.info(`No pageSize specified, using default: ${DEFAULT_PAGE_SIZE}`);
+      }
+      
+      // If user wants a small number, just do a single request
+      if (requestedPageSize <= MAX_PAGE_SIZE) {
         const queryOptions = {
           ...options,
-          pageSize: Math.min(options.pageSize, 500) // Respect user limit, max 500 per request
+          pageSize: Math.min(requestedPageSize, MAX_PAGE_SIZE)
         };
 
-        this.logger.info('Single page request with user-specified limit:', queryOptions);
+        this.logger.info('Single page request with limited results:', queryOptions);
         
         const result = await client.contacts.list(queryOptions as any);
         const contacts = (result.data as AutotaskContact[]) || [];
         
-        this.logger.info(`Retrieved ${contacts.length} contacts (limited by user to ${options.pageSize})`);
+        this.logger.info(`Retrieved ${contacts.length} contacts (single page)`);
         return contacts;
         
       } else {
-        // DEFAULT: Get ALL matching contacts via pagination for complete accuracy
+        // Multi-page request with safety limits
         let allContacts: AutotaskContact[] = [];
-        const pageSize = 500; // Use max safe page size for efficiency
+        const pageSize = MAX_PAGE_SIZE; // Use max safe page size for efficiency
         let currentPage = 1;
         let hasMorePages = true;
         
-        while (hasMorePages) {
+        while (hasMorePages && currentPage <= MAX_PAGES && allContacts.length < MAX_TOTAL_RESULTS) {
           const queryOptions = {
             ...options,
             pageSize: pageSize,
@@ -643,22 +696,28 @@ export class AutotaskService {
           } else {
             allContacts.push(...contacts);
             
-            // Check if we got a full page - if not, we're done
-            if (contacts.length < pageSize) {
+            // Check if we've reached the requested amount
+            if (allContacts.length >= requestedPageSize) {
+              // Trim to exact requested size
+              allContacts = allContacts.slice(0, requestedPageSize);
+              hasMorePages = false;
+              this.logger.info(`Reached requested page size limit: ${requestedPageSize}`);
+            } else if (contacts.length < pageSize) {
+              // Got less than full page - we're done
               hasMorePages = false;
             } else {
               currentPage++;
             }
           }
           
-          // Safety check to prevent infinite loops
-          if (currentPage > 30) {
-            this.logger.warn('Contact pagination safety limit reached at 30 pages (15,000 contacts)');
+          // Safety check for response size (prevent huge responses)
+          if (allContacts.length >= MAX_TOTAL_RESULTS) {
+            this.logger.warn(`Response size limit reached: ${MAX_TOTAL_RESULTS} contacts`);
             hasMorePages = false;
           }
         }
         
-        this.logger.info(`Retrieved ${allContacts.length} contacts across ${currentPage} pages (COMPLETE dataset for accuracy)`);
+        this.logger.info(`Retrieved ${allContacts.length} contacts across ${currentPage} pages`);
         return allContacts;
       }
     } catch (error) {
@@ -802,16 +861,28 @@ export class AutotaskService {
         });
       }
       
-      // PAGINATION BY DEFAULT for data accuracy
-      // Only limit results when user explicitly provides pageSize
-      if (options.pageSize !== undefined && options.pageSize > 0) {
-        // User wants limited results
+      // SMART PAGINATION: Use sensible defaults instead of fetching everything
+      const DEFAULT_PAGE_SIZE = 50; // Reasonable default for UI display
+      const MAX_PAGE_SIZE = 500; // API limit per request
+      const MAX_TOTAL_RESULTS = 2000; // Maximum total results to prevent huge responses
+      const MAX_PAGES = 5; // Maximum pages to fetch
+      
+      let requestedPageSize = options.pageSize;
+      
+      // If no pageSize specified, use default (don't fetch everything!)
+      if (!requestedPageSize) {
+        requestedPageSize = DEFAULT_PAGE_SIZE;
+        this.logger.info(`No pageSize specified, using default: ${DEFAULT_PAGE_SIZE}`);
+      }
+      
+      // If user wants a small number, just do a single request
+      if (requestedPageSize <= MAX_PAGE_SIZE) {
         const queryOptions = {
           filter: filters,
-          pageSize: Math.min(options.pageSize, 500) // Respect user limit, max 500 per request
+          pageSize: requestedPageSize
         };
 
-        this.logger.info('Single page request with user-specified limit:', queryOptions);
+        this.logger.info('Single page request:', queryOptions);
         
         const result = await client.tickets.list(queryOptions);
         const tickets = (result.data as AutotaskTicket[]) || [];
@@ -821,7 +892,7 @@ export class AutotaskService {
           tenantId: tenantContext?.tenantId,
           impersonationResourceId: tenantContext?.impersonationResourceId,
           resultCount: tickets.length,
-          requestedPageSize: options.pageSize,
+          requestedPageSize: requestedPageSize,
           actualFilterCount: filters.length,
           apiEndpoint: 'client.tickets.list',
           hasResultData: !!result.data
@@ -829,7 +900,7 @@ export class AutotaskService {
         
         const optimizedTickets = tickets.map(ticket => this.optimizeTicketDataAggressive(ticket));
         
-        this.logger.info(`✅ Retrieved ${optimizedTickets.length} tickets (limited by user to ${options.pageSize})`, {
+        this.logger.info(`✅ Retrieved ${optimizedTickets.length} tickets (single page)`, {
           tenantId: tenantContext?.tenantId,
           impersonationResourceId: tenantContext?.impersonationResourceId,
           resultCount: optimizedTickets.length
@@ -837,47 +908,54 @@ export class AutotaskService {
         return optimizedTickets;
         
       } else {
-        // DEFAULT: Get ALL matching tickets via pagination for complete accuracy
-        let allTickets: AutotaskTicket[] = [];
-        const pageSize = 500; // Use max safe page size for efficiency
-        let currentPage = 1;
-        let hasMorePages = true;
+        // Multi-page request with safety limits
+        this.logger.info(`Multi-page request for ${requestedPageSize} tickets (max total: ${MAX_TOTAL_RESULTS})`);
         
-        while (hasMorePages) {
+        const actualLimit = Math.min(requestedPageSize, MAX_TOTAL_RESULTS);
+        const allTickets: AutotaskTicket[] = [];
+        let page = 1;
+        let hasMore = true;
+        
+        while (hasMore && allTickets.length < actualLimit && page <= MAX_PAGES) {
+          const remainingNeeded = actualLimit - allTickets.length;
+          const currentPageSize = Math.min(MAX_PAGE_SIZE, remainingNeeded);
+          
           const queryOptions = {
             filter: filters,
-            pageSize: pageSize,
-            page: currentPage
+            pageSize: currentPageSize,
+            page: page
           };
 
-          this.logger.info(`Fetching page ${currentPage} with filter:`, filters);
+          this.logger.info(`📄 Fetching tickets page ${page}/${MAX_PAGES} (${currentPageSize} items)...`);
           
           const result = await client.tickets.list(queryOptions);
           const tickets = (result.data as AutotaskTicket[]) || [];
           
           if (tickets.length === 0) {
-            hasMorePages = false;
+            hasMore = false;
+            this.logger.info(`No tickets found on page ${page}, stopping`);
           } else {
             // Transform tickets to optimize data size
             const optimizedTickets = tickets.map(ticket => this.optimizeTicketDataAggressive(ticket));
             allTickets.push(...optimizedTickets);
             
-            // Check if we got a full page - if not, we're done
-            if (tickets.length < pageSize) {
-              hasMorePages = false;
+            this.logger.info(`📄 Page ${page}: Found ${tickets.length} tickets (total: ${allTickets.length})`);
+            
+            // Check if we got fewer results than requested (indicating last page)
+            if (tickets.length < currentPageSize) {
+              hasMore = false;
+              this.logger.info(`Last page detected (${tickets.length} < ${currentPageSize})`);
             } else {
-              currentPage++;
+              page++;
             }
           }
-          
-          // Safety check to prevent infinite loops
-          if (currentPage > 100) {
-            this.logger.warn('Pagination safety limit reached at 100 pages (50,000 tickets)');
-            hasMorePages = false;
-          }
+        }
+
+        if (allTickets.length >= MAX_TOTAL_RESULTS) {
+          this.logger.warn(`⚠️ Reached maximum limit of ${MAX_TOTAL_RESULTS} tickets. Use pageSize parameter for specific page requests.`);
         }
         
-        this.logger.info(`Retrieved ${allTickets.length} tickets across ${currentPage} pages (COMPLETE dataset for accuracy)`);
+        this.logger.info(`✅ Multi-page searchTickets completed: ${allTickets.length} total tickets`);
         return allTickets;
       }
     } catch (error) {
@@ -1171,11 +1249,22 @@ export class AutotaskService {
       // Add other search parameters
       if (options.sort) searchBody.sort = options.sort;
       if (options.page) searchBody.page = options.page;
-      if (options.pageSize) searchBody.pageSize = options.pageSize;
       
-      // Set default pagination
-      const pageSize = options.pageSize || 25;
-      const finalPageSize = pageSize > 100 ? 100 : pageSize;
+      // SMART PAGINATION: Use sensible defaults instead of fetching everything
+      const DEFAULT_PAGE_SIZE = 50; // Reasonable default for UI display
+      const MAX_PAGE_SIZE = 500; // API limit per request
+      const MAX_TOTAL_RESULTS = 2000; // Maximum total results to prevent huge responses
+      
+      let requestedPageSize = options.pageSize;
+      
+      // If no pageSize specified, use default
+      if (!requestedPageSize) {
+        requestedPageSize = DEFAULT_PAGE_SIZE;
+        this.logger.info(`No pageSize specified, using default: ${DEFAULT_PAGE_SIZE}`);
+      }
+      
+      // Respect API limits and user preferences
+      const finalPageSize = Math.min(requestedPageSize, MAX_PAGE_SIZE, MAX_TOTAL_RESULTS);
       searchBody.pageSize = finalPageSize;
 
       // Don't restrict fields - let the API return whatever is available
@@ -1319,12 +1408,22 @@ export class AutotaskService {
       // Add other search parameters
       if (options.sort) searchBody.sort = options.sort;
       if (options.page) searchBody.page = options.page;
-      if (options.pageSize) searchBody.pageSize = options.pageSize;
-  
-
-      // Set default pagination and field limits
-      const pageSize = options.pageSize || 25;
-      const finalPageSize = pageSize > 100 ? 100 : pageSize;
+      
+      // SMART PAGINATION: Use sensible defaults instead of fetching everything
+      const DEFAULT_PAGE_SIZE = 50; // Reasonable default for UI display
+      const MAX_PAGE_SIZE = 500; // API limit per request
+      const MAX_TOTAL_RESULTS = 2000; // Maximum total results to prevent huge responses
+      
+      let requestedPageSize = options.pageSize;
+      
+      // If no pageSize specified, use default
+      if (!requestedPageSize) {
+        requestedPageSize = DEFAULT_PAGE_SIZE;
+        this.logger.info(`No pageSize specified, using default: ${DEFAULT_PAGE_SIZE}`);
+      }
+      
+      // Respect API limits and user preferences
+      const finalPageSize = Math.min(requestedPageSize, MAX_PAGE_SIZE, MAX_TOTAL_RESULTS);
       searchBody.pageSize = finalPageSize;
 
       this.logger.info('Making direct API call to Resources/query with body:', {
@@ -1908,12 +2007,72 @@ export class AutotaskService {
   async testConnection(tenantContext?: TenantContext): Promise<boolean> {
     try {
       const client = await this.getClientForTenant(tenantContext);
-      // Try to get account with ID 0 as a connection test
-      const result = await client.accounts.get(0);
-      this.logger.info('Connection test successful:', { hasData: !!result.data, resultType: typeof result });
-      return true;
+      
+      // Try multiple approaches to test the connection
+      // 1. First try: Query companies (safer than getting a specific one)
+      try {
+        const searchBody = {
+          filter: [
+            {
+              "op": "gte",
+              "field": "id",
+              "value": 0
+            }
+          ],
+          pageSize: 1  // Only get 1 result to minimize response size
+        };
+        
+        const result = await (client as any).axios.post('/Companies/query', searchBody);
+        
+        this.logger.info('Connection test successful (Companies/query):', { 
+          hasData: !!result.data, 
+          statusCode: result.status,
+          hasItems: !!(result.data && result.data.items)
+        });
+        return true;
+      } catch (companiesError: any) {
+        this.logger.warn('Companies/query test failed, trying alternative...', {
+          status: companiesError.response?.status,
+          message: companiesError.message
+        });
+        
+        // 2. Second try: Test with zone information (this should always work if credentials are valid)
+        try {
+          const zoneResult = await (client as any).axios.get('/zoneInformation');
+          this.logger.info('Connection test successful (zoneInformation):', { 
+            statusCode: zoneResult.status,
+            hasData: !!zoneResult.data
+          });
+          return true;
+        } catch (zoneError: any) {
+          this.logger.warn('Zone information test also failed', {
+            status: zoneError.response?.status,
+            message: zoneError.message
+          });
+          
+          // 3. Third try: Check if we can at least make an authenticated request (even if it fails)
+          // Some Autotask instances have restrictive permissions
+          try {
+            await (client as any).axios.get('/Resources/query');
+            return true; // If we get here, authentication worked
+          } catch (resourceError: any) {
+            // If it's a 401/403, authentication failed
+            // If it's 405/500, authentication likely worked but endpoint has issues
+            if (resourceError.response?.status === 401 || resourceError.response?.status === 403) {
+              this.logger.error('Authentication failed (401/403)', resourceError.message);
+              return false;
+            } else {
+              this.logger.info('Connection test passed (authentication working, endpoint restrictions exist):', {
+                status: resourceError.response?.status,
+                message: 'Authentication successful but endpoint access restricted'
+              });
+              return true; // Authentication is working, just endpoint restrictions
+            }
+          }
+        }
+      }
     } catch (error) {
-      this.logger.error('Connection test failed:', error);
+      this.logger.error('Connection test failed completely:', error);
       return false;
     }
   }
