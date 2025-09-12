@@ -3126,32 +3126,144 @@ export class EnhancedAutotaskToolHandler {
   private async testConnection(tenantContext?: TenantContext): Promise<McpToolResult> {
     try {
       // DEBUG: Show what we actually received
-      this.logger.info('🔗 TEST_CONNECTION DEBUG', {
+      this.logger.info('🔗 TEST_CONNECTION DEBUG - Starting comprehensive test', {
         hasTenantContext: !!tenantContext,
         tenantContextKeys: tenantContext ? Object.keys(tenantContext) : 'none',
         tenantId: tenantContext?.tenantId,
         hasCredentials: !!(tenantContext?.credentials),
-        impersonationResourceId: tenantContext?.impersonationResourceId
+        impersonationResourceId: tenantContext?.impersonationResourceId,
+        mode: tenantContext?.mode,
+        sessionId: tenantContext?.sessionId
       });
 
-      const isConnected = await this.autotaskService.testConnection(tenantContext);
-      
-      const message = isConnected 
-        ? tenantContext 
-          ? `✅ Successfully connected to Autotask API for tenant: ${tenantContext.tenantId}${tenantContext.impersonationResourceId ? ` (impersonating resource ${tenantContext.impersonationResourceId})` : ''}`
-          : '✅ Successfully connected to Autotask API'
-        : tenantContext
-          ? `❌ Failed to connect to Autotask API for tenant: ${tenantContext.tenantId}`
-          : '❌ Failed to connect to Autotask API';
+      if (tenantContext?.credentials) {
+        this.logger.info('🔑 CREDENTIALS DEBUG', {
+          hasUsername: !!tenantContext.credentials.username,
+          usernameLength: tenantContext.credentials.username?.length || 0,
+          usernamePreview: tenantContext.credentials.username ? `${tenantContext.credentials.username.substring(0, 5)}***` : 'none',
+          hasSecret: !!tenantContext.credentials.secret,
+          secretLength: tenantContext.credentials.secret?.length || 0,
+          hasIntegrationCode: !!tenantContext.credentials.integrationCode,
+          integrationCodeLength: tenantContext.credentials.integrationCode?.length || 0,
+          integrationCodePreview: tenantContext.credentials.integrationCode ? `${tenantContext.credentials.integrationCode.substring(0, 8)}***` : 'none',
+          hasApiUrl: !!tenantContext.credentials.apiUrl,
+          apiUrl: tenantContext.credentials.apiUrl
+        });
+      }
 
-      return {
-        content: [{
-          type: 'text',
-          text: message
-        }],
-        isError: !isConnected
-      };
+      // Try to make a simple API call to list resources (limit to 1 for minimal impact)
+      this.logger.info('🚀 Attempting simple resources API call...');
+      
+      try {
+        const resourcesOptions = {
+          filter: [{ field: 'id', op: 'gte', value: 0 }],
+          pageSize: 1
+        };
+
+        this.logger.info('📞 Making autotaskService.searchResources call', {
+          options: resourcesOptions,
+          tenantContext: {
+            tenantId: tenantContext?.tenantId,
+            hasCredentials: !!(tenantContext?.credentials),
+            impersonationResourceId: tenantContext?.impersonationResourceId,
+            mode: tenantContext?.mode
+          }
+        });
+
+        const resources = await this.autotaskService.searchResources(resourcesOptions, tenantContext);
+        
+        this.logger.info('✅ API CALL SUCCESS - Resources response received', {
+          resourcesType: typeof resources,
+          resourcesIsArray: Array.isArray(resources),
+          resourcesLength: Array.isArray(resources) ? resources.length : 'not an array',
+          resourcesKeys: resources && typeof resources === 'object' ? Object.keys(resources) : 'not an object',
+          firstResourceId: Array.isArray(resources) && resources.length > 0 ? resources[0]?.id : 'no resources',
+          firstResourceName: Array.isArray(resources) && resources.length > 0 ? 
+            `${resources[0]?.firstName || 'unknown'} ${resources[0]?.lastName || 'unknown'}`.trim() : 'no name',
+          rawResponse: JSON.stringify(resources, null, 2).substring(0, 500) + (JSON.stringify(resources).length > 500 ? '...[truncated]' : '')
+        });
+
+        const message = tenantContext 
+          ? `✅ Successfully connected to Autotask API for tenant: ${tenantContext.tenantId}${tenantContext.impersonationResourceId ? ` (impersonating resource ${tenantContext.impersonationResourceId})` : ''}\n\n` +
+            `API Test Result:\n` +
+            `- Retrieved ${Array.isArray(resources) ? resources.length : 0} resource(s)\n` +
+            `- Response type: ${typeof resources}\n` +
+            `- First resource: ${Array.isArray(resources) && resources.length > 0 ? 
+              `ID ${resources[0]?.id} - ${resources[0]?.firstName || 'unknown'} ${resources[0]?.lastName || 'unknown'}`.trim() : 'None'}\n` +
+            `- Full response: ${JSON.stringify(resources, null, 2).substring(0, 200)}${JSON.stringify(resources).length > 200 ? '...' : ''}`
+          : `✅ Successfully connected to Autotask API\n\n` +
+            `API Test Result:\n` +
+            `- Retrieved ${Array.isArray(resources) ? resources.length : 0} resource(s)\n` +
+            `- Response type: ${typeof resources}\n` +
+            `- First resource: ${Array.isArray(resources) && resources.length > 0 ? 
+              `ID ${resources[0]?.id} - ${resources[0]?.firstName || 'unknown'} ${resources[0]?.lastName || 'unknown'}`.trim() : 'None'}\n` +
+            `- Full response: ${JSON.stringify(resources, null, 2).substring(0, 200)}${JSON.stringify(resources).length > 200 ? '...' : ''}`;
+
+        return {
+          content: [{
+            type: 'text',
+            text: message
+          }],
+          isError: false
+        };
+
+      } catch (apiError) {
+        this.logger.error('❌ API CALL FAILED - Detailed error information', {
+          errorType: typeof apiError,
+          errorName: apiError instanceof Error ? apiError.name : 'unknown',
+          errorMessage: apiError instanceof Error ? apiError.message : String(apiError),
+          errorStack: apiError instanceof Error ? apiError.stack : 'no stack',
+          errorKeys: apiError && typeof apiError === 'object' ? Object.keys(apiError) : 'not an object',
+          fullError: JSON.stringify(apiError, Object.getOwnPropertyNames(apiError), 2)
+        });
+
+        // Also log any response details if it's an HTTP error
+        if (apiError && typeof apiError === 'object') {
+          const err = apiError as any;
+          if (err.response) {
+            this.logger.error('📡 HTTP Response details', {
+              status: err.response.status,
+              statusText: err.response.statusText,
+              headers: err.response.headers,
+              data: typeof err.response.data === 'string' ? 
+                err.response.data.substring(0, 500) + (err.response.data.length > 500 ? '...[truncated]' : '') :
+                JSON.stringify(err.response.data, null, 2).substring(0, 500) + (JSON.stringify(err.response.data).length > 500 ? '...[truncated]' : ''),
+              url: err.response.config?.url,
+              method: err.response.config?.method
+            });
+          }
+          if (err.request) {
+            this.logger.error('📤 Request details', {
+              url: err.request.url,
+              method: err.request.method,
+              headers: err.request.headers
+            });
+          }
+        }
+
+        const errorMessage = apiError instanceof Error ? apiError.message : String(apiError);
+        const message = tenantContext 
+          ? `❌ Failed to connect to Autotask API for tenant: ${tenantContext.tenantId}\n\nError Details:\n${errorMessage}`
+          : `❌ Failed to connect to Autotask API\n\nError Details:\n${errorMessage}`;
+
+        return {
+          content: [{
+            type: 'text',
+            text: message
+          }],
+          isError: true
+        };
+      }
+
     } catch (error) {
+      this.logger.error('💥 OUTER CATCH - Unexpected error in test connection', {
+        errorType: typeof error,
+        errorName: error instanceof Error ? error.name : 'unknown',
+        errorMessage: error instanceof Error ? error.message : String(error),
+        errorStack: error instanceof Error ? error.stack : 'no stack',
+        fullError: JSON.stringify(error, Object.getOwnPropertyNames(error), 2)
+      });
+
       throw new Error(`Connection test failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   }

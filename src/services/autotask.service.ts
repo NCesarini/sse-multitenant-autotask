@@ -283,17 +283,126 @@ export class AutotaskService {
         });
       }
 
-      this.logger.info('Creating Autotask client with configuration:', {
+      this.logger.info('🚀 Creating Autotask client with configuration:', {
         username: username ? `${username.substring(0, 8)}***` : undefined,
         hasSecret: !!secret,
+        secretLength: secret?.length || 0,
         integrationCode,
+        integrationCodeLength: integrationCode?.length || 0,
         apiUrl: authConfig.apiUrl || 'auto-discovery',
-        hasImpersonation: !!impersonationResourceId
+        hasImpersonation: !!impersonationResourceId,
+        fullAuthConfig: {
+          ...authConfig,
+          secret: secret ? `${secret.substring(0, 3)}***${secret.substring(secret.length - 3)}` : undefined
+        }
       });
 
-      const client = await AutotaskClient.create(authConfig);
+      this.logger.info('⏳ Calling AutotaskClient.create() - this may take a moment for zone discovery...');
       
-      this.logger.info('✅ Tenant Autotask client created successfully', {
+      let client: AutotaskClient;
+      try {
+        const clientCreateStart = Date.now();
+        client = await AutotaskClient.create(authConfig);
+        const clientCreateTime = Date.now() - clientCreateStart;
+        
+        this.logger.info('✅ AutotaskClient.create() completed successfully', {
+          createTimeMs: clientCreateTime,
+          username: username ? `${username.substring(0, 8)}***` : undefined,
+          finalApiUrl: authConfig.apiUrl || 'discovered-by-library',
+          hasImpersonation: !!impersonationResourceId,
+          clientType: typeof client,
+          clientKeys: client ? Object.keys(client) : 'no keys'
+        });
+
+        // Test the client immediately to ensure it's working
+        this.logger.info('🔍 Testing newly created client with a simple zone information call...');
+        try {
+          // Try to access the client's internal zone info or make a simple call
+          const testStart = Date.now();
+          
+          // If the client has zone info available, log it
+          if ((client as any).zoneInformation) {
+            this.logger.info('📍 Zone information discovered:', {
+              zoneInfo: (client as any).zoneInformation,
+              testTimeMs: Date.now() - testStart
+            });
+          }
+          
+          // Test with a minimal call (if the client supports it)
+          if ((client as any).axios) {
+            this.logger.info('🌐 Testing client connection with minimal API call...');
+            try {
+              const testResponse = await (client as any).axios.get('/ATWSZoneInfo/GetZoneInfo');
+              this.logger.info('✅ Test API call successful:', {
+                status: testResponse.status,
+                statusText: testResponse.statusText,
+                responseType: typeof testResponse.data,
+                testTimeMs: Date.now() - testStart
+              });
+            } catch (testError) {
+              this.logger.warn('⚠️ Test API call failed (this may be expected):', {
+                error: testError instanceof Error ? testError.message : String(testError),
+                testTimeMs: Date.now() - testStart
+              });
+            }
+          }
+          
+        } catch (testError) {
+          this.logger.info('ℹ️ Client test completed with issues (may be normal):', {
+            error: testError instanceof Error ? testError.message : String(testError)
+          });
+        }
+        
+      } catch (createError) {
+        this.logger.error('💥 AutotaskClient.create() failed with detailed error:', {
+          errorType: typeof createError,
+          errorName: createError instanceof Error ? createError.name : 'unknown',
+          errorMessage: createError instanceof Error ? createError.message : String(createError),
+          errorStack: createError instanceof Error ? createError.stack : 'no stack',
+          errorKeys: createError && typeof createError === 'object' ? Object.keys(createError) : 'not an object',
+          fullError: JSON.stringify(createError, Object.getOwnPropertyNames(createError), 2),
+          authConfigUsed: {
+            ...authConfig,
+            secret: '[REDACTED]'
+          }
+        });
+
+        // Check for specific error types
+        if (createError && typeof createError === 'object') {
+          const err = createError as any;
+          if (err.response) {
+            this.logger.error('📡 HTTP Error Response from AutotaskClient.create():', {
+              status: err.response.status,
+              statusText: err.response.statusText,
+              headers: err.response.headers,
+              data: typeof err.response.data === 'string' ? 
+                err.response.data.substring(0, 1000) + (err.response.data.length > 1000 ? '...[truncated]' : '') :
+                JSON.stringify(err.response.data, null, 2).substring(0, 1000) + (JSON.stringify(err.response.data).length > 1000 ? '...[truncated]' : ''),
+              url: err.response.config?.url,
+              method: err.response.config?.method
+            });
+          }
+          if (err.request) {
+            this.logger.error('📤 HTTP Request details from AutotaskClient.create():', {
+              url: err.request.url,
+              method: err.request.method,
+              headers: err.request.headers
+            });
+          }
+          if (err.code) {
+            this.logger.error('🏷️ Error code from AutotaskClient.create():', {
+              code: err.code,
+              syscall: err.syscall,
+              hostname: err.hostname,
+              port: err.port
+            });
+          }
+        }
+        
+        throw createError;
+      }
+      
+      this.logger.info('✅ Tenant Autotask client created and tested successfully', {
         username: username ? `${username.substring(0, 8)}***` : undefined,
         finalApiUrl: authConfig.apiUrl || 'discovered',
         hasImpersonation: !!impersonationResourceId
