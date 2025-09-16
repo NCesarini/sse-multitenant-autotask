@@ -885,6 +885,47 @@ export class AutotaskService {
     }
   }
 
+  async getTicketByNumber(ticketNumber: string, fullDetails: boolean = false, tenantContext?: TenantContext): Promise<AutotaskTicket | null> {
+    const client = await this.getClientForTenant(tenantContext);
+    
+    try {
+      this.logger.info(`Getting ticket with number: ${ticketNumber}, fullDetails: ${fullDetails}`);
+      
+      // Search for ticket by exact ticket number match
+      const searchBody = {
+        filter: [
+          {
+            op: 'eq',
+            field: 'ticketNumber',
+            value: ticketNumber
+          }
+        ],
+        pageSize: 1 // We only expect one result
+      };
+
+      this.logger.info('Making direct API call to Tickets/query for ticket number:', searchBody);
+      
+      const response = await (client as any).axios.post('/Tickets/query', searchBody);
+      const tickets = (response.data?.items || []) as AutotaskTicket[];
+      
+      if (tickets.length === 0) {
+        this.logger.info(`Ticket with number ${ticketNumber} not found`);
+        return null;
+      }
+      
+      const ticket = tickets[0];
+      this.logger.info(`Found ticket with number ${ticketNumber}, ID: ${ticket.id}`);
+      
+      // Apply optimization unless full details requested
+      return fullDetails ? ticket : this.optimizeTicketData(ticket);
+    } catch (error) {
+      this.logger.error(`Failed to get ticket by number ${ticketNumber}:`, error);
+      throw error;
+    }
+  }
+
+
+
   async searchTickets(options: AutotaskQueryOptionsExtended = {}, tenantContext?: TenantContext): Promise<AutotaskTicket[]> {
     const client = await this.getClientForTenant(tenantContext);
     
@@ -917,13 +958,26 @@ export class AutotaskService {
       
       // Handle searchTerm - search in ticket number and title
       if (options.searchTerm) {
-        filters.push(
-          {
-            op: 'beginsWith',
+        const searchTerm = options.searchTerm;
+        
+        // Smart search: determine search strategy based on the term format
+        const looksLikeTicketNumber = /^T\d+\.\d+$/.test(searchTerm);
+        
+        if (looksLikeTicketNumber) {
+          // For ticket number format, search ticket number field first
+          filters.push({
+            op: 'eq',
             field: 'ticketNumber',
-            value: options.searchTerm
-          }
-        );
+            value: searchTerm
+          });
+        } else {
+          // For other search terms, search in title first
+          filters.push({
+            op: 'contains',
+            field: 'title',
+            value: searchTerm
+          });
+        }
       }
       
       // Handle status filter with more accurate open ticket definition

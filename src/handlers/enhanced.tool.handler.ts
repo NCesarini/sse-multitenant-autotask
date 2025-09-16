@@ -14,6 +14,55 @@ export class EnhancedAutotaskToolHandler {
   private mappingService: MappingService | null = null;
   private logger: Logger;
 
+  // Configurable thresholds for large response guidance
+  private static LARGE_RESPONSE_THRESHOLDS = {
+    tickets: 100,        // Double from 50
+    companies: 200,      // Double from 100
+    contacts: 200,       // Double from 100
+    projects: 100,       // Double from 50
+    resources: 200,      // Double from 100
+    tasks: 100,          // Double from 50
+    timeentries: 200,    // New: Time entries threshold
+    default: 100,        // Double from 50
+    responseSizeKB: 200  // Double from 100KB
+  };
+
+  /**
+   * Update the thresholds for large response guidance
+   * @param thresholds Partial threshold configuration to override defaults
+   * 
+   * @example
+   * // Increase ticket threshold to 150 and reduce response size threshold
+   * EnhancedAutotaskToolHandler.updateLargeResponseThresholds({
+   *   tickets: 150,
+   *   responseSizeKB: 100
+   * });
+   * 
+   * // Make all searches more sensitive (lower thresholds)
+   * EnhancedAutotaskToolHandler.updateLargeResponseThresholds({
+   *   tickets: 25,
+   *   companies: 50,
+   *   contacts: 50,
+   *   projects: 25,
+   *   resources: 50,
+   *   tasks: 25,
+   *   timeentries: 50,
+   *   default: 25,
+   *   responseSizeKB: 50
+   * });
+   */
+  public static updateLargeResponseThresholds(thresholds: Partial<typeof EnhancedAutotaskToolHandler.LARGE_RESPONSE_THRESHOLDS>): void {
+    Object.assign(EnhancedAutotaskToolHandler.LARGE_RESPONSE_THRESHOLDS, thresholds);
+  }
+
+  /**
+   * Get current threshold configuration
+   * @returns Current threshold settings for all search types
+   */
+  public static getLargeResponseThresholds(): typeof EnhancedAutotaskToolHandler.LARGE_RESPONSE_THRESHOLDS {
+    return { ...EnhancedAutotaskToolHandler.LARGE_RESPONSE_THRESHOLDS };
+  }
+
   // Common tenant schema for all tools
   private static readonly TENANT_SCHEMA = {
     type: 'object',
@@ -59,6 +108,96 @@ export class EnhancedAutotaskToolHandler {
   constructor(autotaskService: AutotaskService, logger: Logger) {
     this.autotaskService = autotaskService;
     this.logger = logger;
+  }
+
+  /**
+   * Check if response is large and add helpful guidance
+   */
+  private addLargeResponseGuidance(content: any[], resultCount: number, searchType: string): any[] {
+    const threshold = EnhancedAutotaskToolHandler.LARGE_RESPONSE_THRESHOLDS[
+      searchType as keyof typeof EnhancedAutotaskToolHandler.LARGE_RESPONSE_THRESHOLDS
+    ] || EnhancedAutotaskToolHandler.LARGE_RESPONSE_THRESHOLDS.default;
+    
+    // Calculate approximate response size
+    const responseText = JSON.stringify(content);
+    const responseSizeKB = Math.round(responseText.length / 1024);
+    
+    // If result count is high or response size is large, add guidance
+    if (resultCount >= threshold || responseSizeKB > EnhancedAutotaskToolHandler.LARGE_RESPONSE_THRESHOLDS.responseSizeKB) {
+      const guidanceMessage = this.generateSearchGuidance(searchType, resultCount, responseSizeKB);
+      
+      // Add guidance as a separate content item
+      return [
+        ...content,
+        {
+          type: 'text',
+          text: `\n\n🔍 **Search Guidance**: ${guidanceMessage}`
+        }
+      ];
+    }
+    
+    return content;
+  }
+
+  /**
+   * Generate specific guidance based on search type and results
+   */
+  private generateSearchGuidance(searchType: string, resultCount: number, responseSizeKB: number): string {
+    const suggestions: Record<string, string[]> = {
+      tickets: [
+        'Use `status` parameter to filter by ticket status (e.g., status: 1 for New, 5 for Complete)',
+        'Add `companyId` to search tickets for a specific company',
+        'Use `assignedResourceID` to find tickets assigned to specific person',
+        'Try `searchTerm` with specific keywords from ticket title or number',
+        'Use `pageSize` parameter to limit results (e.g., pageSize: 25)'
+      ],
+      companies: [
+        'Use `searchTerm` with company name or partial name',
+        'Add specific filters in your search criteria',
+        'Use `pageSize` parameter to limit results (e.g., pageSize: 50)'
+      ],
+      contacts: [
+        'Use `searchTerm` with contact name or email',
+        'Add `companyId` to search contacts for a specific company',
+        'Use `pageSize` parameter to limit results (e.g., pageSize: 50)'
+      ],
+      projects: [
+        'Use `searchTerm` with project name or description keywords',
+        'Add `companyId` to search projects for a specific company',
+        'Use `pageSize` parameter to limit results (e.g., pageSize: 50)'
+      ],
+      resources: [
+        'Use `searchTerm` with employee name',
+        'Add specific role or department filters',
+        'Use `pageSize` parameter to limit results (e.g., pageSize: 50)'
+      ],
+      tasks: [
+        'Use `projectId` to search tasks for a specific project',
+        'Add `assignedResourceId` to find tasks assigned to specific person',
+        'Use `status` parameter to filter by task status',
+        'Try `searchTerm` with task title keywords',
+        'Use `pageSize` parameter to limit results (e.g., pageSize: 25)'
+      ],
+      timeentries: [
+        'Use `ticketId` to search time entries for a specific ticket',
+        'Add `projectId` to find time entries for a specific project',
+        'Use `resourceId` to find time entries by a specific person',
+        'Add date filters with `dateFrom` and `dateTo` (YYYY-MM-DD format)',
+        'Use `pageSize` parameter to limit results (e.g., pageSize: 100)'
+      ]
+    };
+
+    const defaultSuggestions = [
+      'Use more specific search terms or filters',
+      'Use `pageSize` parameter to limit results',
+      'Add additional filter criteria to narrow down results'
+    ];
+
+    const typeSuggestions = suggestions[searchType] || defaultSuggestions;
+    const selectedSuggestions = typeSuggestions.slice(0, 3); // Show max 3 suggestions
+
+    return `Found ${resultCount} results (${responseSizeKB}KB). For more focused results, try:\n` +
+           selectedSuggestions.map(s => `  • ${s}`).join('\n');
   }
 
   /**
@@ -709,6 +848,22 @@ export class EnhancedAutotaskToolHandler {
           }
         },
         ['id']
+      ),
+      EnhancedAutotaskToolHandler.createTool(
+        'get_ticket_by_number',
+        'Get a specific ticket by ticket number (e.g., T20250914.0008) with full details',
+        'read',
+        {
+          ticketNumber: {
+            type: 'string',
+            description: 'Ticket number to retrieve (e.g., T20250914.0008)'
+          },
+          fullDetails: {
+            type: 'boolean',
+            description: 'Whether to include full details (default: false for optimized response)'
+          }
+        },
+        ['ticketNumber']
       ),
       EnhancedAutotaskToolHandler.createTool(
         'get_project',
@@ -2176,6 +2331,11 @@ export class EnhancedAutotaskToolHandler {
           result = await this.getTicket(args, tenantContext);
           break;
 
+        case 'get_ticket_by_number':
+          this.logger.info(`🎫 Executing get_ticket_by_number`, { toolCallId });
+          result = await this.getTicketByNumber(args, tenantContext);
+          break;
+
         case 'get_project':
           this.logger.info(`📋 Executing get_project`, { toolCallId });
           result = await this.getProject(args, tenantContext);
@@ -2517,11 +2677,16 @@ export class EnhancedAutotaskToolHandler {
         }
       }
 
+      const content = [{
+        type: 'text',
+        text: resultsText
+      }];
+
+      // Add guidance for large responses
+      const contentWithGuidance = this.addLargeResponseGuidance(content, enhancedCompanies.length, 'companies');
+
       return {
-        content: [{
-          type: 'text',
-          text: resultsText
-        }]
+        content: contentWithGuidance
       };
     } catch (error) {
       throw new Error(`Failed to search companies: ${error instanceof Error ? error.message : 'Unknown error'}`);
@@ -2639,11 +2804,16 @@ export class EnhancedAutotaskToolHandler {
           ).join('\n')}`
         : 'No contacts found matching the criteria';
 
+      const content = [{
+        type: 'text',
+        text: resultsText
+      }];
+
+      // Add guidance for large responses
+      const contentWithGuidance = this.addLargeResponseGuidance(content, enhancedContacts.length, 'contacts');
+
       return {
-        content: [{
-          type: 'text',
-          text: resultsText
-        }]
+        content: contentWithGuidance
       };
     } catch (error) {
       throw new Error(`Failed to search contacts: ${error instanceof Error ? error.message : 'Unknown error'}`);
@@ -2690,59 +2860,110 @@ export class EnhancedAutotaskToolHandler {
     try {
       const options: any = {};
       
+      // Use the proper searchTerm parameter instead of custom filter
       if (args.searchTerm) {
-        options.filter = [{
-          field: 'title',
-          op: 'contains',
-          value: args.searchTerm
-        }, {
-          field: 'number',
-          op: 'contains',
-          value: args.searchTerm
-        }];
+        options.searchTerm = args.searchTerm;
       }
       
       if (typeof args.status === 'number') {
-        if (!options.filter) options.filter = [];
-        options.filter.push({
-          field: 'status',
-          op: 'eq',
-          value: args.status
-        });
+        options.status = args.status;
       }
       
       if (typeof args.companyId === 'number') {
-        if (!options.filter) options.filter = [];
-        options.filter.push({
-          field: 'companyID',
-          op: 'eq',
-          value: args.companyId
-        });
+        options.companyId = args.companyId;
       }
       
       if (typeof args.assignedResourceID === 'number') {
-        if (!options.filter) options.filter = [];
-        options.filter.push({
-          field: 'assignedResourceID',
-          op: 'eq',
-          value: args.assignedResourceID
-        });
+        options.assignedResourceID = args.assignedResourceID;
       }
       
       if (typeof args.unassigned === 'boolean') {
-        if (!options.filter) options.filter = [];
-        options.filter.push({
-          field: 'assignedResourceID',
-          op: 'eq',
-          value: null // Unassigned tickets have no assigned resource
-        });
+        options.unassigned = args.unassigned;
       }
       
       if (args.pageSize) {
         options.pageSize = args.pageSize;
       }
 
-      const tickets = await this.autotaskService.searchTickets(options, tenantContext);
+      let tickets = await this.autotaskService.searchTickets(options, tenantContext);
+      
+      // If no results with searchTerm and we haven't tried the alternate field, try fallback
+      if (tickets.length === 0 && args.searchTerm) {
+        const searchTerm = args.searchTerm;
+        const looksLikeTicketNumber = /^T\d+\.\d+$/.test(searchTerm);
+        
+        this.logger.info(`No results found, trying fallback search for: ${searchTerm}`);
+        
+        // Create fallback options with alternate search strategy
+        const fallbackOptions = { ...options };
+        delete fallbackOptions.searchTerm; // Remove to avoid conflict
+        
+        if (looksLikeTicketNumber) {
+          // Original search was ticket number, try title search as fallback
+          fallbackOptions.filter = [{
+            op: 'contains',
+            field: 'title',
+            value: searchTerm
+          }];
+        } else {
+          // Original search was title, try partial ticket number match as fallback
+          fallbackOptions.filter = [{
+            op: 'contains',
+            field: 'ticketNumber',
+            value: searchTerm
+          }];
+        }
+        
+        // Add back other filters if they existed
+        if (fallbackOptions.status !== undefined) {
+          if (!fallbackOptions.filter) fallbackOptions.filter = [];
+          fallbackOptions.filter.push({
+            op: 'eq',
+            field: 'status',
+            value: fallbackOptions.status
+          });
+          delete fallbackOptions.status;
+        }
+        
+        if (fallbackOptions.companyId !== undefined) {
+          if (!fallbackOptions.filter) fallbackOptions.filter = [];
+          fallbackOptions.filter.push({
+            op: 'eq',
+            field: 'companyID',
+            value: fallbackOptions.companyId
+          });
+          delete fallbackOptions.companyId;
+        }
+        
+        if (fallbackOptions.assignedResourceID !== undefined) {
+          if (!fallbackOptions.filter) fallbackOptions.filter = [];
+          fallbackOptions.filter.push({
+            op: 'eq',
+            field: 'assignedResourceID',
+            value: fallbackOptions.assignedResourceID
+          });
+          delete fallbackOptions.assignedResourceID;
+        }
+        
+        if (fallbackOptions.unassigned !== undefined) {
+          if (!fallbackOptions.filter) fallbackOptions.filter = [];
+          fallbackOptions.filter.push({
+            op: 'eq',
+            field: 'assignedResourceID',
+            value: null
+          });
+          delete fallbackOptions.unassigned;
+        }
+        
+        try {
+          tickets = await this.autotaskService.searchTickets(fallbackOptions, tenantContext);
+          if (tickets.length > 0) {
+            this.logger.info(`Fallback search found ${tickets.length} tickets`);
+          }
+        } catch (error) {
+          this.logger.warn(`Fallback search failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+        }
+      }
       
       // Enhanced results with mapped names
       const mappingService = await this.getMappingService();
@@ -2790,11 +3011,16 @@ export class EnhancedAutotaskToolHandler {
           ).join('\n')}`
         : 'No tickets found matching the criteria';
 
+      const content = [{
+        type: 'text',
+        text: resultsText
+      }];
+
+      // Add guidance for large responses
+      const contentWithGuidance = this.addLargeResponseGuidance(content, enhancedTickets.length, 'tickets');
+
       return {
-        content: [{
-          type: 'text',
-          text: resultsText
-        }]
+        content: contentWithGuidance
       };
     } catch (error) {
       throw new Error(`Failed to search tickets: ${error instanceof Error ? error.message : 'Unknown error'}`);
@@ -2918,11 +3144,16 @@ export class EnhancedAutotaskToolHandler {
           ).join('\n')}`
         : 'No projects found matching the criteria';
 
+      const content = [{
+        type: 'text',
+        text: resultsText
+      }];
+
+      // Add guidance for large responses
+      const contentWithGuidance = this.addLargeResponseGuidance(content, enhancedProjects.length, 'projects');
+
       return {
-        content: [{
-          type: 'text',
-          text: resultsText
-        }]
+        content: contentWithGuidance
       };
     } catch (error) {
       throw new Error(`Failed to search projects: ${error instanceof Error ? error.message : 'Unknown error'}`);
@@ -3426,6 +3657,38 @@ export class EnhancedAutotaskToolHandler {
     }
   }
 
+  private async getTicketByNumber(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
+    try {
+      const { ticketNumber, fullDetails = false } = args;
+      
+      if (!ticketNumber || typeof ticketNumber !== 'string') {
+        throw new Error('Ticket number is required and must be a string (e.g., T20250914.0008)');
+      }
+
+      const ticket = await this.autotaskService.getTicketByNumber(ticketNumber, fullDetails, tenantContext);
+      
+      if (!ticket) {
+        return {
+          content: [{
+            type: 'text',
+            text: `Ticket with number ${ticketNumber} not found`
+          }],
+          isError: false
+        };
+      }
+
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify(ticket, null, 2)
+        }],
+        isError: false
+      };
+    } catch (error) {
+      throw new Error(`Failed to get ticket by number: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
   private async getProject(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
     try {
       const { id } = args;
@@ -3625,11 +3888,16 @@ export class EnhancedAutotaskToolHandler {
 
       const timeEntries = await this.autotaskService.getTimeEntries(queryOptions, tenantContext);
       
+      const content = [{
+        type: 'text',
+        text: JSON.stringify(timeEntries, null, 2)
+      }];
+
+      // Add guidance for large responses
+      const contentWithGuidance = this.addLargeResponseGuidance(content, timeEntries.length, 'timeentries');
+      
       return {
-        content: [{
-          type: 'text',
-          text: JSON.stringify(timeEntries, null, 2)
-        }],
+        content: contentWithGuidance,
         isError: false
       };
     } catch (error) {
@@ -3708,11 +3976,16 @@ export class EnhancedAutotaskToolHandler {
 
       const tasks = await this.autotaskService.searchTasks(queryOptions, tenantContext);
       
+      const content = [{
+        type: 'text',
+        text: JSON.stringify(tasks, null, 2)
+      }];
+
+      // Add guidance for large responses
+      const contentWithGuidance = this.addLargeResponseGuidance(content, tasks.length, 'tasks');
+      
       return {
-        content: [{
-          type: 'text',
-          text: JSON.stringify(tasks, null, 2)
-        }],
+        content: contentWithGuidance,
         isError: false
       };
     } catch (error) {
