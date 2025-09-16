@@ -27,6 +27,7 @@ import {
 } from '../types/autotask';
 import { McpServerConfig, AutotaskCredentials, TenantContext } from '../types/mcp';
 import { Logger } from '../utils/logger';
+import { LARGE_RESPONSE_THRESHOLDS } from '../utils/thresholds';
 
 // New: Client pool management for multi-tenant support
 interface ClientPoolEntry {
@@ -547,131 +548,48 @@ export class AutotaskService {
     try {
       this.logger.info('Searching companies with options:', options);
       
-      // SMART PAGINATION: Use sensible defaults instead of fetching everything
+      // THRESHOLD-BASED PAGINATION: Use thresholds to prevent oversized responses
+      const THRESHOLD_LIMIT = LARGE_RESPONSE_THRESHOLDS.companies;
       const DEFAULT_PAGE_SIZE = 50; // Reasonable default for UI display
-      const MAX_PAGE_SIZE = 500; // API limit per request
-      const MAX_TOTAL_RESULTS = 2000; // Maximum total results to prevent huge responses
-      const MAX_PAGES = 10; // Maximum pages to fetch
       
       let requestedPageSize = options.pageSize;
+      let isHittingLimit = false;
       
-      // If no pageSize specified, use default (don't fetch everything!)
+      // If no pageSize specified, use default
       if (!requestedPageSize) {
         requestedPageSize = DEFAULT_PAGE_SIZE;
         this.logger.info(`No pageSize specified, using default: ${DEFAULT_PAGE_SIZE}`);
-      }
-      
-      // Handle specific page requests (single page)
-      if (options.page && options.page > 1) {
-        const queryOptions = {
-          ...options,
-          pageSize: Math.min(requestedPageSize, MAX_PAGE_SIZE),
-          page: options.page
-        };
-
-        this.logger.info(`Fetching specific page ${options.page} with ${requestedPageSize} results`);
-        
-        const result = await client.accounts.list(queryOptions as any);
-        const companies = (result.data as AutotaskCompany[]) || [];
-        
-        const executionTime = Date.now() - startTime;
-        this.logger.info(`✅ Retrieved ${companies.length} companies (page ${options.page})`, {
-          tenantId: tenantContext?.tenantId,
-          resultCount: companies.length,
-          page: options.page,
-          requestedPageSize,
-          executionTimeMs: executionTime
-        });
-        return companies;
-      }
-      
-      // If user wants a small number, just do a single request
-      if (requestedPageSize <= MAX_PAGE_SIZE) {
-        const queryOptions = {
-          ...options,
-          pageSize: Math.min(requestedPageSize, MAX_PAGE_SIZE)
-        };
-
-        this.logger.info('Single page request with limited results:', queryOptions);
-        
-        const result = await client.accounts.list(queryOptions as any);
-        const companies = (result.data as AutotaskCompany[]) || [];
-        
-        const executionTime = Date.now() - startTime;
-        this.logger.info(`✅ Retrieved ${companies.length} companies (single page)`, {
-          tenantId: tenantContext?.tenantId,
-          resultCount: companies.length,
-          requestedPageSize,
-          executionTimeMs: executionTime
-        });
-        return companies;
-        
       } else {
-        // Multi-page request with safety limits
-        let allCompanies: AutotaskCompany[] = [];
-        const pageSize = MAX_PAGE_SIZE; // Use max safe page size for efficiency
-        let currentPage = 1;
-        let hasMorePages = true;
+        // Cap at threshold limit to prevent oversized responses
+        const originalRequest = requestedPageSize;
+        requestedPageSize = Math.min(requestedPageSize, THRESHOLD_LIMIT);
+        isHittingLimit = originalRequest >= THRESHOLD_LIMIT;
         
-        while (hasMorePages && currentPage <= MAX_PAGES && allCompanies.length < MAX_TOTAL_RESULTS) {
-          const queryOptions = {
-            ...options,
-            pageSize: pageSize,
-            page: currentPage
-          };
-
-          this.logger.info(`Fetching companies page ${currentPage}...`, {
-            tenantId: tenantContext?.tenantId,
-            page: currentPage,
-            pageSize,
-            currentTotal: allCompanies.length
-          });
-          
-          const result = await client.accounts.list(queryOptions as any);
-          const companies = (result.data as AutotaskCompany[]) || [];
-          
-          if (companies.length === 0) {
-            hasMorePages = false;
-          } else {
-            allCompanies.push(...companies);
-            
-            // Check if we've reached the requested amount
-            if (allCompanies.length >= requestedPageSize) {
-              // Trim to exact requested size
-              allCompanies = allCompanies.slice(0, requestedPageSize);
-              hasMorePages = false;
-              this.logger.info(`Reached requested page size limit: ${requestedPageSize}`);
-            } else if (companies.length < pageSize) {
-              // Got less than full page - we're done
-              hasMorePages = false;
-            } else {
-              currentPage++;
-            }
-          }
-          
-          // Safety check for response size (prevent huge responses)
-          if (allCompanies.length >= MAX_TOTAL_RESULTS) {
-            this.logger.warn(`Response size limit reached: ${MAX_TOTAL_RESULTS} companies`, {
-              tenantId: tenantContext?.tenantId,
-              totalCompanies: allCompanies.length,
-              requestedPageSize
-            });
-            hasMorePages = false;
-          }
+        if (isHittingLimit) {
+          this.logger.info(`🔍 Companies request hits threshold limit (${THRESHOLD_LIMIT}), capped from ${originalRequest} to ${requestedPageSize}`);
         }
-        
-        const executionTime = Date.now() - startTime;
-        this.logger.info(`✅ Retrieved ${allCompanies.length} companies across ${currentPage} pages`, {
-          tenantId: tenantContext?.tenantId,
-          resultCount: allCompanies.length,
-          pagesRetrieved: currentPage,
-          requestedPageSize,
-          executionTimeMs: executionTime,
-          limitedByMaxResults: allCompanies.length >= MAX_TOTAL_RESULTS,
-          limitedByMaxPages: currentPage > MAX_PAGES
-        });
-        return allCompanies;
       }
+      
+      // Simple threshold-based request (always use this approach now)
+      const queryOptions = {
+        ...options,
+        pageSize: requestedPageSize
+      };
+
+      this.logger.info('Threshold-limited request:', queryOptions);
+      
+      const result = await client.accounts.list(queryOptions as any);
+      const companies = (result.data as AutotaskCompany[]) || [];
+      
+      const executionTime = Date.now() - startTime;
+      this.logger.info(`✅ Retrieved ${companies.length} companies (threshold-limited)`, {
+        tenantId: tenantContext?.tenantId,
+        resultCount: companies.length,
+        requestedPageSize,
+        executionTimeMs: executionTime,
+        wasLimited: isHittingLimit
+      });
+      return companies;
     } catch (error) {
       const executionTime = Date.now() - startTime;
       this.logger.error('❌ Failed to search companies:', {
@@ -1024,103 +942,60 @@ export class AutotaskService {
         });
       }
       
-      // SMART PAGINATION: Use sensible defaults instead of fetching everything
+      // THRESHOLD-BASED PAGINATION: Use thresholds to prevent oversized responses
+      const THRESHOLD_LIMIT = LARGE_RESPONSE_THRESHOLDS.tickets;
       const DEFAULT_PAGE_SIZE = 50; // Reasonable default for UI display
-      const MAX_PAGE_SIZE = 500; // API limit per request
-      const MAX_TOTAL_RESULTS = 2000; // Maximum total results to prevent huge responses
-      const MAX_PAGES = 5; // Maximum pages to fetch
       
       let requestedPageSize = options.pageSize;
+      let isHittingLimit = false;
       
-      // If no pageSize specified, use default (don't fetch everything!)
+      // If no pageSize specified, use default
       if (!requestedPageSize) {
         requestedPageSize = DEFAULT_PAGE_SIZE;
         this.logger.info(`No pageSize specified, using default: ${DEFAULT_PAGE_SIZE}`);
+      } else {
+        // Cap at threshold limit to prevent oversized responses
+        const originalRequest = requestedPageSize;
+        requestedPageSize = Math.min(requestedPageSize, THRESHOLD_LIMIT);
+        isHittingLimit = originalRequest >= THRESHOLD_LIMIT;
+        
+        if (isHittingLimit) {
+          this.logger.info(`🔍 Tickets request hits threshold limit (${THRESHOLD_LIMIT}), capped from ${originalRequest} to ${requestedPageSize}`);
+        }
       }
       
-      // If user wants a small number, just do a single request
-      if (requestedPageSize <= MAX_PAGE_SIZE) {
-        const queryOptions = {
-          filter: filters,
-          pageSize: requestedPageSize
-        };
+      // Single request approach (always use this now with threshold limiting)
+      const queryOptions = {
+        filter: filters,
+        pageSize: requestedPageSize
+      };
 
-        this.logger.info('Single page request:', queryOptions);
-        
-        const result = await client.tickets.list(queryOptions);
-        const tickets = (result.data as AutotaskTicket[]) || [];
-        
-        // Log API call result
-        this.logger.info('📊 API Result for searchTickets', {
-          tenantId: tenantContext?.tenantId,
-          impersonationResourceId: tenantContext?.impersonationResourceId,
-          resultCount: tickets.length,
-          requestedPageSize: requestedPageSize,
-          actualFilterCount: filters.length,
-          apiEndpoint: 'client.tickets.list',
-          hasResultData: !!result.data
-        });
-        
-        const optimizedTickets = tickets.map(ticket => this.optimizeTicketDataAggressive(ticket));
-        
-        this.logger.info(`✅ Retrieved ${optimizedTickets.length} tickets (single page)`, {
-          tenantId: tenantContext?.tenantId,
-          impersonationResourceId: tenantContext?.impersonationResourceId,
-          resultCount: optimizedTickets.length
-        });
-        return optimizedTickets;
-        
-      } else {
-        // Multi-page request with safety limits
-        this.logger.info(`Multi-page request for ${requestedPageSize} tickets (max total: ${MAX_TOTAL_RESULTS})`);
-        
-        const actualLimit = Math.min(requestedPageSize, MAX_TOTAL_RESULTS);
-        const allTickets: AutotaskTicket[] = [];
-        let page = 1;
-        let hasMore = true;
-        
-        while (hasMore && allTickets.length < actualLimit && page <= MAX_PAGES) {
-          const remainingNeeded = actualLimit - allTickets.length;
-          const currentPageSize = Math.min(MAX_PAGE_SIZE, remainingNeeded);
-          
-          const queryOptions = {
-            filter: filters,
-            pageSize: currentPageSize,
-            page: page
-          };
-
-          this.logger.info(`📄 Fetching tickets page ${page}/${MAX_PAGES} (${currentPageSize} items)...`);
-          
-          const result = await client.tickets.list(queryOptions);
-          const tickets = (result.data as AutotaskTicket[]) || [];
-          
-          if (tickets.length === 0) {
-            hasMore = false;
-            this.logger.info(`No tickets found on page ${page}, stopping`);
-          } else {
-            // Transform tickets to optimize data size
-            const optimizedTickets = tickets.map(ticket => this.optimizeTicketDataAggressive(ticket));
-            allTickets.push(...optimizedTickets);
-            
-            this.logger.info(`📄 Page ${page}: Found ${tickets.length} tickets (total: ${allTickets.length})`);
-            
-            // Check if we got fewer results than requested (indicating last page)
-            if (tickets.length < currentPageSize) {
-              hasMore = false;
-              this.logger.info(`Last page detected (${tickets.length} < ${currentPageSize})`);
-            } else {
-              page++;
-            }
-          }
-        }
-
-        if (allTickets.length >= MAX_TOTAL_RESULTS) {
-          this.logger.warn(`⚠️ Reached maximum limit of ${MAX_TOTAL_RESULTS} tickets. Use pageSize parameter for specific page requests.`);
-        }
-        
-        this.logger.info(`✅ Multi-page searchTickets completed: ${allTickets.length} total tickets`);
-        return allTickets;
-      }
+      this.logger.info('Threshold-limited request:', queryOptions);
+      
+      const result = await client.tickets.list(queryOptions);
+      const tickets = (result.data as AutotaskTicket[]) || [];
+      
+      // Log API call result
+      this.logger.info('📊 API Result for searchTickets', {
+        tenantId: tenantContext?.tenantId,
+        impersonationResourceId: tenantContext?.impersonationResourceId,
+        resultCount: tickets.length,
+        requestedPageSize: requestedPageSize,
+        actualFilterCount: filters.length,
+        apiEndpoint: 'client.tickets.list',
+        hasResultData: !!result.data,
+        wasLimited: isHittingLimit
+      });
+      
+      const optimizedTickets = tickets.map(ticket => this.optimizeTicketDataAggressive(ticket));
+      
+      this.logger.info(`✅ Retrieved ${optimizedTickets.length} tickets (threshold-limited)`, {
+        tenantId: tenantContext?.tenantId,
+        impersonationResourceId: tenantContext?.impersonationResourceId,
+        resultCount: optimizedTickets.length,
+        wasLimited: isHittingLimit
+      });
+      return optimizedTickets;
     } catch (error) {
       this.logger.error('Failed to search tickets:', error);
       throw error;
@@ -1288,10 +1163,27 @@ export class AutotaskService {
       if (options.page) searchBody.page = options.page;
       if (options.pageSize) searchBody.pageSize = options.pageSize;
       
-      // Set default pagination
-      const pageSize = options.pageSize || 25;
-      const finalPageSize = pageSize > 500 ? 500 : pageSize; // Time entries can have higher limits
-      searchBody.pageSize = finalPageSize;
+      // Set pagination - TimeEntries API uses 'maxrecords' instead of 'pageSize'
+      // Use threshold-based limiting to prevent oversized responses
+      const THRESHOLD_LIMIT = LARGE_RESPONSE_THRESHOLDS.timeentries;
+      
+      let finalMaxRecords = 25; // Default if not provided
+      let isHittingLimit = false;
+      
+      if (options.pageSize !== undefined) {
+        const requestedSize = options.pageSize;
+        finalMaxRecords = Math.max(1, Math.min(requestedSize, THRESHOLD_LIMIT));
+        isHittingLimit = requestedSize >= THRESHOLD_LIMIT;
+        
+        this.logger.info(`⚙️ PageSize provided: ${requestedSize}, using maxrecords: ${finalMaxRecords}`);
+        
+        if (isHittingLimit) {
+          this.logger.info(`🔍 Request hits threshold limit (${THRESHOLD_LIMIT}), guidance should be shown`);
+        }
+      } else {
+        this.logger.info(`⚙️ No pageSize provided, using default maxrecords: ${finalMaxRecords}`);
+      }
+      searchBody.maxrecords = finalMaxRecords;
 
       this.logger.info('Making direct API call to TimeEntries/query with body:', searchBody);
 

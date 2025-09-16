@@ -8,24 +8,15 @@ import { AutotaskService } from '../services/autotask.service.js';
 import { Logger } from '../utils/logger.js';
 import { MappingService } from '../utils/mapping.service.js';
 import { AutotaskCredentials, TenantContext } from '../types/mcp.js';
+import { LARGE_RESPONSE_THRESHOLDS } from '../utils/thresholds.js';
 
 export class EnhancedAutotaskToolHandler {
   private autotaskService: AutotaskService;
   private mappingService: MappingService | null = null;
   private logger: Logger;
 
-  // Configurable thresholds for large response guidance
-  private static LARGE_RESPONSE_THRESHOLDS = {
-    tickets: 100,        // Double from 50
-    companies: 200,      // Double from 100
-    contacts: 200,       // Double from 100
-    projects: 100,       // Double from 50
-    resources: 200,      // Double from 100
-    tasks: 100,          // Double from 50
-    timeentries: 200,    // New: Time entries threshold
-    default: 100,        // Double from 50
-    responseSizeKB: 200  // Double from 100KB
-  };
+  // Use shared thresholds from constants file
+  private static LARGE_RESPONSE_THRESHOLDS = LARGE_RESPONSE_THRESHOLDS;
 
   /**
    * Update the thresholds for large response guidance
@@ -1002,9 +993,9 @@ export class EnhancedAutotaskToolHandler {
           },
           pageSize: {
             type: 'number',
-            description: 'Number of results to return (max 500)',
+            description: 'Number of results to return (max 200)',
             minimum: 1,
-            maximum: 500
+            maximum: 200
           }
         }
       ),
@@ -2682,8 +2673,28 @@ export class EnhancedAutotaskToolHandler {
         text: resultsText
       }];
 
-      // Add guidance for large responses
-      const contentWithGuidance = this.addLargeResponseGuidance(content, enhancedCompanies.length, 'companies');
+      // Check if we're hitting the threshold limit and show guidance proactively
+      const threshold = EnhancedAutotaskToolHandler.LARGE_RESPONSE_THRESHOLDS.companies;
+      const isHittingLimit = args.pageSize !== undefined && args.pageSize >= threshold;
+      const shouldShowGuidance = isHittingLimit || enhancedCompanies.length >= threshold;
+
+      let contentWithGuidance = content;
+      if (shouldShowGuidance) {
+        const guidanceMessage = isHittingLimit 
+          ? `Requested ${args.pageSize} companies (limit: ${threshold}). For more focused results, try:\n` +
+            `  • Use \`searchTerm\` with company name or partial name\n` +
+            `  • Add specific filters in your search criteria\n` +
+            `  • Use smaller \`pageSize\` parameter (current: ${args.pageSize})`
+          : this.generateSearchGuidance('companies', enhancedCompanies.length, Math.round(JSON.stringify(content).length / 1024));
+
+        contentWithGuidance = [
+          ...content,
+          {
+            type: 'text',
+            text: `\n\n🔍 **Search Guidance**: ${guidanceMessage}`
+          }
+        ];
+      }
 
       return {
         content: contentWithGuidance
@@ -3016,8 +3027,30 @@ export class EnhancedAutotaskToolHandler {
         text: resultsText
       }];
 
-      // Add guidance for large responses
-      const contentWithGuidance = this.addLargeResponseGuidance(content, enhancedTickets.length, 'tickets');
+      // Check if we're hitting the threshold limit and show guidance proactively
+      const threshold = EnhancedAutotaskToolHandler.LARGE_RESPONSE_THRESHOLDS.tickets;
+      const isHittingLimit = args.pageSize !== undefined && args.pageSize >= threshold;
+      const shouldShowGuidance = isHittingLimit || enhancedTickets.length >= threshold;
+
+      let contentWithGuidance = content;
+      if (shouldShowGuidance) {
+        const guidanceMessage = isHittingLimit 
+          ? `Requested ${args.pageSize} tickets (limit: ${threshold}). For more focused results, try:\n` +
+            `  • Use \`status\` parameter to filter by ticket status (e.g., status: 1 for New, 5 for Complete)\n` +
+            `  • Add \`companyId\` to search tickets for a specific company\n` +
+            `  • Use \`assignedResourceID\` to find tickets assigned to specific person\n` +
+            `  • Try \`searchTerm\` with specific keywords from ticket title or number\n` +
+            `  • Use smaller \`pageSize\` parameter (current: ${args.pageSize})`
+          : this.generateSearchGuidance('tickets', enhancedTickets.length, Math.round(JSON.stringify(content).length / 1024));
+
+        contentWithGuidance = [
+          ...content,
+          {
+            type: 'text',
+            text: `\n\n🔍 **Search Guidance**: ${guidanceMessage}`
+          }
+        ];
+      }
 
       return {
         content: contentWithGuidance
@@ -3848,21 +3881,17 @@ export class EnhancedAutotaskToolHandler {
 
   private async searchTimeEntries(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
     try {
-      const { ticketId, projectId, resourceId, dateFrom, dateTo, pageSize } = args;
+      const { ticketId, resourceId, dateFrom, dateTo, pageSize } = args;
       
       // Build filter for time entries search
       const filter: any[] = [];
       
       if (ticketId) {
-        filter.push({ field: 'ticketId', op: 'eq', value: ticketId });
-      }
-      
-      if (projectId) {
-        filter.push({ field: 'projectId', op: 'eq', value: projectId });
+        filter.push({ field: 'ticketID', op: 'eq', value: ticketId });
       }
       
       if (resourceId) {
-        filter.push({ field: 'resourceId', op: 'eq', value: resourceId });
+        filter.push({ field: 'resourceID', op: 'eq', value: resourceId });
       }
       
       if (dateFrom) {
@@ -3881,10 +3910,14 @@ export class EnhancedAutotaskToolHandler {
         filter.push({ field: 'dateWorked', op: 'gte', value: thirtyDaysAgo.toISOString().split('T')[0] });
       }
 
-      const queryOptions = {
-        filter,
-        ...(pageSize && { pageSize })
+      const queryOptions: any = {
+        filter
       };
+      
+      // Explicitly handle pageSize to ensure it's passed through (including pageSize: 1)
+      if (pageSize !== undefined) {
+        queryOptions.pageSize = pageSize;
+      }
 
       const timeEntries = await this.autotaskService.getTimeEntries(queryOptions, tenantContext);
       
@@ -3893,8 +3926,30 @@ export class EnhancedAutotaskToolHandler {
         text: JSON.stringify(timeEntries, null, 2)
       }];
 
-      // Add guidance for large responses
-      const contentWithGuidance = this.addLargeResponseGuidance(content, timeEntries.length, 'timeentries');
+      // Check if we're hitting the threshold limit and show guidance proactively
+      const threshold = EnhancedAutotaskToolHandler.LARGE_RESPONSE_THRESHOLDS.timeentries;
+      const isHittingLimit = pageSize !== undefined && pageSize >= threshold;
+      const shouldShowGuidance = isHittingLimit || timeEntries.length >= threshold;
+
+      let contentWithGuidance = content;
+      if (shouldShowGuidance) {
+        const guidanceMessage = isHittingLimit 
+          ? `Requested ${pageSize} entries (limit: ${threshold}). For more focused results, try:\n` +
+            `  • Use \`ticketId\` to search time entries for a specific ticket\n` +
+            `  • Add \`projectId\` to find time entries for a specific project\n` +
+            `  • Use \`resourceId\` to find time entries by a specific person\n` +
+            `  • Add date filters with \`dateFrom\` and \`dateTo\` (YYYY-MM-DD format)\n` +
+            `  • Use smaller \`pageSize\` parameter (current: ${pageSize})`
+          : this.generateSearchGuidance('timeentries', timeEntries.length, Math.round(JSON.stringify(content).length / 1024));
+
+        contentWithGuidance = [
+          ...content,
+          {
+            type: 'text',
+            text: `\n\n🔍 **Search Guidance**: ${guidanceMessage}`
+          }
+        ];
+      }
       
       return {
         content: contentWithGuidance,
