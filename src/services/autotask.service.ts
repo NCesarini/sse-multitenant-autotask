@@ -26,8 +26,20 @@ import {
   AutotaskQueryOptionsExtended
 } from '../types/autotask';
 import { McpServerConfig, AutotaskCredentials, TenantContext } from '../types/mcp';
-import { Logger } from '../utils/logger';
-import { LARGE_RESPONSE_THRESHOLDS } from '../utils/thresholds';
+import { Logger } from '../utils/logger'; 
+
+
+const LARGE_RESPONSE_THRESHOLDS = {
+  tickets: 100,        
+  companies: 200,     
+  contacts: 200,     
+  projects: 100,      
+  resources: 200,     
+  tasks: 100,          
+  timeentries: 200,    
+  default: 300,        
+  responseSizeKB: 200  
+};
 
 // New: Client pool management for multi-tenant support
 interface ClientPoolEntry {

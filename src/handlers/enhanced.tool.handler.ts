@@ -7,16 +7,24 @@ import { McpTool, McpToolResult } from '../types/mcp.js';
 import { AutotaskService } from '../services/autotask.service.js';
 import { Logger } from '../utils/logger.js';
 import { MappingService } from '../utils/mapping.service.js';
-import { AutotaskCredentials, TenantContext } from '../types/mcp.js';
-import { LARGE_RESPONSE_THRESHOLDS } from '../utils/thresholds.js';
+import { AutotaskCredentials, TenantContext } from '../types/mcp.js'; 
 
+export const LARGE_RESPONSE_THRESHOLDS = {
+  tickets: 100,        
+  companies: 200,     
+  contacts: 200,     
+  projects: 100,      
+  resources: 200,     
+  tasks: 100,          
+  timeentries: 200,    
+  default: 300,        
+  responseSizeKB: 200  
+};
 export class EnhancedAutotaskToolHandler {
   private autotaskService: AutotaskService;
   private mappingService: MappingService | null = null;
   private logger: Logger;
-
-  // Use shared thresholds from constants file
-  private static LARGE_RESPONSE_THRESHOLDS = LARGE_RESPONSE_THRESHOLDS;
+ 
 
   /**
    * Update the thresholds for large response guidance
@@ -42,16 +50,16 @@ export class EnhancedAutotaskToolHandler {
    *   responseSizeKB: 50
    * });
    */
-  public static updateLargeResponseThresholds(thresholds: Partial<typeof EnhancedAutotaskToolHandler.LARGE_RESPONSE_THRESHOLDS>): void {
-    Object.assign(EnhancedAutotaskToolHandler.LARGE_RESPONSE_THRESHOLDS, thresholds);
+  public static updateLargeResponseThresholds(thresholds: Partial<typeof LARGE_RESPONSE_THRESHOLDS>): void {
+    Object.assign(LARGE_RESPONSE_THRESHOLDS, thresholds);
   }
 
   /**
    * Get current threshold configuration
    * @returns Current threshold settings for all search types
    */
-  public static getLargeResponseThresholds(): typeof EnhancedAutotaskToolHandler.LARGE_RESPONSE_THRESHOLDS {
-    return { ...EnhancedAutotaskToolHandler.LARGE_RESPONSE_THRESHOLDS };
+  public static getLargeResponseThresholds(): typeof LARGE_RESPONSE_THRESHOLDS {
+    return { ...LARGE_RESPONSE_THRESHOLDS };
   }
 
   // Common tenant schema for all tools
@@ -105,16 +113,16 @@ export class EnhancedAutotaskToolHandler {
    * Check if response is large and add helpful guidance
    */
   private addLargeResponseGuidance(content: any[], resultCount: number, searchType: string): any[] {
-    const threshold = EnhancedAutotaskToolHandler.LARGE_RESPONSE_THRESHOLDS[
-      searchType as keyof typeof EnhancedAutotaskToolHandler.LARGE_RESPONSE_THRESHOLDS
-    ] || EnhancedAutotaskToolHandler.LARGE_RESPONSE_THRESHOLDS.default;
+    const threshold = LARGE_RESPONSE_THRESHOLDS[
+      searchType as keyof typeof LARGE_RESPONSE_THRESHOLDS
+    ] || LARGE_RESPONSE_THRESHOLDS.default;
     
     // Calculate approximate response size
     const responseText = JSON.stringify(content);
     const responseSizeKB = Math.round(responseText.length / 1024);
     
     // If result count is high or response size is large, add guidance
-    if (resultCount >= threshold || responseSizeKB > EnhancedAutotaskToolHandler.LARGE_RESPONSE_THRESHOLDS.responseSizeKB) {
+    if (resultCount >= threshold || responseSizeKB > LARGE_RESPONSE_THRESHOLDS.responseSizeKB) {
       const guidanceMessage = this.generateSearchGuidance(searchType, resultCount, responseSizeKB);
       
       // Add guidance as a separate content item
@@ -2674,7 +2682,7 @@ export class EnhancedAutotaskToolHandler {
       }];
 
       // Check if we're hitting the threshold limit and show guidance proactively
-      const threshold = EnhancedAutotaskToolHandler.LARGE_RESPONSE_THRESHOLDS.companies;
+      const threshold = LARGE_RESPONSE_THRESHOLDS.companies;
       const isHittingLimit = args.pageSize !== undefined && args.pageSize >= threshold;
       const shouldShowGuidance = isHittingLimit || enhancedCompanies.length >= threshold;
 
@@ -3028,7 +3036,7 @@ export class EnhancedAutotaskToolHandler {
       }];
 
       // Check if we're hitting the threshold limit and show guidance proactively
-      const threshold = EnhancedAutotaskToolHandler.LARGE_RESPONSE_THRESHOLDS.tickets;
+      const threshold = LARGE_RESPONSE_THRESHOLDS.tickets;
       const isHittingLimit = args.pageSize !== undefined && args.pageSize >= threshold;
       const shouldShowGuidance = isHittingLimit || enhancedTickets.length >= threshold;
 
@@ -3927,7 +3935,7 @@ export class EnhancedAutotaskToolHandler {
       }];
 
       // Check if we're hitting the threshold limit and show guidance proactively
-      const threshold = EnhancedAutotaskToolHandler.LARGE_RESPONSE_THRESHOLDS.timeentries;
+      const threshold = LARGE_RESPONSE_THRESHOLDS.timeentries;
       const isHittingLimit = pageSize !== undefined && pageSize >= threshold;
       const shouldShowGuidance = isHittingLimit || timeEntries.length >= threshold;
 
