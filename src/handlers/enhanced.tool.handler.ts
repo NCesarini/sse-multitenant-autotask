@@ -145,7 +145,9 @@ export class EnhancedAutotaskToolHandler {
     const suggestions: Record<string, string[]> = {
       tickets: [
         'Use `status` parameter to filter by ticket status (e.g., status: 1 for New, 5 for Complete)',
-        'Add `companyId` to search tickets for a specific company',
+        'Add `companyID` to search tickets for a specific company',
+        'Add `projectID` to search tickets for a specific project',
+        'Add `contractID` to search tickets for a specific contract',
         'Use `assignedResourceID` to find tickets assigned to specific person',
         'Try `searchTerm` with specific keywords from ticket title or number',
         'Use `pageSize` parameter to limit results (e.g., pageSize: 25)'
@@ -603,9 +605,17 @@ export class EnhancedAutotaskToolHandler {
                   type: 'number',
                   description: 'Filter by status ID'
                 },
-                companyId: {
+                companyID: {
                   type: 'number',
                   description: 'Filter by company ID'
+                },
+                projectID: {
+                  type: 'number',
+                  description: 'Filter by project ID'
+                },
+                contractID: {
+                  type: 'number',
+                  description: 'Filter by contract ID'
                 },
                 assignedResourceID: {
                   type: 'number',
@@ -982,11 +992,7 @@ export class EnhancedAutotaskToolHandler {
           ticketId: {
             type: 'number',
             description: 'Filter by ticket ID'
-          },
-          projectId: {
-            type: 'number',
-            description: 'Filter by project ID'
-          },
+          }, 
           resourceId: {
             type: 'number',
             description: 'Filter by resource ID'
@@ -2888,8 +2894,16 @@ export class EnhancedAutotaskToolHandler {
         options.status = args.status;
       }
       
-      if (typeof args.companyId === 'number') {
-        options.companyId = args.companyId;
+      if (typeof args.companyID === 'number') {
+        options.companyId = args.companyID;
+      }
+      
+      if (typeof args.projectID === 'number') {
+        options.projectId = args.projectID;
+      }
+      
+      if (typeof args.contractID === 'number') {
+        options.contractId = args.contractID;
       }
       
       if (typeof args.assignedResourceID === 'number') {
@@ -2952,6 +2966,26 @@ export class EnhancedAutotaskToolHandler {
             value: fallbackOptions.companyId
           });
           delete fallbackOptions.companyId;
+        }
+        
+        if (fallbackOptions.projectId !== undefined) {
+          if (!fallbackOptions.filter) fallbackOptions.filter = [];
+          fallbackOptions.filter.push({
+            op: 'eq',
+            field: 'projectID',
+            value: fallbackOptions.projectId
+          });
+          delete fallbackOptions.projectId;
+        }
+        
+        if (fallbackOptions.contractId !== undefined) {
+          if (!fallbackOptions.filter) fallbackOptions.filter = [];
+          fallbackOptions.filter.push({
+            op: 'eq',
+            field: 'contractID',
+            value: fallbackOptions.contractId
+          });
+          delete fallbackOptions.contractId;
         }
         
         if (fallbackOptions.assignedResourceID !== undefined) {
@@ -3045,7 +3079,9 @@ export class EnhancedAutotaskToolHandler {
         const guidanceMessage = isHittingLimit 
           ? `Requested ${args.pageSize} tickets (limit: ${threshold}). For more focused results, try:\n` +
             `  • Use \`status\` parameter to filter by ticket status (e.g., status: 1 for New, 5 for Complete)\n` +
-            `  • Add \`companyId\` to search tickets for a specific company\n` +
+            `  • Add \`companyID\` to search tickets for a specific company\n` +
+            `  • Add \`projectID\` to search tickets for a specific project\n` +
+            `  • Add \`contractID\` to search tickets for a specific contract\n` +
             `  • Use \`assignedResourceID\` to find tickets assigned to specific person\n` +
             `  • Try \`searchTerm\` with specific keywords from ticket title or number\n` +
             `  • Use smaller \`pageSize\` parameter (current: ${args.pageSize})`
