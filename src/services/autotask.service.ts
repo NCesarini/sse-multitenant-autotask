@@ -30,12 +30,12 @@ import { Logger } from '../utils/logger';
 
 
 const LARGE_RESPONSE_THRESHOLDS = {
-  tickets: 100,        
+  tickets: 50,        
   companies: 200,     
   contacts: 200,     
-  projects: 100,      
+  projects: 50,      
   resources: 200,     
-  tasks: 100,          
+  tasks: 50,          
   timeentries: 200,    
   default: 300,        
   responseSizeKB: 200  
