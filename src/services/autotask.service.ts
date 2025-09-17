@@ -979,25 +979,27 @@ export class AutotaskService {
       // Single request approach (always use this now with threshold limiting)
       const queryOptions = {
         filter: filters,
-        pageSize: requestedPageSize
+        pageSize: requestedPageSize,
+        MaxResults: requestedPageSize  // Add MaxResults for response size control
       };
 
-      this.logger.info('Threshold-limited request:', queryOptions);
+      this.logger.info('Making direct API call to Tickets/query with threshold-limited request:', queryOptions);
       
-      const result = await client.tickets.list(queryOptions);
-      const tickets = (result.data as AutotaskTicket[]) || [];
+      // Use direct POST call to Tickets/query instead of library method
+      const response = await (client as any).axios.post('/Tickets/query', queryOptions);
+      const tickets = (response.data?.items || []) as AutotaskTicket[];
       
-      // Log API call result
-      this.logger.info('📊 API Result for searchTickets', {
-        tenantId: tenantContext?.tenantId,
-        impersonationResourceId: tenantContext?.impersonationResourceId,
-        resultCount: tickets.length,
-        requestedPageSize: requestedPageSize,
-        actualFilterCount: filters.length,
-        apiEndpoint: 'client.tickets.list',
-        hasResultData: !!result.data,
-        wasLimited: isHittingLimit
-      });
+              // Log API call result
+        this.logger.info('📊 API Result for searchTickets', {
+          tenantId: tenantContext?.tenantId,
+          impersonationResourceId: tenantContext?.impersonationResourceId,
+          resultCount: tickets.length,
+          requestedPageSize: requestedPageSize,
+          actualFilterCount: filters.length,
+          apiEndpoint: 'Tickets/query',
+          hasResultData: !!response.data,
+          wasLimited: isHittingLimit
+        });
       
       const optimizedTickets = tickets.map(ticket => this.optimizeTicketDataAggressive(ticket));
       
@@ -1175,27 +1177,28 @@ export class AutotaskService {
       if (options.page) searchBody.page = options.page;
       if (options.pageSize) searchBody.pageSize = options.pageSize;
       
-      // Set pagination - TimeEntries API uses 'maxrecords' instead of 'pageSize'
+      // Set pagination - TimeEntries API uses both 'pageSize' and 'MaxResults' for proper limiting
       // Use threshold-based limiting to prevent oversized responses
       const THRESHOLD_LIMIT = LARGE_RESPONSE_THRESHOLDS.timeentries;
       
-      let finalMaxRecords = 25; // Default if not provided
+      let finalPageSize = 25; // Default if not provided
       let isHittingLimit = false;
       
       if (options.pageSize !== undefined) {
         const requestedSize = options.pageSize;
-        finalMaxRecords = Math.max(1, Math.min(requestedSize, THRESHOLD_LIMIT));
+        finalPageSize = Math.max(1, Math.min(requestedSize, THRESHOLD_LIMIT));
         isHittingLimit = requestedSize >= THRESHOLD_LIMIT;
         
-        this.logger.info(`⚙️ PageSize provided: ${requestedSize}, using maxrecords: ${finalMaxRecords}`);
+        this.logger.info(`⚙️ PageSize provided: ${requestedSize}, using pageSize: ${finalPageSize}`);
         
         if (isHittingLimit) {
           this.logger.info(`🔍 Request hits threshold limit (${THRESHOLD_LIMIT}), guidance should be shown`);
         }
       } else {
-        this.logger.info(`⚙️ No pageSize provided, using default maxrecords: ${finalMaxRecords}`);
+        this.logger.info(`⚙️ No pageSize provided, using default pageSize: ${finalPageSize}`);
       }
-      searchBody.maxrecords = finalMaxRecords;
+      searchBody.pageSize = finalPageSize;
+      searchBody.MaxResults = finalPageSize;  // Add MaxResults for response size control
 
       this.logger.info('Making direct API call to TimeEntries/query with body:', searchBody);
 
@@ -1317,22 +1320,30 @@ export class AutotaskService {
       if (options.sort) searchBody.sort = options.sort;
       if (options.page) searchBody.page = options.page;
       
-      // SMART PAGINATION: Use sensible defaults instead of fetching everything
+      // THRESHOLD-BASED PAGINATION: Use thresholds to prevent oversized responses
+      const THRESHOLD_LIMIT = LARGE_RESPONSE_THRESHOLDS.projects;
       const DEFAULT_PAGE_SIZE = 50; // Reasonable default for UI display
-      const MAX_PAGE_SIZE = 500; // API limit per request
-      const MAX_TOTAL_RESULTS = 2000; // Maximum total results to prevent huge responses
       
       let requestedPageSize = options.pageSize;
+      let isHittingLimit = false;
       
       // If no pageSize specified, use default
       if (!requestedPageSize) {
         requestedPageSize = DEFAULT_PAGE_SIZE;
         this.logger.info(`No pageSize specified, using default: ${DEFAULT_PAGE_SIZE}`);
+      } else {
+        // Cap at threshold limit to prevent oversized responses
+        const originalRequest = requestedPageSize;
+        requestedPageSize = Math.min(requestedPageSize, THRESHOLD_LIMIT);
+        isHittingLimit = originalRequest >= THRESHOLD_LIMIT;
+        
+        if (isHittingLimit) {
+          this.logger.info(`🔍 Projects request hits threshold limit (${THRESHOLD_LIMIT}), capped from ${originalRequest} to ${requestedPageSize}`);
+        }
       }
       
-      // Respect API limits and user preferences
-      const finalPageSize = Math.min(requestedPageSize, MAX_PAGE_SIZE, MAX_TOTAL_RESULTS);
-      searchBody.pageSize = finalPageSize;
+      searchBody.pageSize = requestedPageSize;
+      searchBody.MaxResults = requestedPageSize;  // Add MaxResults for response size control
 
       // Don't restrict fields - let the API return whatever is available
       // This avoids field availability issues across different Autotask instances
@@ -1476,22 +1487,30 @@ export class AutotaskService {
       if (options.sort) searchBody.sort = options.sort;
       if (options.page) searchBody.page = options.page;
       
-      // SMART PAGINATION: Use sensible defaults instead of fetching everything
+      // THRESHOLD-BASED PAGINATION: Use thresholds to prevent oversized responses
+      const THRESHOLD_LIMIT = LARGE_RESPONSE_THRESHOLDS.resources;
       const DEFAULT_PAGE_SIZE = 50; // Reasonable default for UI display
-      const MAX_PAGE_SIZE = 500; // API limit per request
-      const MAX_TOTAL_RESULTS = 2000; // Maximum total results to prevent huge responses
       
       let requestedPageSize = options.pageSize;
+      let isHittingLimit = false;
       
       // If no pageSize specified, use default
       if (!requestedPageSize) {
         requestedPageSize = DEFAULT_PAGE_SIZE;
         this.logger.info(`No pageSize specified, using default: ${DEFAULT_PAGE_SIZE}`);
+      } else {
+        // Cap at threshold limit to prevent oversized responses
+        const originalRequest = requestedPageSize;
+        requestedPageSize = Math.min(requestedPageSize, THRESHOLD_LIMIT);
+        isHittingLimit = originalRequest >= THRESHOLD_LIMIT;
+        
+        if (isHittingLimit) {
+          this.logger.info(`🔍 Resources request hits threshold limit (${THRESHOLD_LIMIT}), capped from ${originalRequest} to ${requestedPageSize}`);
+        }
       }
       
-      // Respect API limits and user preferences
-      const finalPageSize = Math.min(requestedPageSize, MAX_PAGE_SIZE, MAX_TOTAL_RESULTS);
-      searchBody.pageSize = finalPageSize;
+      searchBody.pageSize = requestedPageSize;
+      searchBody.MaxResults = requestedPageSize;  // Add MaxResults for response size control
 
       this.logger.info('Making direct API call to Resources/query with body:', {
         url: '/Resources/query',
@@ -1808,12 +1827,31 @@ export class AutotaskService {
       // Add other search parameters
       if (options.sort) searchBody.sort = options.sort;
       if (options.page) searchBody.page = options.page;
-      if (options.pageSize) searchBody.pageSize = options.pageSize;
        
-      // Set default pagination and field limits
-      const pageSize = options.pageSize || 25;
-      const finalPageSize = pageSize > 100 ? 100 : pageSize;
-      searchBody.pageSize = finalPageSize;
+      // THRESHOLD-BASED PAGINATION: Use thresholds to prevent oversized responses
+      const THRESHOLD_LIMIT = LARGE_RESPONSE_THRESHOLDS.default; // Use default threshold for invoices
+      const DEFAULT_PAGE_SIZE = 25; // Reasonable default for UI display
+      
+      let requestedPageSize = options.pageSize;
+      let isHittingLimit = false;
+      
+      // If no pageSize specified, use default
+      if (!requestedPageSize) {
+        requestedPageSize = DEFAULT_PAGE_SIZE;
+        this.logger.info(`No pageSize specified, using default: ${DEFAULT_PAGE_SIZE}`);
+      } else {
+        // Cap at threshold limit to prevent oversized responses
+        const originalRequest = requestedPageSize;
+        requestedPageSize = Math.min(requestedPageSize, THRESHOLD_LIMIT);
+        isHittingLimit = originalRequest >= THRESHOLD_LIMIT;
+        
+        if (isHittingLimit) {
+          this.logger.info(`🔍 Invoices request hits threshold limit (${THRESHOLD_LIMIT}), capped from ${originalRequest} to ${requestedPageSize}`);
+        }
+      }
+      
+      searchBody.pageSize = requestedPageSize;
+      searchBody.MaxResults = requestedPageSize;  // Add MaxResults for response size control
 
       this.logger.info('Making direct POST request to Invoices/query endpoint:', {
         url: '/Invoices/query',
@@ -1984,12 +2022,31 @@ export class AutotaskService {
       // Add other search parameters
       if (options.sort) searchBody.sort = options.sort;
       if (options.page) searchBody.page = options.page;
-      if (options.pageSize) searchBody.pageSize = options.pageSize;
       
-      // Set default pagination
-      const pageSize = options.pageSize || 25;
-      const finalPageSize = pageSize > 100 ? 100 : pageSize;
-      searchBody.pageSize = finalPageSize;
+      // THRESHOLD-BASED PAGINATION: Use thresholds to prevent oversized responses
+      const THRESHOLD_LIMIT = LARGE_RESPONSE_THRESHOLDS.tasks;
+      const DEFAULT_PAGE_SIZE = 25; // Reasonable default for UI display
+      
+      let requestedPageSize = options.pageSize;
+      let isHittingLimit = false;
+      
+      // If no pageSize specified, use default
+      if (!requestedPageSize) {
+        requestedPageSize = DEFAULT_PAGE_SIZE;
+        this.logger.info(`No pageSize specified, using default: ${DEFAULT_PAGE_SIZE}`);
+      } else {
+        // Cap at threshold limit to prevent oversized responses
+        const originalRequest = requestedPageSize;
+        requestedPageSize = Math.min(requestedPageSize, THRESHOLD_LIMIT);
+        isHittingLimit = originalRequest >= THRESHOLD_LIMIT;
+        
+        if (isHittingLimit) {
+          this.logger.info(`🔍 Tasks request hits threshold limit (${THRESHOLD_LIMIT}), capped from ${originalRequest} to ${requestedPageSize}`);
+        }
+      }
+      
+      searchBody.pageSize = requestedPageSize;
+      searchBody.MaxResults = requestedPageSize;  // Add MaxResults for response size control
 
       this.logger.info('Making direct API call to Tasks/query with body:', searchBody);
 
@@ -2243,7 +2300,8 @@ export class AutotaskService {
         filter: [
           { field: 'ticketID', op: 'eq', value: ticketId }
         ],
-        pageSize: options.pageSize || 25
+        pageSize: options.pageSize || 25,
+        MaxResults: options.pageSize || 25  // Add MaxResults for response size control
       };
 
       this.logger.info('Making direct API call to TicketNotes/query with body:', searchBody);
@@ -2314,7 +2372,8 @@ export class AutotaskService {
         filter: [
           { field: 'projectID', op: 'eq', value: projectId }
         ],
-        pageSize: options.pageSize || 25
+        pageSize: options.pageSize || 25,
+        MaxResults: options.pageSize || 25  // Add MaxResults for response size control
       };
 
       this.logger.info('Making direct API call to ProjectNotes/query with body:', searchBody);
@@ -2385,7 +2444,8 @@ export class AutotaskService {
         filter: [
           { field: 'companyID', op: 'eq', value: companyId }
         ],
-        pageSize: options.pageSize || 25
+        pageSize: options.pageSize || 25,
+        MaxResults: options.pageSize || 25  // Add MaxResults for response size control
       };
 
       this.logger.info('Making direct API call to CompanyNotes/query with body:', searchBody);
@@ -2457,7 +2517,8 @@ export class AutotaskService {
         filter: [
           { field: 'parentID', op: 'eq', value: ticketId }
         ],
-        pageSize: options.pageSize || 10
+        pageSize: options.pageSize || 10,
+        MaxResults: options.pageSize || 10  // Add MaxResults for response size control
       };
 
       this.logger.info('Making direct API call to TicketAttachments/query with body:', searchBody);
@@ -2528,7 +2589,8 @@ export class AutotaskService {
       
       const searchBody = {
         filter: filters,
-        pageSize: options.pageSize || 25
+        pageSize: options.pageSize || 25,
+        MaxResults: options.pageSize || 25  // Add MaxResults for response size control
       };
 
       this.logger.info('Making direct API call to ExpenseReports/query with body:', searchBody);
@@ -2616,7 +2678,8 @@ export class AutotaskService {
         filter: [
           { field: 'expenseReportID', op: 'eq', value: expenseReportId }
         ],
-        pageSize: options.pageSize || 25
+        pageSize: options.pageSize || 25,
+        MaxResults: options.pageSize || 25  // Add MaxResults for response size control
       };
 
       this.logger.info('Making direct API call to ExpenseItems/query with body:', searchBody);

@@ -110,6 +110,150 @@ export class EnhancedAutotaskToolHandler {
   }
 
   /**
+   * Common validation helper for ID parameters
+   */
+  private validateId(id: any, entityName: string): number {
+    if (!id || typeof id !== 'number') {
+      throw new Error(`${entityName} ID is required and must be a number`);
+    }
+    return id;
+  }
+
+
+
+  /**
+   * Helper to create "not found" response
+   */
+  private createNotFoundResponse(entityName: string, id: number | string | Record<string, any>, parentInfo?: string): McpToolResult {
+    let idText: string;
+    let location = parentInfo ? ` ${parentInfo}` : '';
+    
+    if (typeof id === 'object') {
+      // Handle object IDs like {ticketId: 123, noteId: 456}
+      const keys = Object.keys(id);
+      if (keys.length === 2) {
+        const [parentKey, childKey] = keys;
+        idText = `${childKey} ${id[childKey]}`;
+        location = ` for ${parentKey} ${id[parentKey]}`;
+      } else {
+        idText = JSON.stringify(id);
+      }
+    } else {
+      idText = String(id);
+    }
+    
+    return {
+      content: [{
+        type: 'text',
+        text: `${entityName} with ID ${idText} not found${location}`
+      }],
+      isError: false
+    };
+  }
+
+  /**
+   * Helper to create success response with JSON data
+   */
+  private createDataResponse(data: any): McpToolResult {
+    return {
+      content: [{
+        type: 'text',
+        text: JSON.stringify(data, null, 2)
+      }],
+      isError: false
+    };
+  }
+
+  /**
+   * Helper to create creation success response
+   */
+  private createCreationResponse(entityName: string, id: number | string, parentInfo?: string): McpToolResult {
+    const location = parentInfo ? ` ${parentInfo}` : '';
+    return {
+      content: [{
+        type: 'text',
+        text: `${entityName} created successfully with ID: ${id}${location}`
+      }],
+      isError: false
+    };
+  }
+
+  /**
+   * Helper to create update success response
+   */
+  private createUpdateResponse(entityName: string, id: number | string, parentInfo?: string): McpToolResult {
+    const location = parentInfo ? ` ${parentInfo}` : '';
+    return {
+      content: [{
+        type: 'text',
+        text: `${entityName} ${id} updated successfully${location}`
+      }],
+      isError: false
+    };
+  }
+
+  /**
+   * Helper to validate update data has at least one field
+   */
+  private validateUpdateData(updateData: Record<string, any>, entityName: string): void {
+    if (Object.keys(updateData).length === 0) {
+      throw new Error(`At least one field to update must be provided for ${entityName}`);
+    }
+  }
+
+  /**
+   * Generic entity getter method
+   */
+  private async getEntity<T>(
+    id: number,
+    entityName: string,
+    getMethod: (id: number, tenantContext?: TenantContext) => Promise<T | null>,
+    tenantContext?: TenantContext
+  ): Promise<McpToolResult> {
+    try {
+      const validId = this.validateId(id, entityName);
+      const entity = await getMethod(validId, tenantContext);
+      
+      if (!entity) {
+        return this.createNotFoundResponse(entityName, validId);
+      }
+
+      return this.createDataResponse(entity);
+    } catch (error) {
+      throw new Error(`Failed to get ${entityName.toLowerCase()}: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+
+
+  /**
+   * Generic update method
+   */
+  private async updateEntity(
+    args: Record<string, any>,
+    entityName: string,
+    idField: string,
+    updateMethod: (id: number, data: Record<string, any>, tenantContext?: TenantContext) => Promise<void>,
+    tenantContext?: TenantContext
+  ): Promise<McpToolResult> {
+    try {
+      const id = this.validateId(args[idField], entityName);
+      const updateData = { ...args };
+      delete updateData[idField]; // Remove ID from update data
+      
+      this.validateUpdateData(updateData, entityName);
+      
+      await updateMethod(id, updateData, tenantContext);
+      
+      return this.createUpdateResponse(entityName, id);
+    } catch (error) {
+      throw new Error(`Failed to update ${entityName.toLowerCase()}: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+
+
+  /**
    * Check if response is large and add helpful guidance
    */
   private addLargeResponseGuidance(content: any[], resultCount: number, searchType: string): any[] {
@@ -2724,34 +2868,20 @@ export class EnhancedAutotaskToolHandler {
       
       const companyId = await this.autotaskService.createCompany(companyData, tenantContext);
       
-      return {
-        content: [{
-          type: 'text',
-          text: `Company created successfully with ID: ${companyId}`
-        }]
-      };
+      return this.createCreationResponse('company', companyId);
     } catch (error) {
       throw new Error(`Failed to create company: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   }
 
   private async updateCompany(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
-    try {
-      const companyData = { ...args };
-      const companyId = companyData.id;
-      delete companyData.id; // Remove ID from data for update
-
-      await this.autotaskService.updateCompany(companyId, companyData, tenantContext);
-
-      return {
-        content: [{
-          type: 'text',
-          text: `Company updated successfully with ID: ${companyId}`
-        }]
-      };
-    } catch (error) {
-      throw new Error(`Failed to update company: ${error instanceof Error ? error.message : 'Unknown error'}`);
-    }
+    return this.updateEntity(
+      args,
+      'Company',
+      'id',
+      (id, data, ctx) => this.autotaskService.updateCompany(id, data, ctx),
+      tenantContext
+    );
   }
 
   private async searchContacts(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
@@ -2851,34 +2981,20 @@ export class EnhancedAutotaskToolHandler {
       
       const contactId = await this.autotaskService.createContact(contactData, tenantContext);
       
-      return {
-        content: [{
-          type: 'text',
-          text: `Contact created successfully with ID: ${contactId}`
-        }]
-      };
+      return this.createCreationResponse('contact', contactId);
     } catch (error) {
       throw new Error(`Failed to create contact: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   }
 
   private async updateContact(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
-    try {
-      const contactData = { ...args };
-      const contactId = contactData.id;
-      delete contactData.id; // Remove ID from data for update
-
-      await this.autotaskService.updateContact(contactId, contactData, tenantContext);
-
-      return {
-        content: [{
-          type: 'text',
-          text: `Contact updated successfully with ID: ${contactId}`
-        }]
-      };
-    } catch (error) {
-      throw new Error(`Failed to update contact: ${error instanceof Error ? error.message : 'Unknown error'}`);
-    }
+    return this.updateEntity(
+      args,
+      'Contact',
+      'id',
+      (id, data, ctx) => this.autotaskService.updateContact(id, data, ctx),
+      tenantContext
+    );
   }
 
   private async searchTickets(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
@@ -3110,12 +3226,7 @@ export class EnhancedAutotaskToolHandler {
       
       const ticketId = await this.autotaskService.createTicket(ticketData, tenantContext);
       
-      return {
-        content: [{
-          type: 'text',
-          text: `Ticket created successfully with ID: ${ticketId}`
-        }]
-      };
+      return this.createCreationResponse('ticket', ticketId);
     } catch (error) {
       throw new Error(`Failed to create ticket: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
@@ -3129,12 +3240,7 @@ export class EnhancedAutotaskToolHandler {
 
       await this.autotaskService.updateTicket(ticketId, ticketData, tenantContext);
 
-      return {
-        content: [{
-          type: 'text',
-          text: `Ticket updated successfully with ID: ${ticketId}`
-        }]
-      };
+      return this.createUpdateResponse('ticket', ticketId);
     } catch (error) {
       throw new Error(`Failed to update ticket: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
@@ -3146,12 +3252,7 @@ export class EnhancedAutotaskToolHandler {
       
       const timeEntryId = await this.autotaskService.createTimeEntry(timeEntryData, tenantContext);
       
-      return {
-        content: [{
-          type: 'text',
-          text: `Time entry created successfully with ID: ${timeEntryId}`
-        }]
-      };
+      return this.createCreationResponse('time entry', timeEntryId);
     } catch (error) {
       throw new Error(`Failed to create time entry: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
@@ -3343,12 +3444,7 @@ export class EnhancedAutotaskToolHandler {
       const mappingService = await this.getMappingService();
       const companyName = await mappingService.getCompanyName(companyId);
       
-      return {
-        content: [{
-          type: 'text',
-          text: `Company name for ID ${companyId}: ${companyName || 'Unknown'}`
-        }]
-      };
+      return this.createDataResponse({ companyName });
     } catch (error) {
       throw new Error(`Failed to get company name: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
@@ -3364,12 +3460,7 @@ export class EnhancedAutotaskToolHandler {
       const mappingService = await this.getMappingService();
       const resourceName = await mappingService.getResourceName(resourceId);
       
-      return {
-        content: [{
-          type: 'text',
-          text: `Resource name for ID ${resourceId}: ${resourceName || 'Unknown'}`
-        }]
-      };
+      return this.createDataResponse({ resourceName });
     } catch (error) {
       throw new Error(`Failed to get resource name: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
@@ -3380,20 +3471,7 @@ export class EnhancedAutotaskToolHandler {
       const mappingService = await this.getMappingService();
       const stats = mappingService.getCacheStats();
       
-      return {
-        content: [{
-          type: 'text',
-          text: `Mapping Cache Statistics:\n\n` +
-                `Companies:\n` +
-                `  - Count: ${stats.companies.count}\n` +
-                `  - Last Updated: ${stats.companies.lastUpdated}\n` +
-                `  - Is Valid: ${stats.companies.isValid}\n\n` +
-                `Resources:\n` +
-                `  - Count: ${stats.resources.count}\n` +
-                `  - Last Updated: ${stats.resources.lastUpdated}\n` +
-                `  - Is Valid: ${stats.resources.isValid}`
-        }]
-      };
+      return this.createDataResponse({ stats });
     } catch (error) {
       throw new Error(`Failed to get mapping cache stats: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
@@ -3404,12 +3482,7 @@ export class EnhancedAutotaskToolHandler {
       const mappingService = await this.getMappingService();
       mappingService.clearCache();
       
-      return {
-        content: [{
-          type: 'text',
-          text: 'Mapping cache cleared successfully.'
-        }]
-      };
+      return this.createDataResponse({ message: 'Mapping cache cleared successfully.' });
     } catch (error) {
       throw new Error(`Failed to clear mapping cache: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
@@ -3420,12 +3493,7 @@ export class EnhancedAutotaskToolHandler {
       const mappingService = await this.getMappingService();
       await mappingService.preloadCaches();
       
-      return {
-        content: [{
-          type: 'text',
-          text: 'Mapping cache preloaded successfully.'
-        }]
-      };
+      return this.createDataResponse({ message: 'Mapping cache preloaded successfully.' });
     } catch (error) {
       throw new Error(`Failed to preload mapping cache: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
@@ -3603,7 +3671,8 @@ export class EnhancedAutotaskToolHandler {
           content: [{
             type: 'text',
             text: message
-          }]
+          }],
+          isError: false
         };
       } else {
         const message = tenantContext
@@ -3639,67 +3708,21 @@ export class EnhancedAutotaskToolHandler {
   // ===================================
 
   private async getCompany(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
-    try {
-      const { id } = args;
-      
-      if (!id || typeof id !== 'number') {
-        throw new Error('Company ID is required and must be a number');
-      }
-
-      const company = await this.autotaskService.getCompany(id, tenantContext);
-      
-      if (!company) {
-        return {
-          content: [{
-            type: 'text',
-            text: `Company with ID ${id} not found`
-          }],
-          isError: false
-        };
-      }
-
-      return {
-        content: [{
-          type: 'text',
-          text: JSON.stringify(company, null, 2)
-        }],
-        isError: false
-      };
-    } catch (error) {
-      throw new Error(`Failed to get company: ${error instanceof Error ? error.message : 'Unknown error'}`);
-    }
+    return this.getEntity(
+      args.id,
+      'Company',
+      (id, ctx) => this.autotaskService.getCompany(id, ctx),
+      tenantContext
+    );
   }
 
   private async getContact(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
-    try {
-      const { id } = args;
-      
-      if (!id || typeof id !== 'number') {
-        throw new Error('Contact ID is required and must be a number');
-      }
-
-      const contact = await this.autotaskService.getContact(id, tenantContext);
-      
-      if (!contact) {
-        return {
-          content: [{
-            type: 'text',
-            text: `Contact with ID ${id} not found`
-          }],
-          isError: false
-        };
-      }
-
-      return {
-        content: [{
-          type: 'text',
-          text: JSON.stringify(contact, null, 2)
-        }],
-        isError: false
-      };
-    } catch (error) {
-      throw new Error(`Failed to get contact: ${error instanceof Error ? error.message : 'Unknown error'}`);
-    }
+    return this.getEntity(
+      args.id,
+      'Contact',
+      (id, ctx) => this.autotaskService.getContact(id, ctx),
+      tenantContext
+    );
   }
 
   private async getTicket(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
@@ -3713,22 +3736,10 @@ export class EnhancedAutotaskToolHandler {
       const ticket = await this.autotaskService.getTicket(id, fullDetails, tenantContext);
       
       if (!ticket) {
-        return {
-          content: [{
-            type: 'text',
-            text: `Ticket with ID ${id} not found`
-          }],
-          isError: false
-        };
+        return this.createNotFoundResponse('ticket', id);
       }
 
-      return {
-        content: [{
-          type: 'text',
-          text: JSON.stringify(ticket, null, 2)
-        }],
-        isError: false
-      };
+      return this.createDataResponse(ticket);
     } catch (error) {
       throw new Error(`Failed to get ticket: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
@@ -3745,89 +3756,31 @@ export class EnhancedAutotaskToolHandler {
       const ticket = await this.autotaskService.getTicketByNumber(ticketNumber, fullDetails, tenantContext);
       
       if (!ticket) {
-        return {
-          content: [{
-            type: 'text',
-            text: `Ticket with number ${ticketNumber} not found`
-          }],
-          isError: false
-        };
+        return this.createNotFoundResponse('ticket', ticketNumber);
       }
 
-      return {
-        content: [{
-          type: 'text',
-          text: JSON.stringify(ticket, null, 2)
-        }],
-        isError: false
-      };
+      return this.createDataResponse(ticket);
     } catch (error) {
       throw new Error(`Failed to get ticket by number: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   }
 
   private async getProject(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
-    try {
-      const { id } = args;
-      
-      if (!id || typeof id !== 'number') {
-        throw new Error('Project ID is required and must be a number');
-      }
-
-      const project = await this.autotaskService.getProject(id, tenantContext);
-      
-      if (!project) {
-        return {
-          content: [{
-            type: 'text',
-            text: `Project with ID ${id} not found`
-          }],
-          isError: false
-        };
-      }
-
-      return {
-        content: [{
-          type: 'text',
-          text: JSON.stringify(project, null, 2)
-        }],
-        isError: false
-      };
-    } catch (error) {
-      throw new Error(`Failed to get project: ${error instanceof Error ? error.message : 'Unknown error'}`);
-    }
+    return this.getEntity(
+      args.id,
+      'Project',
+      (id, ctx) => this.autotaskService.getProject(id, ctx),
+      tenantContext
+    );
   }
 
   private async getResource(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
-    try {
-      const { id } = args;
-      
-      if (!id || typeof id !== 'number') {
-        throw new Error('Resource ID is required and must be a number');
-      }
-
-      const resource = await this.autotaskService.getResource(id, tenantContext);
-      
-      if (!resource) {
-        return {
-          content: [{
-            type: 'text',
-            text: `Resource with ID ${id} not found`
-          }],
-          isError: false
-        };
-      }
-
-      return {
-        content: [{
-          type: 'text',
-          text: JSON.stringify(resource, null, 2)
-        }],
-        isError: false
-      };
-    } catch (error) {
-      throw new Error(`Failed to get resource: ${error instanceof Error ? error.message : 'Unknown error'}`);
-    }
+    return this.getEntity(
+      args.id,
+      'Resource',
+      (id, ctx) => this.autotaskService.getResource(id, ctx),
+      tenantContext
+    );
   }
 
   private async createProject(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
@@ -3862,13 +3815,7 @@ export class EnhancedAutotaskToolHandler {
 
       const projectId = await this.autotaskService.createProject(projectData, tenantContext);
       
-      return {
-        content: [{
-          type: 'text',
-          text: `Project created successfully with ID: ${projectId}`
-        }],
-        isError: false
-      };
+      return this.createCreationResponse('project', projectId);
     } catch (error) {
       throw new Error(`Failed to create project: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
@@ -3907,13 +3854,7 @@ export class EnhancedAutotaskToolHandler {
 
       await this.autotaskService.updateProject(id, updateData, tenantContext);
       
-      return {
-        content: [{
-          type: 'text',
-          text: `Project ${id} updated successfully`
-        }],
-        isError: false
-      };
+      return this.createUpdateResponse('project', id);
     } catch (error) {
       throw new Error(`Failed to update project: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
@@ -4015,22 +3956,10 @@ export class EnhancedAutotaskToolHandler {
       const timeEntry = await this.autotaskService.getTimeEntry(id, tenantContext);
       
       if (!timeEntry) {
-        return {
-          content: [{
-            type: 'text',
-            text: `Time entry with ID ${id} not found`
-          }],
-          isError: false
-        };
+        return this.createNotFoundResponse('time entry', id);
       }
 
-      return {
-        content: [{
-          type: 'text',
-          text: JSON.stringify(timeEntry, null, 2)
-        }],
-        isError: false
-      };
+      return this.createDataResponse(timeEntry);
     } catch (error) {
       throw new Error(`Failed to get time entry: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
@@ -4103,22 +4032,10 @@ export class EnhancedAutotaskToolHandler {
       const task = await this.autotaskService.getTask(id, tenantContext);
       
       if (!task) {
-        return {
-          content: [{
-            type: 'text',
-            text: `Task with ID ${id} not found`
-          }],
-          isError: false
-        };
+        return this.createNotFoundResponse('task', id);
       }
 
-      return {
-        content: [{
-          type: 'text',
-          text: JSON.stringify(task, null, 2)
-        }],
-        isError: false
-      };
+      return this.createDataResponse(task);
     } catch (error) {
       throw new Error(`Failed to get task: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
@@ -4156,13 +4073,7 @@ export class EnhancedAutotaskToolHandler {
 
       const taskId = await this.autotaskService.createTask(taskData, tenantContext);
       
-      return {
-        content: [{
-          type: 'text',
-          text: `Task created successfully with ID: ${taskId}`
-        }],
-        isError: false
-      };
+      return this.createCreationResponse('task', taskId);
     } catch (error) {
       throw new Error(`Failed to create task: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
@@ -4203,13 +4114,7 @@ export class EnhancedAutotaskToolHandler {
 
       await this.autotaskService.updateTask(id, updateData, tenantContext);
       
-      return {
-        content: [{
-          type: 'text',
-          text: `Task ${id} updated successfully`
-        }],
-        isError: false
-      };
+      return this.createUpdateResponse('task', id);
     } catch (error) {
       throw new Error(`Failed to update task: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
@@ -4233,13 +4138,7 @@ export class EnhancedAutotaskToolHandler {
 
       const notes = await this.autotaskService.searchTicketNotes(ticketId, queryOptions, tenantContext);
       
-      return {
-        content: [{
-          type: 'text',
-          text: JSON.stringify(notes, null, 2)
-        }],
-        isError: false
-      };
+      return this.createDataResponse(notes);
     } catch (error) {
       throw new Error(`Failed to search ticket notes: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
@@ -4260,22 +4159,10 @@ export class EnhancedAutotaskToolHandler {
       const note = await this.autotaskService.getTicketNote(ticketId, noteId, tenantContext);
       
       if (!note) {
-        return {
-          content: [{
-            type: 'text',
-            text: `Ticket note with ID ${noteId} not found for ticket ${ticketId}`
-          }],
-          isError: false
-        };
+        return this.createNotFoundResponse('ticket note', { ticketId, noteId });
       }
 
-      return {
-        content: [{
-          type: 'text',
-          text: JSON.stringify(note, null, 2)
-        }],
-        isError: false
-      };
+      return this.createDataResponse(note);
     } catch (error) {
       throw new Error(`Failed to get ticket note: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
@@ -4302,13 +4189,7 @@ export class EnhancedAutotaskToolHandler {
 
       const noteId = await this.autotaskService.createTicketNote(ticketId, noteData, tenantContext);
       
-      return {
-        content: [{
-          type: 'text',
-          text: `Ticket note created successfully with ID: ${noteId}`
-        }],
-        isError: false
-      };
+      return this.createCreationResponse('ticket note', noteId);
     } catch (error) {
       throw new Error(`Failed to create ticket note: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
@@ -4328,13 +4209,7 @@ export class EnhancedAutotaskToolHandler {
 
       const notes = await this.autotaskService.searchProjectNotes(projectId, queryOptions, tenantContext);
       
-      return {
-        content: [{
-          type: 'text',
-          text: JSON.stringify(notes, null, 2)
-        }],
-        isError: false
-      };
+      return this.createDataResponse(notes);
     } catch (error) {
       throw new Error(`Failed to search project notes: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
@@ -4355,22 +4230,10 @@ export class EnhancedAutotaskToolHandler {
       const note = await this.autotaskService.getProjectNote(projectId, noteId, tenantContext);
       
       if (!note) {
-        return {
-          content: [{
-            type: 'text',
-            text: `Project note with ID ${noteId} not found for project ${projectId}`
-          }],
-          isError: false
-        };
+        return this.createNotFoundResponse('project note', { projectId, noteId });
       }
 
-      return {
-        content: [{
-          type: 'text',
-          text: JSON.stringify(note, null, 2)
-        }],
-        isError: false
-      };
+      return this.createDataResponse(note);
     } catch (error) {
       throw new Error(`Failed to get project note: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
@@ -4397,13 +4260,7 @@ export class EnhancedAutotaskToolHandler {
 
       const noteId = await this.autotaskService.createProjectNote(projectId, noteData, tenantContext);
       
-      return {
-        content: [{
-          type: 'text',
-          text: `Project note created successfully with ID: ${noteId}`
-        }],
-        isError: false
-      };
+      return this.createCreationResponse('project note', noteId);
     } catch (error) {
       throw new Error(`Failed to create project note: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
@@ -4423,13 +4280,7 @@ export class EnhancedAutotaskToolHandler {
 
       const notes = await this.autotaskService.searchCompanyNotes(companyId, queryOptions, tenantContext);
       
-      return {
-        content: [{
-          type: 'text',
-          text: JSON.stringify(notes, null, 2)
-        }],
-        isError: false
-      };
+      return this.createDataResponse(notes);
     } catch (error) {
       throw new Error(`Failed to search company notes: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
@@ -4450,22 +4301,10 @@ export class EnhancedAutotaskToolHandler {
       const note = await this.autotaskService.getCompanyNote(companyId, noteId, tenantContext);
       
       if (!note) {
-        return {
-          content: [{
-            type: 'text',
-            text: `Company note with ID ${noteId} not found for company ${companyId}`
-          }],
-          isError: false
-        };
+        return this.createNotFoundResponse('company note', { companyId, noteId });
       }
 
-      return {
-        content: [{
-          type: 'text',
-          text: JSON.stringify(note, null, 2)
-        }],
-        isError: false
-      };
+      return this.createDataResponse(note);
     } catch (error) {
       throw new Error(`Failed to get company note: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
@@ -4492,13 +4331,7 @@ export class EnhancedAutotaskToolHandler {
 
       const noteId = await this.autotaskService.createCompanyNote(companyId, noteData, tenantContext);
       
-      return {
-        content: [{
-          type: 'text',
-          text: `Company note created successfully with ID: ${noteId}`
-        }],
-        isError: false
-      };
+      return this.createCreationResponse('company note', noteId);
     } catch (error) {
       throw new Error(`Failed to create company note: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
@@ -4522,13 +4355,7 @@ export class EnhancedAutotaskToolHandler {
 
       const attachments = await this.autotaskService.searchTicketAttachments(ticketId, queryOptions, tenantContext);
       
-      return {
-        content: [{
-          type: 'text',
-          text: JSON.stringify(attachments, null, 2)
-        }],
-        isError: false
-      };
+      return this.createDataResponse(attachments);
     } catch (error) {
       throw new Error(`Failed to search ticket attachments: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
@@ -4549,22 +4376,10 @@ export class EnhancedAutotaskToolHandler {
       const attachment = await this.autotaskService.getTicketAttachment(ticketId, attachmentId, includeData, tenantContext);
       
       if (!attachment) {
-        return {
-          content: [{
-            type: 'text',
-            text: `Ticket attachment with ID ${attachmentId} not found for ticket ${ticketId}`
-          }],
-          isError: false
-        };
+        return this.createNotFoundResponse('ticket attachment', { ticketId, attachmentId });
       }
 
-      return {
-        content: [{
-          type: 'text',
-          text: JSON.stringify(attachment, null, 2)
-        }],
-        isError: false
-      };
+      return this.createDataResponse(attachment);
     } catch (error) {
       throw new Error(`Failed to get ticket attachment: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
@@ -4585,22 +4400,10 @@ export class EnhancedAutotaskToolHandler {
       const contract = await this.autotaskService.getContract(id, tenantContext);
       
       if (!contract) {
-        return {
-          content: [{
-            type: 'text',
-            text: `Contract with ID ${id} not found`
-          }],
-          isError: false
-        };
+        return this.createNotFoundResponse('contract', id);
       }
 
-      return {
-        content: [{
-          type: 'text',
-          text: JSON.stringify(contract, null, 2)
-        }],
-        isError: false
-      };
+      return this.createDataResponse(contract);
     } catch (error) {
       throw new Error(`Failed to get contract: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
@@ -4641,13 +4444,7 @@ export class EnhancedAutotaskToolHandler {
 
       const contracts = await this.autotaskService.searchContracts(queryOptions, tenantContext);
       
-      return {
-        content: [{
-          type: 'text',
-          text: JSON.stringify(contracts, null, 2)
-        }],
-        isError: false
-      };
+      return this.createDataResponse(contracts);
     } catch (error) {
       throw new Error(`Failed to search contracts: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
@@ -4664,22 +4461,10 @@ export class EnhancedAutotaskToolHandler {
       const invoice = await this.autotaskService.getInvoice(id, tenantContext);
       
       if (!invoice) {
-        return {
-          content: [{
-            type: 'text',
-            text: `Invoice with ID ${id} not found`
-          }],
-          isError: false
-        };
+        return this.createNotFoundResponse('invoice', id);
       }
 
-      return {
-        content: [{
-          type: 'text',
-          text: JSON.stringify(invoice, null, 2)
-        }],
-        isError: false
-      };
+      return this.createDataResponse(invoice);
     } catch (error) {
       throw new Error(`Failed to get invoice: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
@@ -4718,13 +4503,7 @@ export class EnhancedAutotaskToolHandler {
 
       const invoices = await this.autotaskService.searchInvoices(queryOptions, tenantContext);
       
-      return {
-        content: [{
-          type: 'text',
-          text: JSON.stringify(invoices, null, 2)
-        }],
-        isError: false
-      };
+      return this.createDataResponse(invoices);
     } catch (error) {
       throw new Error(`Failed to search invoices: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
@@ -4741,22 +4520,10 @@ export class EnhancedAutotaskToolHandler {
       const quote = await this.autotaskService.getQuote(id, tenantContext);
       
       if (!quote) {
-        return {
-          content: [{
-            type: 'text',
-            text: `Quote with ID ${id} not found`
-          }],
-          isError: false
-        };
+        return this.createNotFoundResponse('quote', id);
       }
 
-      return {
-        content: [{
-          type: 'text',
-          text: JSON.stringify(quote, null, 2)
-        }],
-        isError: false
-      };
+      return this.createDataResponse(quote);
     } catch (error) {
       throw new Error(`Failed to get quote: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
@@ -4797,13 +4564,7 @@ export class EnhancedAutotaskToolHandler {
 
       const quotes = await this.autotaskService.searchQuotes(queryOptions, tenantContext);
       
-      return {
-        content: [{
-          type: 'text',
-          text: JSON.stringify(quotes, null, 2)
-        }],
-        isError: false
-      };
+      return this.createDataResponse(quotes);
     } catch (error) {
       throw new Error(`Failed to search quotes: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
@@ -4841,13 +4602,7 @@ export class EnhancedAutotaskToolHandler {
 
       const quoteId = await this.autotaskService.createQuote(quoteData, tenantContext);
       
-      return {
-        content: [{
-          type: 'text',
-          text: `Quote created successfully with ID: ${quoteId}`
-        }],
-        isError: false
-      };
+      return this.createCreationResponse('quote', quoteId);
     } catch (error) {
       throw new Error(`Failed to create quote: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
@@ -4864,22 +4619,10 @@ export class EnhancedAutotaskToolHandler {
       const expenseReport = await this.autotaskService.getExpenseReport(id, tenantContext);
       
       if (!expenseReport) {
-        return {
-          content: [{
-            type: 'text',
-            text: `Expense report with ID ${id} not found`
-          }],
-          isError: false
-        };
+        return this.createNotFoundResponse('expense report', id);
       }
 
-      return {
-        content: [{
-          type: 'text',
-          text: JSON.stringify(expenseReport, null, 2)
-        }],
-        isError: false
-      };
+      return this.createDataResponse(expenseReport);
     } catch (error) {
       throw new Error(`Failed to get expense report: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
@@ -4923,13 +4666,7 @@ export class EnhancedAutotaskToolHandler {
 
       const expenseReports = await this.autotaskService.searchExpenseReports(queryOptions, tenantContext);
       
-      return {
-        content: [{
-          type: 'text',
-          text: JSON.stringify(expenseReports, null, 2)
-        }],
-        isError: false
-      };
+      return this.createDataResponse(expenseReports);
     } catch (error) {
       throw new Error(`Failed to search expense reports: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
@@ -4961,13 +4698,7 @@ export class EnhancedAutotaskToolHandler {
 
       const expenseReportId = await this.autotaskService.createExpenseReport(expenseReportData, tenantContext);
       
-      return {
-        content: [{
-          type: 'text',
-          text: `Expense report created successfully with ID: ${expenseReportId}`
-        }],
-        isError: false
-      };
+      return this.createCreationResponse('expense report', expenseReportId);
     } catch (error) {
       throw new Error(`Failed to create expense report: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
@@ -5002,13 +4733,7 @@ export class EnhancedAutotaskToolHandler {
 
       await this.autotaskService.updateExpenseReport(id, updateData, tenantContext);
       
-      return {
-        content: [{
-          type: 'text',
-          text: `Expense report ${id} updated successfully`
-        }],
-        isError: false
-      };
+      return this.createUpdateResponse('expense report', id);
     } catch (error) {
       throw new Error(`Failed to update expense report: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
@@ -5029,22 +4754,10 @@ export class EnhancedAutotaskToolHandler {
       const configItem = await this.autotaskService.getConfigurationItem(id, tenantContext);
       
       if (!configItem) {
-        return {
-          content: [{
-            type: 'text',
-            text: `Configuration item with ID ${id} not found`
-          }],
-          isError: false
-        };
+        return this.createNotFoundResponse('configuration item', id);
       }
 
-      return {
-        content: [{
-          type: 'text',
-          text: JSON.stringify(configItem, null, 2)
-        }],
-        isError: false
-      };
+      return this.createDataResponse(configItem);
     } catch (error) {
       throw new Error(`Failed to get configuration item: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
@@ -5089,13 +4802,7 @@ export class EnhancedAutotaskToolHandler {
 
       const configItems = await this.autotaskService.searchConfigurationItems(queryOptions, tenantContext);
       
-      return {
-        content: [{
-          type: 'text',
-          text: JSON.stringify(configItems, null, 2)
-        }],
-        isError: false
-      };
+      return this.createDataResponse(configItems);
     } catch (error) {
       throw new Error(`Failed to search configuration items: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
@@ -5131,13 +4838,7 @@ export class EnhancedAutotaskToolHandler {
 
       const configItemId = await this.autotaskService.createConfigurationItem(configItemData, tenantContext);
       
-      return {
-        content: [{
-          type: 'text',
-          text: `Configuration item created successfully with ID: ${configItemId}`
-        }],
-        isError: false
-      };
+      return this.createCreationResponse('configuration item', configItemId);
     } catch (error) {
       throw new Error(`Failed to create configuration item: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
@@ -5174,13 +4875,7 @@ export class EnhancedAutotaskToolHandler {
 
       await this.autotaskService.updateConfigurationItem(id, updateData, tenantContext);
       
-      return {
-        content: [{
-          type: 'text',
-          text: `Configuration item ${id} updated successfully`
-        }],
-        isError: false
-      };
+      return this.createUpdateResponse('configuration item', id);
     } catch (error) {
       throw new Error(`Failed to update configuration item: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
@@ -5341,22 +5036,10 @@ export class EnhancedAutotaskToolHandler {
       const expenseItem = await this.autotaskService.getExpenseItem(expenseReportId, id, tenantContext);
 
       if (!expenseItem) {
-        return {
-          content: [{
-            type: 'text',
-            text: `Expense item with ID ${id} not found in expense report ${expenseReportId}`
-          }],
-          isError: false
-        };
+        return this.createNotFoundResponse('expense item', { expenseReportId, id });
       }
 
-      return {
-        content: [{
-          type: 'text',
-          text: JSON.stringify(expenseItem, null, 2)
-        }],
-        isError: false
-      };
+      return this.createDataResponse(expenseItem);
     } catch (error) {
       throw new Error(`Failed to get expense item: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
@@ -5380,13 +5063,7 @@ export class EnhancedAutotaskToolHandler {
 
       const expenseItemId = await this.autotaskService.createExpenseItem(expenseReportID, itemData, tenantContext);
 
-      return {
-        content: [{
-          type: 'text',
-          text: `Expense item created successfully with ID: ${expenseItemId} in expense report ${expenseReportID}`
-        }],
-        isError: false
-      };
+      return this.createCreationResponse('expense item', expenseItemId);
     } catch (error) {
       throw new Error(`Failed to create expense item: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
@@ -5419,13 +5096,7 @@ export class EnhancedAutotaskToolHandler {
 
       await this.autotaskService.updateExpenseItem(expenseReportId, id, updateData, tenantContext);
 
-      return {
-        content: [{
-          type: 'text',
-          text: `Expense item ${id} updated successfully in expense report ${expenseReportId}`
-        }],
-        isError: false
-      };
+      return this.createUpdateResponse('expense item', id);
     } catch (error) {
       throw new Error(`Failed to update expense item: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
