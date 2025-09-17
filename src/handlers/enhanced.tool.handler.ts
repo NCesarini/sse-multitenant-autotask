@@ -131,7 +131,7 @@ export class EnhancedAutotaskToolHandler {
     let location = parentInfo ? ` ${parentInfo}` : '';
     
     if (typeof id === 'object') {
-      // Handle object IDs like {ticketId: 123, noteId: 456}
+      // Handle object IDs like {ticketID: 123, noteId: 456}
       const keys = Object.keys(id);
       if (keys.length === 2) {
         const [parentKey, childKey] = keys;
@@ -326,7 +326,8 @@ export class EnhancedAutotaskToolHandler {
         'Use `pageSize` parameter to limit results (e.g., pageSize: 25)'
       ],
       timeentries: [
-        'Use `ticketId` to search time entries for a specific ticket',
+        'Use `ticketID` to search time entries for a specific ticket',
+        'Use `taskID` to search time entries for a specific task',
         'Add `projectId` to find time entries for a specific project',
         'Use `resourceId` to find time entries by a specific person',
         'Add date filters with `dateFrom` and `dateTo` (YYYY-MM-DD format)',
@@ -1135,10 +1136,14 @@ export class EnhancedAutotaskToolHandler {
         'Search for time entries in Autotask with filters',
         'read',
         {
-          ticketId: {
+          ticketID: {
             type: 'number',
             description: 'Filter by ticket ID'
-          }, 
+          },
+          taskID: {
+            type: 'number',
+            description: 'Filter by task ID'
+          },
           resourceId: {
             type: 'number',
             description: 'Filter by resource ID'
@@ -1309,7 +1314,7 @@ export class EnhancedAutotaskToolHandler {
         'Search for notes on a specific ticket',
         'read',
         {
-          ticketId: {
+          ticketID: {
             type: 'number',
             description: 'Ticket ID to search notes for'
           },
@@ -1320,14 +1325,14 @@ export class EnhancedAutotaskToolHandler {
             maximum: 100
           }
         },
-        ['ticketId']
+        ['ticketID']
       ),
       EnhancedAutotaskToolHandler.createTool(
         'get_ticket_note',
         'Get a specific ticket note by ticket ID and note ID',
         'read',
         {
-          ticketId: {
+          ticketID: {
             type: 'number',
             description: 'Ticket ID'
           },
@@ -1336,14 +1341,14 @@ export class EnhancedAutotaskToolHandler {
             description: 'Note ID'
           }
         },
-        ['ticketId', 'noteId']
+        ['ticketID', 'noteId']
       ),
       EnhancedAutotaskToolHandler.createTool(
         'create_ticket_note',
         'Create a new note on a ticket',
         'write',
         {
-          ticketId: {
+          ticketID: {
             type: 'number',
             description: 'Ticket ID to add note to'
           },
@@ -1364,7 +1369,7 @@ export class EnhancedAutotaskToolHandler {
             description: 'Publish setting (1 = Internal Only, 2 = All Autotask Users, 3 = Client Portal)'
           }
         },
-        ['ticketId', 'description']
+        ['ticketID', 'description']
       ),
 
       EnhancedAutotaskToolHandler.createTool(
@@ -1499,7 +1504,7 @@ export class EnhancedAutotaskToolHandler {
         'Search for attachments on a specific ticket',
         'read',
         {
-          ticketId: {
+          ticketID: {
             type: 'number',
             description: 'Ticket ID to search attachments for'
           },
@@ -1510,14 +1515,14 @@ export class EnhancedAutotaskToolHandler {
             maximum: 50
           }
         },
-        ['ticketId']
+        ['ticketID']
       ),
       EnhancedAutotaskToolHandler.createTool(
         'get_ticket_attachment',
         'Get a specific ticket attachment by ticket ID and attachment ID',
         'read',
         {
-          ticketId: {
+          ticketID: {
             type: 'number',
             description: 'Ticket ID'
           },
@@ -1530,7 +1535,7 @@ export class EnhancedAutotaskToolHandler {
             description: 'Whether to include base64-encoded file data (default: false for metadata only)'
           }
         },
-        ['ticketId', 'attachmentId']
+        ['ticketID', 'attachmentId']
       ),
 
       // Financial Management
@@ -1828,11 +1833,11 @@ export class EnhancedAutotaskToolHandler {
             type: 'number',
             description: 'Filter by project ID'
           },
-          taskId: {
+          taskID: {
             type: 'number',
             description: 'Filter by task ID'
           },
-          ticketId: {
+          ticketID: {
             type: 'number',
             description: 'Filter by ticket ID'
           },
@@ -3226,9 +3231,9 @@ export class EnhancedAutotaskToolHandler {
     try {
       const ticketData = { ...args };
       
-      const ticketId = await this.autotaskService.createTicket(ticketData, tenantContext);
+      const ticketID = await this.autotaskService.createTicket(ticketData, tenantContext);
       
-      return this.createCreationResponse('ticket', ticketId);
+      return this.createCreationResponse('ticket', ticketID);
     } catch (error) {
       throw new Error(`Failed to create ticket: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
@@ -3237,12 +3242,12 @@ export class EnhancedAutotaskToolHandler {
   private async updateTicket(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
     try {
       const ticketData = { ...args };
-      const ticketId = ticketData.id;
+      const ticketID = ticketData.id;
       delete ticketData.id; // Remove ID from data for update
 
-      await this.autotaskService.updateTicket(ticketId, ticketData, tenantContext);
+      await this.autotaskService.updateTicket(ticketID, ticketData, tenantContext);
 
-      return this.createUpdateResponse('ticket', ticketId);
+      return this.createUpdateResponse('ticket', ticketID);
     } catch (error) {
       throw new Error(`Failed to update ticket: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
@@ -3868,13 +3873,17 @@ export class EnhancedAutotaskToolHandler {
 
   private async searchTimeEntries(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
     try {
-      const { ticketId, resourceId, dateFrom, dateTo, pageSize } = args;
+      const { ticketID, taskID, resourceId, dateFrom, dateTo, pageSize } = args;
       
       // Build filter for time entries search
       const filter: any[] = [];
       
-      if (ticketId) {
-        filter.push({ field: 'ticketID', op: 'eq', value: ticketId });
+      if (ticketID) {
+        filter.push({ field: 'ticketID', op: 'eq', value: ticketID });
+      }
+      
+      if (taskID) {
+        filter.push({ field: 'taskID', op: 'eq', value: taskID });
       }
       
       if (resourceId) {
@@ -3922,8 +3931,8 @@ export class EnhancedAutotaskToolHandler {
       if (shouldShowGuidance) {
         const guidanceMessage = isHittingLimit 
           ? `Requested ${pageSize} entries (limit: ${threshold}). For more focused results, try:\n` +
-            `  • Use \`ticketId\` to search time entries for a specific ticket\n` +
-            `  • Add \`projectId\` to find time entries for a specific project\n` +
+            `  • Use \`ticketID\` to search time entries for a specific ticket\n` +
+            `  • Use \`taskID\` to search time entries for a specific task\n` + 
             `  • Use \`resourceId\` to find time entries by a specific person\n` +
             `  • Add date filters with \`dateFrom\` and \`dateTo\` (YYYY-MM-DD format)\n` +
             `  • Use smaller \`pageSize\` parameter (current: ${pageSize})`
@@ -4073,9 +4082,9 @@ export class EnhancedAutotaskToolHandler {
         ...(priorityLabel && { priorityLabel })
       };
 
-      const taskId = await this.autotaskService.createTask(taskData, tenantContext);
+      const taskID = await this.autotaskService.createTask(taskData, tenantContext);
       
-      return this.createCreationResponse('task', taskId);
+      return this.createCreationResponse('task', taskID);
     } catch (error) {
       throw new Error(`Failed to create task: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
@@ -4128,9 +4137,9 @@ export class EnhancedAutotaskToolHandler {
 
   private async searchTicketNotes(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
     try {
-      const { ticketId, pageSize } = args;
+      const { ticketID, pageSize } = args;
       
-      if (!ticketId || typeof ticketId !== 'number') {
+      if (!ticketID || typeof ticketID !== 'number') {
         throw new Error('Ticket ID is required and must be a number');
       }
 
@@ -4138,7 +4147,7 @@ export class EnhancedAutotaskToolHandler {
         ...(pageSize && { pageSize })
       };
 
-      const notes = await this.autotaskService.searchTicketNotes(ticketId, queryOptions, tenantContext);
+      const notes = await this.autotaskService.searchTicketNotes(ticketID, queryOptions, tenantContext);
       
       return this.createDataResponse(notes);
     } catch (error) {
@@ -4148,9 +4157,9 @@ export class EnhancedAutotaskToolHandler {
 
   private async getTicketNote(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
     try {
-      const { ticketId, noteId } = args;
+      const { ticketID, noteId } = args;
       
-      if (!ticketId || typeof ticketId !== 'number') {
+      if (!ticketID || typeof ticketID !== 'number') {
         throw new Error('Ticket ID is required and must be a number');
       }
       
@@ -4158,10 +4167,10 @@ export class EnhancedAutotaskToolHandler {
         throw new Error('Note ID is required and must be a number');
       }
 
-      const note = await this.autotaskService.getTicketNote(ticketId, noteId, tenantContext);
+      const note = await this.autotaskService.getTicketNote(ticketID, noteId, tenantContext);
       
       if (!note) {
-        return this.createNotFoundResponse('ticket note', { ticketId, noteId });
+        return this.createNotFoundResponse('ticket note', { ticketID, noteId });
       }
 
       return this.createDataResponse(note);
@@ -4172,9 +4181,9 @@ export class EnhancedAutotaskToolHandler {
 
   private async createTicketNote(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
     try {
-      const { ticketId, title, description, noteType, publish } = args;
+      const { ticketID, title, description, noteType, publish } = args;
       
-      if (!ticketId || typeof ticketId !== 'number') {
+      if (!ticketID || typeof ticketID !== 'number') {
         throw new Error('Ticket ID is required and must be a number');
       }
       
@@ -4189,7 +4198,7 @@ export class EnhancedAutotaskToolHandler {
         ...(publish && { publish })
       };
 
-      const noteId = await this.autotaskService.createTicketNote(ticketId, noteData, tenantContext);
+      const noteId = await this.autotaskService.createTicketNote(ticketID, noteData, tenantContext);
       
       return this.createCreationResponse('ticket note', noteId);
     } catch (error) {
@@ -4345,9 +4354,9 @@ export class EnhancedAutotaskToolHandler {
 
   private async searchTicketAttachments(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
     try {
-      const { ticketId, pageSize } = args;
+      const { ticketID, pageSize } = args;
       
-      if (!ticketId || typeof ticketId !== 'number') {
+      if (!ticketID || typeof ticketID !== 'number') {
         throw new Error('Ticket ID is required and must be a number');
       }
 
@@ -4355,7 +4364,7 @@ export class EnhancedAutotaskToolHandler {
         ...(pageSize && { pageSize })
       };
 
-      const attachments = await this.autotaskService.searchTicketAttachments(ticketId, queryOptions, tenantContext);
+      const attachments = await this.autotaskService.searchTicketAttachments(ticketID, queryOptions, tenantContext);
       
       return this.createDataResponse(attachments);
     } catch (error) {
@@ -4365,9 +4374,9 @@ export class EnhancedAutotaskToolHandler {
 
   private async getTicketAttachment(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
     try {
-      const { ticketId, attachmentId, includeData = false } = args;
+      const { ticketID, attachmentId, includeData = false } = args;
       
-      if (!ticketId || typeof ticketId !== 'number') {
+      if (!ticketID || typeof ticketID !== 'number') {
         throw new Error('Ticket ID is required and must be a number');
       }
       
@@ -4375,10 +4384,10 @@ export class EnhancedAutotaskToolHandler {
         throw new Error('Attachment ID is required and must be a number');
       }
 
-      const attachment = await this.autotaskService.getTicketAttachment(ticketId, attachmentId, includeData, tenantContext);
+      const attachment = await this.autotaskService.getTicketAttachment(ticketID, attachmentId, includeData, tenantContext);
       
       if (!attachment) {
-        return this.createNotFoundResponse('ticket attachment', { ticketId, attachmentId });
+        return this.createNotFoundResponse('ticket attachment', { ticketID, attachmentId });
       }
 
       return this.createDataResponse(attachment);

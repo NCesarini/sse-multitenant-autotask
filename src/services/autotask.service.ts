@@ -2106,9 +2106,9 @@ export class AutotaskService {
     try {
       this.logger.info('Creating task:', task);
       const result = await client.tasks.create(task as any);
-      const taskId = (result.data as any)?.id;
-      this.logger.info(`Task created with ID: ${taskId}`);
-      return taskId;
+      const taskID = (result.data as any)?.id;
+      this.logger.info(`Task created with ID: ${taskID}`);
+      return taskID;
     } catch (error) {
       this.logger.error('Failed to create task:', error);
       throw error;
