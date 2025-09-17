@@ -980,7 +980,7 @@ export class AutotaskService {
       const queryOptions = {
         filter: filters,
         pageSize: requestedPageSize,
-        MaxResults: requestedPageSize  // Add MaxResults for response size control
+        MaxRecords: requestedPageSize  // Add MaxRecords for response size control
       };
 
       this.logger.info('Making direct API call to Tickets/query with threshold-limited request:', queryOptions);
@@ -1177,7 +1177,7 @@ export class AutotaskService {
       if (options.page) searchBody.page = options.page;
       if (options.pageSize) searchBody.pageSize = options.pageSize;
       
-      // Set pagination - TimeEntries API uses both 'pageSize' and 'MaxResults' for proper limiting
+      // Set pagination - TimeEntries API uses both 'pageSize' and 'MaxRecords' for proper limiting
       // Use threshold-based limiting to prevent oversized responses
       const THRESHOLD_LIMIT = LARGE_RESPONSE_THRESHOLDS.timeentries;
       
@@ -1198,7 +1198,7 @@ export class AutotaskService {
         this.logger.info(`⚙️ No pageSize provided, using default pageSize: ${finalPageSize}`);
       }
       searchBody.pageSize = finalPageSize;
-      searchBody.MaxResults = finalPageSize;  // Add MaxResults for response size control
+      searchBody.MaxRecords = finalPageSize;  // Add MaxRecords for response size control
 
       this.logger.info('Making direct API call to TimeEntries/query with body:', searchBody);
 
@@ -1343,7 +1343,7 @@ export class AutotaskService {
       }
       
       searchBody.pageSize = requestedPageSize;
-      searchBody.MaxResults = requestedPageSize;  // Add MaxResults for response size control
+      searchBody.MaxRecords = requestedPageSize;  // Add MaxRecords for response size control
 
       // Don't restrict fields - let the API return whatever is available
       // This avoids field availability issues across different Autotask instances
@@ -1510,7 +1510,7 @@ export class AutotaskService {
       }
       
       searchBody.pageSize = requestedPageSize;
-      searchBody.MaxResults = requestedPageSize;  // Add MaxResults for response size control
+      searchBody.MaxRecords = requestedPageSize;  // Add MaxRecords for response size control
 
       this.logger.info('Making direct API call to Resources/query with body:', {
         url: '/Resources/query',
@@ -1851,7 +1851,7 @@ export class AutotaskService {
       }
       
       searchBody.pageSize = requestedPageSize;
-      searchBody.MaxResults = requestedPageSize;  // Add MaxResults for response size control
+      searchBody.MaxRecords = requestedPageSize;  // Add MaxRecords for response size control
 
       this.logger.info('Making direct POST request to Invoices/query endpoint:', {
         url: '/Invoices/query',
@@ -2046,7 +2046,7 @@ export class AutotaskService {
       }
       
       searchBody.pageSize = requestedPageSize;
-      searchBody.MaxResults = requestedPageSize;  // Add MaxResults for response size control
+      searchBody.MaxRecords = requestedPageSize;  // Add MaxRecords for response size control
 
       this.logger.info('Making direct API call to Tasks/query with body:', searchBody);
 
@@ -2301,7 +2301,7 @@ export class AutotaskService {
           { field: 'ticketID', op: 'eq', value: ticketId }
         ],
         pageSize: options.pageSize || 25,
-        MaxResults: options.pageSize || 25  // Add MaxResults for response size control
+        MaxRecords: options.pageSize || 25  // Add MaxRecords for response size control
       };
 
       this.logger.info('Making direct API call to TicketNotes/query with body:', searchBody);
@@ -2373,7 +2373,7 @@ export class AutotaskService {
           { field: 'projectID', op: 'eq', value: projectId }
         ],
         pageSize: options.pageSize || 25,
-        MaxResults: options.pageSize || 25  // Add MaxResults for response size control
+        MaxRecords: options.pageSize || 25  // Add MaxRecords for response size control
       };
 
       this.logger.info('Making direct API call to ProjectNotes/query with body:', searchBody);
@@ -2445,7 +2445,7 @@ export class AutotaskService {
           { field: 'companyID', op: 'eq', value: companyId }
         ],
         pageSize: options.pageSize || 25,
-        MaxResults: options.pageSize || 25  // Add MaxResults for response size control
+        MaxRecords: options.pageSize || 25  // Add MaxRecords for response size control
       };
 
       this.logger.info('Making direct API call to CompanyNotes/query with body:', searchBody);
@@ -2518,7 +2518,7 @@ export class AutotaskService {
           { field: 'parentID', op: 'eq', value: ticketId }
         ],
         pageSize: options.pageSize || 10,
-        MaxResults: options.pageSize || 10  // Add MaxResults for response size control
+        MaxRecords: options.pageSize || 10  // Add MaxRecords for response size control
       };
 
       this.logger.info('Making direct API call to TicketAttachments/query with body:', searchBody);
@@ -2590,7 +2590,7 @@ export class AutotaskService {
       const searchBody = {
         filter: filters,
         pageSize: options.pageSize || 25,
-        MaxResults: options.pageSize || 25  // Add MaxResults for response size control
+        MaxRecords: options.pageSize || 25  // Add MaxRecords for response size control
       };
 
       this.logger.info('Making direct API call to ExpenseReports/query with body:', searchBody);
@@ -2679,7 +2679,7 @@ export class AutotaskService {
           { field: 'expenseReportID', op: 'eq', value: expenseReportId }
         ],
         pageSize: options.pageSize || 25,
-        MaxResults: options.pageSize || 25  // Add MaxResults for response size control
+        MaxRecords: options.pageSize || 25  // Add MaxRecords for response size control
       };
 
       this.logger.info('Making direct API call to ExpenseItems/query with body:', searchBody);
