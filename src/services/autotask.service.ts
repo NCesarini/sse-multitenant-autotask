@@ -29,17 +29,18 @@ import { McpServerConfig, AutotaskCredentials, TenantContext } from '../types/mc
 import { Logger } from '../utils/logger'; 
 
 
-const LARGE_RESPONSE_THRESHOLDS = {
+export const LARGE_RESPONSE_THRESHOLDS = {
   tickets: 50,        
-  companies: 200,     
-  contacts: 200,     
+  companies: 100,     
+  contacts: 100,     
   projects: 50,      
-  resources: 200,     
+  resources: 50,     
   tasks: 50,          
-  timeentries: 200,    
-  default: 300,        
+  timeentries: 100,    
+  default: 100,        
   responseSizeKB: 200  
 };
+
 
 // New: Client pool management for multi-tenant support
 interface ClientPoolEntry {
