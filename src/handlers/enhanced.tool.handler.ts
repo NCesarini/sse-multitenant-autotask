@@ -478,8 +478,7 @@ export class EnhancedAutotaskToolHandler {
       'get_contract', 'search_contracts', 'get_invoice', 'search_invoices',
       'get_quote', 'search_quotes', 'get_expense_report', 'search_expense_reports',
       'search_expense_items', 'get_expense_item',
-      'get_configuration_item', 'search_configuration_items',
-      'get_company_name', 'get_resource_name', 'get_mapping_cache_stats',
+      'get_configuration_item', 'search_configuration_items','get_mapping_cache_stats',
       'test_connection', 'test_zone_information'
     ];
     
@@ -510,97 +509,97 @@ export class EnhancedAutotaskToolHandler {
       // Company tools
       EnhancedAutotaskToolHandler.createTool(
         'search_companies',
-        'Search for companies in Autotask with filters and enhanced name resolution',
+        'Search for companies (customers, prospects, vendors) in Autotask with advanced filtering and enhanced name resolution. Companies are the core business entities in Autotask - they represent customers who receive services, prospects for sales, vendors who provide services, or partners. Returns comprehensive company records including ID, name, type, owner assignment, contact information, and address details. Use this to find specific companies for ticket creation, contact management, project assignment, or reporting. Essential for customer relationship management and business operations. Enhanced with automatic owner resource name mapping for better readability.',
         'read',
         {
           searchTerm: {
             type: 'string',
-            description: 'Search term to filter companies by name'
+            description: 'Search term to filter companies by name using partial matching (case-insensitive). Searches the companyName field. Use for finding companies when you know part of their name. Examples: "Microsoft" finds "Microsoft Corporation", "Acme" finds "Acme Industries LLC". Essential for user-friendly company lookup when exact names are unknown. Combine with other filters to narrow results further.'
           },
           isActive: {
             type: 'boolean',
-            description: 'Filter by active status'
+            description: 'Filter by active status to control which companies appear in results. TRUE returns only active companies (current customers/prospects), FALSE returns only inactive companies (former customers, closed prospects). Active companies can have tickets, projects, and contracts assigned. Inactive companies are typically kept for historical records. Most operational searches should use TRUE. Use FALSE for cleanup or historical analysis.'
           },
           pageSize: {
             type: 'number',
-            description: 'Number of results to return per page (default: 50, max: 2000). Use smaller values for faster responses.',
+            description: 'Number of company records to return per page (default: 50, max: 2000). Larger values return more data but may cause slower responses and larger memory usage. Start with 50 for exploration, use 100-500 for operational lists, use 1000+ for comprehensive exports. Consider network speed and processing capacity when choosing size.',
             minimum: 1,
             maximum: 2000,
             default: 50
           },
           page: {
             type: 'number',
-            description: 'Page number to retrieve (1-based). Use this to get additional results beyond the first page.',
+            description: 'Page number to retrieve (1-based indexing). Use for pagination when results exceed pageSize. Example: page=2 with pageSize=50 gets companies 51-100. Essential for handling large company databases without overwhelming responses. Check if additional pages exist by comparing returned count to pageSize.',
             minimum: 1,
             default: 1
           },
           getAllPages: {
             type: 'boolean',
-            description: 'Set to true to get all available data across multiple pages (may be slow for large datasets)',
+            description: 'Set to TRUE to retrieve ALL matching companies across multiple pages automatically (ignores pageSize limits). WARNING: Can be very slow and memory-intensive for large datasets. Use only when you need complete company exports or comprehensive analysis. FALSE (default) respects pageSize for controlled results. Consider data volume before enabling.',
             default: false
           }
         }
       ),
       EnhancedAutotaskToolHandler.createTool(
         'create_company',
-        'Create a new company in Autotask',
+        'Create a new company record in Autotask system. Companies represent business entities that can be customers (service recipients), prospects (potential customers), vendors (service providers), or partners. Creating a company establishes the foundation for all business relationships including contacts, tickets, projects, contracts, and billing. Returns the newly created company ID for immediate use in other operations. Essential for onboarding new customers, registering prospects, or adding vendor relationships.',
         'write',
         {
           companyName: {
             type: 'string',
-            description: 'Company name'
+            description: 'Official company name (REQUIRED). This becomes the primary identifier for the business entity. Should be the legal business name or commonly recognized name. Examples: "Microsoft Corporation", "Acme Industries LLC", "John Doe Consulting". Used in reports, tickets, invoices, and all customer communications. Choose carefully as this impacts all future references.'
           },
           companyType: {
             type: 'number',
-            description: 'Company type ID'
+            description: 'Company type classification (REQUIRED) - determines how the company is treated in the system. Values: 1=Customer (active service recipient, can have tickets/projects), 2=Lead (potential customer, early sales stage), 3=Prospect (qualified potential customer, active sales process), 4=Dead (disqualified prospect, historical record), 5=Suspect (unqualified potential customer), 6=Vendor (service/product provider to your organization). Choose based on business relationship and sales stage.'
           },
           phone: {
             type: 'string',
-            description: 'Phone number'
+            description: 'Primary business phone number. Format can be flexible but consider standardization for consistency. Used for customer communications, emergency contacts, and business correspondence. Include country code for international companies. Example: "+1-555-123-4567" or "(555) 123-4567".'
           },
           fax: {
             type: 'string',
-            description: 'Fax number'
+            description: 'Business fax number (if still used). Optional field as fax usage has declined. Include if company specifically requires fax communications or for compliance reasons. Use same formatting standards as phone numbers.'
           },
           address1: {
             type: 'string',
-            description: 'Address line 1'
+            description: 'Primary street address line 1. Street number and name, suite/building information. Used for service delivery, billing, legal correspondence, and on-site support. Example: "123 Main Street, Suite 456". Essential for companies requiring physical service delivery.'
           },
           address2: {
             type: 'string',
-            description: 'Address line 2'
+            description: 'Additional address information (optional). Secondary address details like apartment numbers, floor information, building names, or special delivery instructions. Example: "Building C, Floor 3", "Attention: IT Department".'
           },
           city: {
             type: 'string',
-            description: 'City'
+            description: 'City or municipality name. Used for geographical organization, service territory assignment, and logistics planning. Impacts time zone considerations and local service provider assignments.'
           },
           state: {
             type: 'string',
-            description: 'State/Province'
+            description: 'State, province, or regional designation. Important for tax calculations, service territories, and legal jurisdiction. Use standard abbreviations for consistency (e.g., "CA" for California, "ON" for Ontario).'
           },
           postalCode: {
             type: 'string',
-            description: 'Postal/ZIP code'
+            description: 'Postal code, ZIP code, or equivalent regional identifier. Critical for service routing, shipping, and geographical reporting. Impacts local service provider assignments and delivery logistics.'
           },
           country: {
             type: 'string',
-            description: 'Country'
+            description: 'Country name or code. Essential for international operations, currency considerations, time zone management, and compliance requirements. Use standard country codes (ISO) for consistency.'
           },
           ownerResourceID: {
             type: 'number',
-            description: 'Owner resource ID'
+            description: 'Resource ID of the employee/user who owns/manages this company relationship - refers to Resources entity. The owner is responsible for the business relationship, typically an account manager, sales rep, or customer success manager. This person receives notifications and is the primary contact for company-related activities. Choose based on territory, expertise, or existing relationships.'
           }
         },
         ['companyName', 'companyType']
       ),
       EnhancedAutotaskToolHandler.createTool(
         'update_company',
-        'Update an existing company in Autotask',
+        'Update an existing company in Autotask. Requires company ID from Companies entity.',
         'modify',
         {
           id: {
             type: 'number',
-            description: 'Company ID to update'
+            description: 'Company ID to update - refers to Companies entity'
           },
           companyName: {
             type: 'string',
@@ -640,7 +639,7 @@ export class EnhancedAutotaskToolHandler {
           },
           ownerResourceID: {
             type: 'number',
-            description: 'Owner resource ID'
+            description: 'Owner resource ID - refers to Resources entity (employee/user who owns this company)'
           }
         },
         ['id']
@@ -649,24 +648,24 @@ export class EnhancedAutotaskToolHandler {
       // Contact tools
                   EnhancedAutotaskToolHandler.createTool(
               'search_contacts',
-              'Search for contacts in Autotask with filters',
+              'Search for individual contacts (people) within companies in Autotask with comprehensive filtering. Contacts represent real people who work for or are associated with companies - they are the human touchpoints for business relationships. Returns detailed contact records including personal information, role details, communication preferences, and their company associations. Use this to find specific people for ticket assignment, communication, project coordination, or relationship management. Essential for customer service, support escalation, and business communications. Enhanced with automatic company name mapping for better context.',
               'read',
               {
                 searchTerm: {
                   type: 'string',
-                  description: 'Search term to filter contacts by name or email'
+                  description: 'Search term to filter contacts by name or email using partial matching (case-insensitive). Searches across firstName, lastName, and emailAddress fields simultaneously. Examples: "john" finds "John Smith" and "Johnny Doe", "smith@" finds all Smith email addresses. Essential for finding contacts when you know part of their name or email. More flexible than individual field searches.'
                 },
                 companyId: {
                   type: 'number',
-                  description: 'Filter by company ID'
+                  description: 'Filter by specific company ID - refers to Companies entity. Use to find all contacts within a particular company/organization. Essential for: company directory listings, team communications, project staffing, or when you need to contact someone at a specific customer site. Combine with searchTerm to find specific people within large organizations. Example: companyId=123 returns all contacts at Acme Industries.'
                 },
                 isActive: {
                   type: 'boolean',
-                  description: 'Filter by active status'
+                  description: 'Filter by active status to control contact availability. TRUE returns only active contacts (current employees, available for communication), FALSE returns inactive contacts (former employees, disabled accounts). Active contacts can receive tickets, notifications, and communications. Inactive contacts are kept for historical records. Most operational searches should use TRUE unless doing cleanup or historical analysis.'
                 },
                 pageSize: {
                   type: 'number',
-                  description: 'Number of results to return (default: 50, max: 2000)',
+                  description: 'Number of contact records to return (default: 50, max: 2000). Contact databases can be large, especially for enterprise customers. Start with 50 for browsing, use 100-500 for department listings, use larger values for comprehensive exports. Consider that each contact includes company information, so larger results consume more memory.',
                   minimum: 1,
                   maximum: 2000,
                   default: 50
@@ -675,44 +674,44 @@ export class EnhancedAutotaskToolHandler {
             ),
       EnhancedAutotaskToolHandler.createTool(
         'create_contact',
-        'Create a new contact in Autotask',
+        'Create a new contact (person) record associated with a company in Autotask. Contacts represent individual people who work for or are associated with companies - they are the human interfaces for business relationships. Creating contacts enables ticket assignment, communication tracking, project coordination, and relationship management. Returns the newly created contact ID for immediate use in tickets, projects, and communications. Essential for establishing proper communication channels and accountability in customer relationships.',
         'write',
         {
           companyID: {
             type: 'number',
-            description: 'Company ID for the contact'
+            description: 'Company ID that this contact belongs to (REQUIRED) - refers to Companies entity. Every contact must be associated with a company, even for individual consultants (create a company first). This establishes the business relationship context and determines access permissions, billing relationships, and organizational hierarchy. The company must already exist in the system before creating contacts.'
           },
           firstName: {
             type: 'string',
-            description: 'First name'
+            description: 'Contact\'s first name (REQUIRED). Personal identifier used in communications, greetings, and personal recognition. Examples: "John", "Mary", "Dr. Robert". Used in email salutations, phone greetings, and all personal communications. Important for building professional relationships and personal recognition.'
           },
           lastName: {
             type: 'string',
-            description: 'Last name'
+            description: 'Contact\'s last name (REQUIRED). Family name or surname used for formal identification and sorting. Examples: "Smith", "Johnson", "Van Der Berg". Combined with firstName for full identification. Used in formal communications, directory listings, and official correspondence. Essential for professional identification.'
           },
           emailAddress: {
             type: 'string',
-            description: 'Email address'
+            description: 'Primary email address for business communications. Used for ticket notifications, project updates, system alerts, and general business correspondence. Should be the person\'s preferred business email. Critical for automated communications and ticket routing. Validate format to ensure deliverability. Example: "john.smith@company.com".'
           },
           phone: {
             type: 'string',
-            description: 'Phone number'
+            description: 'Primary business or mobile phone number. Used for urgent communications, escalations, and direct contact when email is insufficient. Include country code for international contacts. Consider time zones for contact preferences. Format flexibly but consistently. Examples: "+1-555-123-4567", "(555) 123-4567".'
           },
           title: {
             type: 'string',
-            description: 'Job title'
+            description: 'Professional job title or role within the organization. Helps identify decision-making authority, technical expertise, and appropriate communication level. Examples: "IT Manager", "CEO", "Senior Developer", "Procurement Specialist". Important for escalation paths and role-appropriate communications.'
           }
         },
         ['companyID', 'firstName', 'lastName']
       ),
       EnhancedAutotaskToolHandler.createTool(
         'update_contact',
-        'Update an existing contact in Autotask',
+        'Update an existing contact in Autotask. Requires contact ID from Contacts entity.',
         'modify',
         {
           id: {
             type: 'number',
-            description: 'Contact ID to update'
+            description: 'Contact ID to update - refers to Contacts entity'
           },
           firstName: {
             type: 'string',
@@ -741,40 +740,40 @@ export class EnhancedAutotaskToolHandler {
       // Ticket tools
                   EnhancedAutotaskToolHandler.createTool(
               'search_tickets',
-              'Search for tickets in Autotask with filters',
+              'Search for support tickets (service requests, incidents, problems) in Autotask with comprehensive filtering capabilities. Tickets represent customer service requests, technical issues, incidents, or any work that needs to be tracked and resolved. Returns detailed ticket records including status, priority, assignment, descriptions, and associated relationships (company, contact, project, contract). Use this for service desk operations, workload management, reporting, escalation tracking, and customer service analysis. Essential for support operations, SLA monitoring, and customer satisfaction management. Enhanced with automatic name mapping for better readability.',
               'read',
               {
                 searchTerm: {
                   type: 'string',
-                  description: 'Search term to filter tickets by number or title'
+                  description: 'Search term to filter tickets by ticket number (exact: T20250914.0008) or title content (partial matching). Ticket numbers are unique identifiers assigned automatically. Title searches look within ticket descriptions and subjects. Examples: "T20250914.0008" finds exact ticket, "email" finds all tickets with email-related issues, "server down" finds server outage tickets. Essential for finding specific tickets or issues by topic.'
                 },
                 status: {
                   type: 'number',
-                  description: 'Filter by status ID'
+                  description: 'Filter by ticket status ID to focus on tickets in specific workflow stages. Values: 1=New (just created, not assigned), 2=In Progress (actively being worked), 3=Customer Reply Needed (waiting for customer response), 4=Waiting Customer (customer action required), 5=Complete (resolved and closed), 8=On Hold (temporarily suspended), 9=Escalate (needs management attention), 29=Waiting Materials (pending parts/resources). Critical for workload management and SLA tracking.'
                 },
                 companyID: {
                   type: 'number',
-                  description: 'Filter by company ID'
+                  description: 'Filter by specific company ID - refers to Companies entity. Shows only tickets submitted by or for a particular customer/company. Essential for: customer-specific support dashboards, account management, billing analysis, company-focused reporting. Use when you need to see all support activity for a specific customer or when troubleshooting company-wide issues.'
                 },
                 projectID: {
                   type: 'number',
-                  description: 'Filter by project ID'
+                  description: 'Filter by specific project ID - refers to Projects entity. Shows tickets that are part of or related to a specific project. Project tickets often represent implementation issues, change requests, or project-specific support. Use for: project management, implementation tracking, project-related issue monitoring. Helps separate project work from general support.'
                 },
                 contractID: {
                   type: 'number',
-                  description: 'Filter by contract ID'
+                  description: 'Filter by specific contract ID - refers to Contracts entity. Shows tickets covered under a particular service contract or support agreement. Critical for: contract compliance monitoring, billable vs. non-billable work separation, SLA enforcement, contract utilization analysis. Use when tracking contract performance or billing accuracy.'
                 },
                 assignedResourceID: {
                   type: 'number',
-                  description: 'Filter by assigned resource ID'
+                  description: 'Filter by specific assigned resource ID - refers to Resources entity (technician/employee assigned to ticket). Shows tickets assigned to a particular team member. Essential for: individual workload monitoring, performance tracking, capacity planning, escalation management. Use for technician-specific dashboards or workload balancing. Combine with status filters for detailed workload analysis.'
                 },
                 unassigned: {
                   type: 'boolean',
-                  description: 'Filter for unassigned tickets'
+                  description: 'Filter for unassigned tickets requiring attention. TRUE returns only tickets with no assigned technician (need assignment), FALSE returns only assigned tickets. Unassigned tickets represent work that needs to be distributed to team members. Critical for: work distribution, ensuring no tickets are overlooked, queue management, workload balancing. Use TRUE to find tickets needing assignment.'
                 },
                 pageSize: {
                   type: 'number',
-                  description: 'Number of results to return (default: 50, max: 2000)',
+                  description: 'Number of ticket records to return (default: 50, max: 2000). Ticket searches can return large datasets, especially for broad searches or popular companies. Start with 50 for dashboard views, use 100-500 for management reports, use larger values for comprehensive analysis. Consider performance impact of large result sets on network and processing.',
                   minimum: 1,
                   maximum: 2000,
                   default: 50
@@ -783,48 +782,48 @@ export class EnhancedAutotaskToolHandler {
             ),
       EnhancedAutotaskToolHandler.createTool(
         'create_ticket',
-        'Create a new ticket in Autotask',
+        'Create a new support ticket (service request, incident, problem) in Autotask system. Tickets are the primary mechanism for tracking customer service requests, technical issues, incidents, or any work requiring resolution. Creating a ticket initiates the service delivery process and establishes accountability, tracking, and communication channels. Returns the newly created ticket ID for immediate reference and follow-up operations. Essential for formalizing customer requests, ensuring proper service delivery, and maintaining service level agreements.',
         'write',
         {
           companyID: {
             type: 'number',
-            description: 'Company ID for the ticket'
+            description: 'Company ID that this ticket belongs to (REQUIRED) - refers to Companies entity. Every ticket must be associated with a company to establish the customer relationship, billing context, and service agreements. This determines which contracts apply, SLA requirements, and support entitlements. The company must exist in the system before creating tickets.'
           },
           title: {
             type: 'string',
-            description: 'Ticket title'
+            description: 'Concise ticket title/subject (REQUIRED). This is the primary identifier users see in lists and reports. Should be descriptive enough to understand the issue at a glance. Examples: "Email server down", "Password reset for John Smith", "New laptop setup request". Keep concise but informative - used in dashboards, reports, and communications. Avoid vague titles like "Issue" or "Problem".'
           },
           description: {
             type: 'string',
-            description: 'Ticket description'
+            description: 'Detailed description of the issue, request, or work needed. Provide comprehensive information including: symptoms, error messages, steps to reproduce, business impact, user details, and any troubleshooting already attempted. This becomes the primary reference for technicians. Good descriptions speed resolution and reduce back-and-forth communication. Include relevant context and background information.'
           },
           priority: {
             type: 'number',
-            description: 'Priority level'
+            description: 'Priority level indicating urgency and business impact. Values: 1=Critical (system down, business stopped, immediate attention), 2=High (significant impact, work hampered), 3=Medium (standard priority, normal workflow), 4=Low (minor issue, convenience item). Priority affects SLA timelines, escalation procedures, and resource allocation. Choose based on business impact, not personal preference.'
           },
           status: {
             type: 'number',
-            description: 'Status ID'
+            description: 'Initial status for ticket workflow. Common values: 1=New (default for new tickets, awaiting assignment), 2=In Progress (actively being worked), 5=Complete (only if creating resolved tickets retroactively). Usually leave as default (New) unless creating historical tickets or specific workflow requirements. Status drives automated processes and notifications.'
           },
           assignedResourceID: {
             type: 'number',
-            description: 'Assigned resource ID'
+            description: 'Resource ID of technician/employee to assign this ticket - refers to Resources entity. Assigns immediate ownership and responsibility. Use when you know the appropriate technician (skills, territory, availability). Leave empty for queue-based assignment through normal workflow. Assignment triggers notifications and adds to technician workload. Consider skills, availability, and workload balance.'
           },
           contactID: {
             type: 'number',
-            description: 'Contact ID'
+            description: 'Contact ID of the primary person for this ticket - refers to Contacts entity. This person receives notifications, communications, and updates about ticket progress. Should be the person reporting the issue or the primary stakeholder. Critical for proper communication flow and customer service. The contact must belong to the specified company.'
           }
         },
         ['companyID', 'title']
       ),
       EnhancedAutotaskToolHandler.createTool(
         'update_ticket',
-        'Update an existing ticket in Autotask',
+        'Update an existing ticket in Autotask. Requires ticket ID from Tickets entity.',
         'modify',
         {
           id: {
             type: 'number',
-            description: 'Ticket ID to update'
+            description: 'Ticket ID to update - refers to Tickets entity'
           },
           title: {
             type: 'string',
@@ -836,19 +835,19 @@ export class EnhancedAutotaskToolHandler {
           },
           priority: {
             type: 'number',
-            description: 'Priority level'
+            description: 'Priority level. Common values: 1=Critical, 2=High, 3=Medium, 4=Low'
           },
           status: {
             type: 'number',
-            description: 'Status ID'
+            description: 'Status ID. Common values: 1=New, 2=In Progress, 3=Customer Reply Needed, 4=Waiting Customer, 5=Complete'
           },
           assignedResourceID: {
             type: 'number',
-            description: 'Assigned resource ID'
+            description: 'Assigned resource ID - refers to Resources entity (technician/employee assigned to ticket)'
           },
           resolution: {
             type: 'string',
-            description: 'Ticket resolution'
+            description: 'Ticket resolution description'
           }
         },
         ['id']
@@ -857,20 +856,20 @@ export class EnhancedAutotaskToolHandler {
       // Time Entry tools
       EnhancedAutotaskToolHandler.createTool(
         'create_time_entry',
-        'Log time against a ticket or project in Autotask',
+        'Log time against a ticket or project in Autotask. Returns the new time entry ID.',
         'write',
         {
           ticketID: {
             type: 'number',
-            description: 'Ticket ID (if logging time against a ticket)'
+            description: 'Ticket ID (if logging time against a ticket) - refers to Tickets entity. Use either ticketID or projectID, not both.'
           },
           projectID: {
             type: 'number',
-            description: 'Project ID (if logging time against a project)'
+            description: 'Project ID (if logging time against a project) - refers to Projects entity. Use either ticketID or projectID, not both.'
           },
           resourceID: {
             type: 'number',
-            description: 'Resource ID (person logging time)'
+            description: 'Resource ID (person logging time) - refers to Resources entity (employee/technician)'
           },
           dateWorked: {
             type: 'string',
@@ -886,7 +885,7 @@ export class EnhancedAutotaskToolHandler {
           },
           hoursWorked: {
             type: 'number',
-            description: 'Hours worked'
+            description: 'Hours worked (decimal format, e.g., 1.5 for 1 hour 30 minutes)'
           },
           summaryNotes: {
             type: 'string',
@@ -894,7 +893,7 @@ export class EnhancedAutotaskToolHandler {
           },
           internalNotes: {
             type: 'string',
-            description: 'Internal notes'
+            description: 'Internal notes (not visible to client)'
           }
         },
         ['resourceID', 'dateWorked', 'hoursWorked']
@@ -903,20 +902,20 @@ export class EnhancedAutotaskToolHandler {
       // Project tools
                   EnhancedAutotaskToolHandler.createTool(
               'search_projects',
-              'Search for projects in Autotask',
+              'Search for projects in Autotask. Returns project records with company information.',
               'read',
               {
                 searchTerm: {
                   type: 'string',
-                  description: 'Search term to filter projects by name'
+                  description: 'Search term to filter projects by name (partial match supported)'
                 },
                 companyId: {
                   type: 'number',
-                  description: 'Filter by company ID'
+                  description: 'Filter by company ID - refers to Companies entity'
                 },
                 status: {
                   type: 'number',
-                  description: 'Filter by status'
+                  description: 'Filter by status. Common values: 1=New, 2=In Progress, 3=Complete, 4=Canceled, 5=On Hold'
                 },
                 pageSize: {
                   type: 'number',
@@ -931,7 +930,7 @@ export class EnhancedAutotaskToolHandler {
       // Resource tools
                   EnhancedAutotaskToolHandler.createTool(
               'search_resources',
-              'Search for resources (employees) in Autotask',
+              'Search for resources (employees) in Autotask. Returns employee/user records.',
               'read',
               {
                 firstName: {
@@ -952,7 +951,7 @@ export class EnhancedAutotaskToolHandler {
                 },
                 isActive: {
                   type: 'boolean',
-                  description: 'Filter by active status'
+                  description: 'Filter by active status (true for active employees, false for inactive)'
                 },
                 pageSize: {
                   type: 'number',
@@ -967,36 +966,36 @@ export class EnhancedAutotaskToolHandler {
       // Individual Entity Getters
       EnhancedAutotaskToolHandler.createTool(
         'get_company',
-        'Get a specific company by ID with full details',
+        'Get a specific company by ID with full details from Companies entity.',
         'read',
         {
           id: {
             type: 'number',
-            description: 'Company ID to retrieve'
+            description: 'Company ID to retrieve - refers to Companies entity'
           }
         },
         ['id']
       ),
       EnhancedAutotaskToolHandler.createTool(
         'get_contact',
-        'Get a specific contact by ID with full details',
+        'Get a specific contact by ID with full details from Contacts entity.',
         'read',
         {
           id: {
             type: 'number',
-            description: 'Contact ID to retrieve'
+            description: 'Contact ID to retrieve - refers to Contacts entity'
           }
         },
         ['id']
       ),
       EnhancedAutotaskToolHandler.createTool(
         'get_ticket',
-        'Get a specific ticket by ID with full details',
+        'Get a specific ticket by ID with full details from Tickets entity.',
         'read',
         {
           id: {
             type: 'number',
-            description: 'Ticket ID to retrieve'
+            description: 'Ticket ID to retrieve - refers to Tickets entity'
           },
           fullDetails: {
             type: 'boolean',
@@ -1007,12 +1006,12 @@ export class EnhancedAutotaskToolHandler {
       ),
       EnhancedAutotaskToolHandler.createTool(
         'get_ticket_by_number',
-        'Get a specific ticket by ticket number (e.g., T20250914.0008) with full details',
+        'Get a specific ticket by ticket number (e.g., T20250914.0008) with full details from Tickets entity.',
         'read',
         {
           ticketNumber: {
             type: 'string',
-            description: 'Ticket number to retrieve (e.g., T20250914.0008)'
+            description: 'Ticket number to retrieve (e.g., T20250914.0008) - refers to ticketNumber field in Tickets entity'
           },
           fullDetails: {
             type: 'boolean',
@@ -1023,40 +1022,40 @@ export class EnhancedAutotaskToolHandler {
       ),
       EnhancedAutotaskToolHandler.createTool(
         'get_project',
-        'Get a specific project by ID with full details',
+        'Get a specific project by ID with full details from Projects entity.',
         'read',
         {
           id: {
             type: 'number',
-            description: 'Project ID to retrieve'
+            description: 'Project ID to retrieve - refers to Projects entity'
           }
         },
         ['id']
       ),
       EnhancedAutotaskToolHandler.createTool(
         'get_resource',
-        'Get a specific resource (employee) by ID with full details',
+        'Get a specific resource (employee) by ID with full details from Resources entity.',
         'read',
         {
           id: {
             type: 'number',
-            description: 'Resource ID to retrieve'
+            description: 'Resource ID to retrieve - refers to Resources entity (employee/user)'
           }
         },
         ['id']
       ),
       EnhancedAutotaskToolHandler.createTool(
         'create_project',
-        'Create a new project in Autotask',
+        'Create a new project in Autotask. Returns the new project ID.',
         'write',
         {
           companyID: {
             type: 'number',
-            description: 'Company ID for the project'
+            description: 'Company ID for the project (required) - refers to Companies entity'
           },
           projectName: {
             type: 'string',
-            description: 'Project name'
+            description: 'Project name (required)'
           },
           description: {
             type: 'string',
@@ -1064,15 +1063,15 @@ export class EnhancedAutotaskToolHandler {
           },
           status: {
             type: 'number',
-            description: 'Project status ID'
+            description: 'Project status ID. Common values: 1=New, 2=In Progress, 3=Complete, 4=Canceled, 5=On Hold'
           },
           projectType: {
             type: 'number',
-            description: 'Project type ID'
+            description: 'Project type ID. Common values: 1=Fixed Price, 2=Time and Materials, 3=Retainer, 4=Internal'
           },
           projectManagerResourceID: {
             type: 'number',
-            description: 'Project manager resource ID'
+            description: 'Project manager resource ID - refers to Resources entity (employee managing this project)'
           },
           startDateTime: {
             type: 'string',
@@ -1091,12 +1090,12 @@ export class EnhancedAutotaskToolHandler {
       ),
       EnhancedAutotaskToolHandler.createTool(
         'update_project',
-        'Update an existing project in Autotask',
+        'Update an existing project in Autotask. Requires project ID from Projects entity.',
         'modify',
         {
           id: {
             type: 'number',
-            description: 'Project ID to update'
+            description: 'Project ID to update - refers to Projects entity'
           },
           projectName: {
             type: 'string',
@@ -1108,11 +1107,11 @@ export class EnhancedAutotaskToolHandler {
           },
           status: {
             type: 'number',
-            description: 'Project status ID'
+            description: 'Project status ID. Common values: 1=New, 2=In Progress, 3=Complete, 4=Canceled, 5=On Hold'
           },
           projectManagerResourceID: {
             type: 'number',
-            description: 'Project manager resource ID'
+            description: 'Project manager resource ID - refers to Resources entity (employee managing this project)'
           },
           startDateTime: {
             type: 'string',
@@ -1133,32 +1132,32 @@ export class EnhancedAutotaskToolHandler {
       // Time Entry Management
       EnhancedAutotaskToolHandler.createTool(
         'search_time_entries',
-        'Search for time entries in Autotask with filters',
+        'Search for time entries in Autotask with comprehensive filtering options. To find time entries for a project, get tasks or tickets first. Time entries represent work logged by employees/technicians against tickets, tasks, or projects. Returns detailed time entry records including duration, billing information, work descriptions, and associated entity relationships (ticket/task/project/resource). Use this to find logged work hours, track employee productivity, analyze project time allocation, generate billing reports, or audit time tracking. Default behavior returns last 30 days of entries if no filters specified.',
         'read',
         {
           ticketID: {
             type: 'number',
-            description: 'Filter by ticket ID'
+            description: 'Filter by specific ticket ID - refers to Tickets entity. Use when you want time entries logged against a particular support ticket or service request. Example: Find all hours worked on ticket #12345 to understand total effort spent resolving that issue. Combines well with resourceId to see who worked on the ticket and dateFrom/dateTo to see work over time periods.'
           },
           taskID: {
             type: 'number',
-            description: 'Filter by task ID'
+            description: 'Filter by specific task ID - refers to Tasks entity (project tasks). Use when you want time entries for a particular project task or deliverable. Example: Find hours logged against "Database Migration" task to track progress and resource allocation. Tasks are typically part of projects, so this gives more granular tracking than projectId alone. Often used with projectId context.'
           },
-          resourceId: {
+          resourceID: {
             type: 'number',
-            description: 'Filter by resource ID'
+            description: 'Filter by specific resource ID - refers to Resources entity (employee/technician/consultant). Use to find all time entries logged by a particular person. Essential for: employee productivity reports, timesheet verification, billable hours tracking per person, workload analysis. Example: Get all time entries for John Doe (resourceId: 123) to generate his monthly timesheet or analyze his work distribution across projects.'
           },
           dateFrom: {
             type: 'string',
-            description: 'Start date filter (YYYY-MM-DD format)'
+            description: 'Start date filter (YYYY-MM-DD format). Filters time entries by the dateWorked field - the actual date work was performed, not when it was logged. Use to create time-bounded reports like "March 2024 timesheet" or "last quarter billing". Essential for payroll periods, billing cycles, project phase analysis. Example: "2024-03-01" to start from March 1st. Commonly paired with dateTo for ranges.'
           },
           dateTo: {
             type: 'string',
-            description: 'End date filter (YYYY-MM-DD format)'
+            description: 'End date filter (YYYY-MM-DD format). Works with dateFrom to create date ranges. Without dateFrom, gets all entries up to this date. Essential for: monthly/quarterly reports, billing cutoffs, project phase completions. Example: "2024-03-31" to end at March 31st. Use inclusive date logic (entries ON the dateTo are included).'
           },
           pageSize: {
             type: 'number',
-            description: 'Number of results to return (max 200)',
+            description: 'Number of results to return (max 200). Time entry searches can return large datasets, especially for date ranges or popular resources/projects. Start with smaller values (25-50) for initial exploration, use larger values (100-200) for comprehensive reports. Larger values may cause slower responses. Consider pagination for very large datasets.',
             minimum: 1,
             maximum: 200
           }
@@ -1166,12 +1165,12 @@ export class EnhancedAutotaskToolHandler {
       ),
       EnhancedAutotaskToolHandler.createTool(
         'get_time_entry',
-        'Get a specific time entry by ID with full details',
+        'Get a specific time entry by ID with full details from TimeEntries entity.',
         'read',
         {
           id: {
             type: 'number',
-            description: 'Time entry ID to retrieve'
+            description: 'Time entry ID to retrieve - refers to TimeEntries entity'
           }
         },
         ['id']
@@ -1180,24 +1179,24 @@ export class EnhancedAutotaskToolHandler {
       // Task Management
       EnhancedAutotaskToolHandler.createTool(
         'search_tasks',
-        'Search for tasks in Autotask with filters',
+        'Search for tasks in Autotask with filters. Returns task records with project and resource information.',
         'read',
         {
           projectId: {
             type: 'number',
-            description: 'Filter by project ID'
+            description: 'Filter by project ID - refers to Projects entity'
           },
           assignedResourceId: {
             type: 'number',
-            description: 'Filter by assigned resource ID'
+            description: 'Filter by assigned resource ID - refers to Resources entity (employee assigned to task)'
           },
           status: {
             type: 'number',
-            description: 'Filter by status ID'
+            description: 'Filter by status ID. Common values: 1=New, 2=In Progress, 3=Complete, 4=Canceled, 5=On Hold'
           },
           searchTerm: {
             type: 'string',
-            description: 'Search term to filter tasks by title'
+            description: 'Search term to filter tasks by title (partial match supported)'
           },
           pageSize: {
             type: 'number',
@@ -1209,28 +1208,28 @@ export class EnhancedAutotaskToolHandler {
       ),
       EnhancedAutotaskToolHandler.createTool(
         'get_task',
-        'Get a specific task by ID with full details',
+        'Get a specific task by ID with full details from Tasks entity.',
         'read',
         {
           id: {
             type: 'number',
-            description: 'Task ID to retrieve'
+            description: 'Task ID to retrieve - refers to Tasks entity'
           }
         },
         ['id']
       ),
       EnhancedAutotaskToolHandler.createTool(
         'create_task',
-        'Create a new task in Autotask',
+        'Create a new task in Autotask. Returns the new task ID.',
         'write',
         {
           projectID: {
             type: 'number',
-            description: 'Project ID for the task'
+            description: 'Project ID for the task (required) - refers to Projects entity'
           },
           title: {
             type: 'string',
-            description: 'Task title'
+            description: 'Task title (required)'
           },
           description: {
             type: 'string',
@@ -1238,11 +1237,11 @@ export class EnhancedAutotaskToolHandler {
           },
           assignedResourceID: {
             type: 'number',
-            description: 'Assigned resource ID'
+            description: 'Assigned resource ID - refers to Resources entity (employee assigned to task)'
           },
           status: {
             type: 'number',
-            description: 'Task status ID'
+            description: 'Task status ID. Common values: 1=New, 2=In Progress, 3=Complete, 4=Canceled, 5=On Hold'
           },
           startDateTime: {
             type: 'string',
@@ -1258,19 +1257,19 @@ export class EnhancedAutotaskToolHandler {
           },
           priorityLabel: {
             type: 'string',
-            description: 'Priority label'
+            description: 'Priority label. Common values: "Critical", "High", "Normal", "Low"'
           }
         },
         ['projectID', 'title']
       ),
       EnhancedAutotaskToolHandler.createTool(
         'update_task',
-        'Update an existing task in Autotask',
+        'Update an existing task in Autotask. Requires task ID from Tasks entity.',
         'modify',
         {
           id: {
             type: 'number',
-            description: 'Task ID to update'
+            description: 'Task ID to update - refers to Tasks entity'
           },
           title: {
             type: 'string',
@@ -1282,11 +1281,11 @@ export class EnhancedAutotaskToolHandler {
           },
           assignedResourceID: {
             type: 'number',
-            description: 'Assigned resource ID'
+            description: 'Assigned resource ID - refers to Resources entity (employee assigned to task)'
           },
           status: {
             type: 'number',
-            description: 'Task status ID'
+            description: 'Task status ID. Common values: 1=New, 2=In Progress, 3=Complete, 4=Canceled, 5=On Hold'
           },
           startDateTime: {
             type: 'string',
@@ -1311,12 +1310,12 @@ export class EnhancedAutotaskToolHandler {
       // Notes Management
       EnhancedAutotaskToolHandler.createTool(
         'search_ticket_notes',
-        'Search for notes on a specific ticket',
+        'Search for notes on a specific ticket. Returns note records from TicketNotes entity.',
         'read',
         {
           ticketID: {
             type: 'number',
-            description: 'Ticket ID to search notes for'
+            description: 'Ticket ID to search notes for (required) - refers to Tickets entity'
           },
           pageSize: {
             type: 'number',
@@ -1329,28 +1328,28 @@ export class EnhancedAutotaskToolHandler {
       ),
       EnhancedAutotaskToolHandler.createTool(
         'get_ticket_note',
-        'Get a specific ticket note by ticket ID and note ID',
+        'Get a specific ticket note by ticket ID and note ID from TicketNotes entity.',
         'read',
         {
           ticketID: {
             type: 'number',
-            description: 'Ticket ID'
+            description: 'Ticket ID - refers to Tickets entity'
           },
           noteId: {
             type: 'number',
-            description: 'Note ID'
+            description: 'Note ID - refers to TicketNotes entity'
           }
         },
         ['ticketID', 'noteId']
       ),
       EnhancedAutotaskToolHandler.createTool(
         'create_ticket_note',
-        'Create a new note on a ticket',
+        'Create a new note on a ticket. Returns the new note ID.',
         'write',
         {
           ticketID: {
             type: 'number',
-            description: 'Ticket ID to add note to'
+            description: 'Ticket ID to add note to (required) - refers to Tickets entity'
           },
           title: {
             type: 'string',
@@ -1358,15 +1357,15 @@ export class EnhancedAutotaskToolHandler {
           },
           description: {
             type: 'string',
-            description: 'Note content/description'
+            description: 'Note content/description (required)'
           },
           noteType: {
             type: 'number',
-            description: 'Note type ID'
+            description: 'Note type ID. Common values: 1=General, 2=Summary, 3=Resolution, 4=Time Entry'
           },
           publish: {
             type: 'number',
-            description: 'Publish setting (1 = Internal Only, 2 = All Autotask Users, 3 = Client Portal)'
+            description: 'Publish setting. Values: 1=Internal Only, 2=All Autotask Users, 3=Client Portal'
           }
         },
         ['ticketID', 'description']
@@ -1374,12 +1373,12 @@ export class EnhancedAutotaskToolHandler {
 
       EnhancedAutotaskToolHandler.createTool(
         'search_project_notes',
-        'Search for notes on a specific project',
+        'Search for notes on a specific project. Returns note records from ProjectNotes entity.',
         'read',
         {
           projectId: {
             type: 'number',
-            description: 'Project ID to search notes for'
+            description: 'Project ID to search notes for (required) - refers to Projects entity'
           },
           pageSize: {
             type: 'number',
@@ -1392,28 +1391,28 @@ export class EnhancedAutotaskToolHandler {
       ),
       EnhancedAutotaskToolHandler.createTool(
         'get_project_note',
-        'Get a specific project note by project ID and note ID',
+        'Get a specific project note by project ID and note ID from ProjectNotes entity.',
         'read',
         {
           projectId: {
             type: 'number',
-            description: 'Project ID'
+            description: 'Project ID - refers to Projects entity'
           },
           noteId: {
             type: 'number',
-            description: 'Note ID'
+            description: 'Note ID - refers to ProjectNotes entity'
           }
         },
         ['projectId', 'noteId']
       ),
       EnhancedAutotaskToolHandler.createTool(
         'create_project_note',
-        'Create a new note on a project',
+        'Create a new note on a project. Returns the new note ID.',
         'write',
         {
           projectId: {
             type: 'number',
-            description: 'Project ID to add note to'
+            description: 'Project ID to add note to (required) - refers to Projects entity'
           },
           title: {
             type: 'string',
@@ -1421,15 +1420,15 @@ export class EnhancedAutotaskToolHandler {
           },
           description: {
             type: 'string',
-            description: 'Note content/description'
+            description: 'Note content/description (required)'
           },
           noteType: {
             type: 'number',
-            description: 'Note type ID'
+            description: 'Note type ID. Common values: 1=General, 2=Summary, 3=Resolution, 4=Time Entry'
           },
           publish: {
             type: 'number',
-            description: 'Publish setting (1 = Internal Only, 2 = All Autotask Users, 3 = Client Portal)'
+            description: 'Publish setting. Values: 1=Internal Only, 2=All Autotask Users, 3=Client Portal'
           }
         },
         ['projectId', 'description']
@@ -1437,12 +1436,12 @@ export class EnhancedAutotaskToolHandler {
 
       EnhancedAutotaskToolHandler.createTool(
         'search_company_notes',
-        'Search for notes on a specific company',
+        'Search for notes on a specific company. Returns note records from CompanyNotes entity.',
         'read',
         {
           companyId: {
             type: 'number',
-            description: 'Company ID to search notes for'
+            description: 'Company ID to search notes for (required) - refers to Companies entity'
           },
           pageSize: {
             type: 'number',
@@ -1455,28 +1454,28 @@ export class EnhancedAutotaskToolHandler {
       ),
       EnhancedAutotaskToolHandler.createTool(
         'get_company_note',
-        'Get a specific company note by company ID and note ID',
+        'Get a specific company note by company ID and note ID from CompanyNotes entity.',
         'read',
         {
           companyId: {
             type: 'number',
-            description: 'Company ID'
+            description: 'Company ID - refers to Companies entity'
           },
           noteId: {
             type: 'number',
-            description: 'Note ID'
+            description: 'Note ID - refers to CompanyNotes entity'
           }
         },
         ['companyId', 'noteId']
       ),
       EnhancedAutotaskToolHandler.createTool(
         'create_company_note',
-        'Create a new note on a company',
+        'Create a new note on a company. Returns the new note ID.',
         'write',
         {
           companyId: {
             type: 'number',
-            description: 'Company ID to add note to'
+            description: 'Company ID to add note to (required) - refers to Companies entity'
           },
           title: {
             type: 'string',
@@ -1484,15 +1483,15 @@ export class EnhancedAutotaskToolHandler {
           },
           description: {
             type: 'string',
-            description: 'Note content/description'
+            description: 'Note content/description (required)'
           },
           noteType: {
             type: 'number',
-            description: 'Note type ID'
+            description: 'Note type ID. Common values: 1=General, 2=Summary, 3=Resolution, 4=Time Entry'
           },
           publish: {
             type: 'number',
-            description: 'Publish setting (1 = Internal Only, 2 = All Autotask Users, 3 = Client Portal)'
+            description: 'Publish setting. Values: 1=Internal Only, 2=All Autotask Users, 3=Client Portal'
           }
         },
         ['companyId', 'description']
@@ -1501,12 +1500,12 @@ export class EnhancedAutotaskToolHandler {
       // Attachments Management  
       EnhancedAutotaskToolHandler.createTool(
         'search_ticket_attachments',
-        'Search for attachments on a specific ticket',
+        'Search for attachments on a specific ticket. Returns attachment records from TicketAttachments entity.',
         'read',
         {
           ticketID: {
             type: 'number',
-            description: 'Ticket ID to search attachments for'
+            description: 'Ticket ID to search attachments for (required) - refers to Tickets entity'
           },
           pageSize: {
             type: 'number',
@@ -1519,20 +1518,20 @@ export class EnhancedAutotaskToolHandler {
       ),
       EnhancedAutotaskToolHandler.createTool(
         'get_ticket_attachment',
-        'Get a specific ticket attachment by ticket ID and attachment ID',
+        'Get a specific ticket attachment by ticket ID and attachment ID from TicketAttachments entity.',
         'read',
         {
           ticketID: {
             type: 'number',
-            description: 'Ticket ID'
+            description: 'Ticket ID - refers to Tickets entity'
           },
           attachmentId: {
             type: 'number',
-            description: 'Attachment ID'
+            description: 'Attachment ID - refers to TicketAttachments entity'
           },
           includeData: {
             type: 'boolean',
-            description: 'Whether to include base64-encoded file data (default: false for metadata only)'
+            description: 'Whether to include base64-encoded file data (default: false for metadata only). Warning: including data may result in very large responses.'
           }
         },
         ['ticketID', 'attachmentId']
@@ -1541,36 +1540,36 @@ export class EnhancedAutotaskToolHandler {
       // Financial Management
       EnhancedAutotaskToolHandler.createTool(
         'get_contract',
-        'Get a specific contract by ID with full details',
+        'Get a specific contract by ID with full details from Contracts entity.',
         'read',
         {
           id: {
             type: 'number',
-            description: 'Contract ID to retrieve'
+            description: 'Contract ID to retrieve - refers to Contracts entity'
           }
         },
         ['id']
       ),
       EnhancedAutotaskToolHandler.createTool(
         'search_contracts',
-        'Search for contracts in Autotask with filters',
+        'Search for contracts in Autotask with filters. Returns contract records with company information.',
         'read',
         {
           companyId: {
             type: 'number',
-            description: 'Filter by company ID'
+            description: 'Filter by company ID - refers to Companies entity'
           },
           status: {
             type: 'number',
-            description: 'Filter by contract status'
+            description: 'Filter by contract status. Common values: 1=Inactive, 2=Active, 3=Complete'
           },
           contractType: {
             type: 'number',
-            description: 'Filter by contract type'
+            description: 'Filter by contract type. Common values: 1=Service, 2=Maintenance, 3=Block Hours, 4=Retainer, 5=Incident Response'
           },
           searchTerm: {
             type: 'string',
-            description: 'Search term to filter contracts by name'
+            description: 'Search term to filter contracts by name (partial match supported)'
           },
           pageSize: {
             type: 'number',
@@ -1583,24 +1582,24 @@ export class EnhancedAutotaskToolHandler {
 
       EnhancedAutotaskToolHandler.createTool(
         'get_invoice',
-        'Get a specific invoice by ID with full details',
+        'Get a specific invoice by ID with full details from Invoices entity.',
         'read',
         {
           id: {
             type: 'number',
-            description: 'Invoice ID to retrieve'
+            description: 'Invoice ID to retrieve - refers to Invoices entity'
           }
         },
         ['id']
       ),
       EnhancedAutotaskToolHandler.createTool(
         'search_invoices',
-        'Search for invoices in Autotask with filters',
+        'Search for invoices in Autotask with filters. Returns invoice records with company information.',
         'read',
         {
           companyId: {
             type: 'number',
-            description: 'Filter by company ID'
+            description: 'Filter by company ID - refers to Companies entity'
           },
           fromDate: {
             type: 'string',
@@ -1612,7 +1611,7 @@ export class EnhancedAutotaskToolHandler {
           },
           status: {
             type: 'number',
-            description: 'Filter by invoice status'
+            description: 'Filter by invoice status. Common values: 1=Draft, 2=Sent, 3=Paid, 4=Void'
           },
           pageSize: {
             type: 'number',
@@ -1625,36 +1624,36 @@ export class EnhancedAutotaskToolHandler {
 
       EnhancedAutotaskToolHandler.createTool(
         'get_quote',
-        'Get a specific quote by ID with full details',
+        'Get a specific quote by ID with full details from Quotes entity.',
         'read',
         {
           id: {
             type: 'number',
-            description: 'Quote ID to retrieve'
+            description: 'Quote ID to retrieve - refers to Quotes entity'
           }
         },
         ['id']
       ),
       EnhancedAutotaskToolHandler.createTool(
         'search_quotes',
-        'Search for quotes in Autotask with filters',
+        'Search for quotes in Autotask with filters. Returns quote records with company and contact information.',
         'read',
         {
           companyId: {
             type: 'number',
-            description: 'Filter by company ID'
+            description: 'Filter by company ID - refers to Companies entity'
           },
           contactId: {
             type: 'number',
-            description: 'Filter by contact ID'
+            description: 'Filter by contact ID - refers to Contacts entity'
           },
           opportunityId: {
             type: 'number',
-            description: 'Filter by opportunity ID'
+            description: 'Filter by opportunity ID - refers to Opportunities entity'
           },
           searchTerm: {
             type: 'string',
-            description: 'Search term to filter quotes by description'
+            description: 'Search term to filter quotes by description (partial match supported)'
           },
           pageSize: {
             type: 'number',
@@ -1666,24 +1665,24 @@ export class EnhancedAutotaskToolHandler {
       ),
       EnhancedAutotaskToolHandler.createTool(
         'create_quote',
-        'Create a new quote in Autotask',
+        'Create a new quote in Autotask. Returns the new quote ID.',
         'write',
         {
           accountId: {
             type: 'number',
-            description: 'Company/Account ID for the quote'
+            description: 'Company/Account ID for the quote (required) - refers to Companies entity'
           },
           contactId: {
             type: 'number',
-            description: 'Contact ID'
+            description: 'Contact ID (required) - refers to Contacts entity'
           },
           opportunityId: {
             type: 'number',
-            description: 'Opportunity ID (if related to an opportunity)'
+            description: 'Opportunity ID (if related to an opportunity) - refers to Opportunities entity'
           },
           title: {
             type: 'string',
-            description: 'Quote title'
+            description: 'Quote title (required)'
           },
           description: {
             type: 'string',
@@ -1695,7 +1694,7 @@ export class EnhancedAutotaskToolHandler {
           },
           paymentTerms: {
             type: 'number',
-            description: 'Payment terms ID'
+            description: 'Payment terms ID. Common values: 1=Net 10, 2=Net 15, 3=Net 30, 4=Net 45, 5=Net 60, 6=Due on Receipt'
           },
           effectiveDate: {
             type: 'string',
@@ -1711,28 +1710,28 @@ export class EnhancedAutotaskToolHandler {
 
       EnhancedAutotaskToolHandler.createTool(
         'get_expense_report',
-        'Get a specific expense report by ID with full details',
+        'Get a specific expense report by ID with full details from ExpenseReports entity.',
         'read',
         {
           id: {
             type: 'number',
-            description: 'Expense report ID to retrieve'
+            description: 'Expense report ID to retrieve - refers to ExpenseReports entity'
           }
         },
         ['id']
       ),
       EnhancedAutotaskToolHandler.createTool(
         'search_expense_reports',
-        'Search for expense reports in Autotask with filters',
+        'Search for expense reports in Autotask with filters. Returns expense report records with submitter information.',
         'read',
         {
           submitterId: {
             type: 'number',
-            description: 'Filter by submitter resource ID'
+            description: 'Filter by submitter resource ID - refers to Resources entity (employee who submitted the expense report)'
           },
           status: {
             type: 'number',
-            description: 'Filter by expense report status'
+            description: 'Filter by expense report status. Common values: 1=New, 2=Submitted, 3=Approved, 4=Rejected, 5=Paid'
           },
           fromDate: {
             type: 'string',
@@ -1752,28 +1751,28 @@ export class EnhancedAutotaskToolHandler {
       ),
       EnhancedAutotaskToolHandler.createTool(
         'create_expense_report',
-        'Create a new expense report in Autotask',
+        'Create a new expense report in Autotask. Returns the new expense report ID.',
         'write',
         {
           resourceId: {
             type: 'number',
-            description: 'Resource ID (submitter of the expense report)'
+            description: 'Resource ID (submitter of the expense report) (required) - refers to Resources entity (employee)'
           },
           name: {
             type: 'string',
-            description: 'Expense report name/title'
+            description: 'Expense report name/title (required)'
           },
           weekEnding: {
             type: 'string',
-            description: 'Week ending date (YYYY-MM-DD format)'
+            description: 'Week ending date (YYYY-MM-DD format) (required)'
           },
           status: {
             type: 'number',
-            description: 'Initial status of the expense report'
+            description: 'Initial status of the expense report. Common values: 1=New, 2=Submitted, 3=Approved, 4=Rejected, 5=Paid'
           },
           approverResourceId: {
             type: 'number',
-            description: 'Approver resource ID'
+            description: 'Approver resource ID - refers to Resources entity (employee who will approve this expense report)'
           },
           submitDate: {
             type: 'string',
@@ -1784,12 +1783,12 @@ export class EnhancedAutotaskToolHandler {
       ),
       EnhancedAutotaskToolHandler.createTool(
         'update_expense_report',
-        'Update an existing expense report in Autotask',
+        'Update an existing expense report in Autotask. Requires expense report ID from ExpenseReports entity.',
         'modify',
         {
           id: {
             type: 'number',
-            description: 'Expense report ID to update'
+            description: 'Expense report ID to update - refers to ExpenseReports entity'
           },
           name: {
             type: 'string',
@@ -1797,11 +1796,11 @@ export class EnhancedAutotaskToolHandler {
           },
           status: {
             type: 'number',
-            description: 'Expense report status'
+            description: 'Expense report status. Common values: 1=New, 2=Submitted, 3=Approved, 4=Rejected, 5=Paid'
           },
           approverResourceId: {
             type: 'number',
-            description: 'Approver resource ID'
+            description: 'Approver resource ID - refers to Resources entity (employee who will approve this expense report)'
           },
           submitDate: {
             type: 'string',
@@ -1818,32 +1817,32 @@ export class EnhancedAutotaskToolHandler {
       // Expense Items Management
       EnhancedAutotaskToolHandler.createTool(
         'search_expense_items',
-        'Search for expense items in a specific expense report (parent-child relationship)',
+        'Search for expense items in a specific expense report (parent-child relationship). Returns expense item records from ExpenseItems entity.',
         'read',
         {
           expenseReportId: {
             type: 'number',
-            description: 'Expense report ID (required - parent entity)'
+            description: 'Expense report ID (required - parent entity) - refers to ExpenseReports entity'
           },
           companyId: {
             type: 'number',
-            description: 'Filter by company ID'
+            description: 'Filter by company ID - refers to Companies entity'
           },
           projectId: {
             type: 'number',
-            description: 'Filter by project ID'
+            description: 'Filter by project ID - refers to Projects entity'
           },
           taskID: {
             type: 'number',
-            description: 'Filter by task ID'
+            description: 'Filter by task ID - refers to Tasks entity'
           },
           ticketID: {
             type: 'number',
-            description: 'Filter by ticket ID'
+            description: 'Filter by ticket ID - refers to Tickets entity'
           },
           expenseCategory: {
             type: 'number',
-            description: 'Filter by expense category'
+            description: 'Filter by expense category. Common values: 1=Meals, 2=Lodging, 3=Transportation, 4=Entertainment, 5=Other'
           },
           fromDate: {
             type: 'string',
@@ -1864,84 +1863,84 @@ export class EnhancedAutotaskToolHandler {
       ),
       EnhancedAutotaskToolHandler.createTool(
         'get_expense_item',
-        'Get a specific expense item by ID from an expense report (parent-child relationship)',
+        'Get a specific expense item by ID from an expense report (parent-child relationship). Returns expense item details from ExpenseItems entity.',
         'read',
         {
           id: {
             type: 'number',
-            description: 'Expense item ID to retrieve'
+            description: 'Expense item ID to retrieve - refers to ExpenseItems entity'
           },
           expenseReportId: {
             type: 'number',
-            description: 'Expense report ID (required - parent entity)'
+            description: 'Expense report ID (required - parent entity) - refers to ExpenseReports entity'
           }
         },
         ['id', 'expenseReportId']
       ),
       EnhancedAutotaskToolHandler.createTool(
         'create_expense_item',
-        'Create a new expense item in Autotask',
+        'Create a new expense item in Autotask. Returns the new expense item ID.',
         'write',
         {
           expenseReportID: {
             type: 'number',
-            description: 'Expense report ID'
+            description: 'Expense report ID (required) - refers to ExpenseReports entity'
           },
           companyID: {
             type: 'number',
-            description: 'Company ID'
+            description: 'Company ID (required) - refers to Companies entity'
           },
           description: {
             type: 'string',
-            description: 'Expense description'
+            description: 'Expense description (required)'
           },
           expenseCategory: {
             type: 'number',
-            description: 'Expense category ID'
+            description: 'Expense category ID (required). Common values: 1=Meals, 2=Lodging, 3=Transportation, 4=Entertainment, 5=Other'
           },
           expenseDate: {
             type: 'string',
-            description: 'Expense date (YYYY-MM-DD format)'
+            description: 'Expense date (YYYY-MM-DD format) (required)'
           },
           expenseCurrencyExpenseAmount: {
             type: 'number',
-            description: 'Amount in expense currency'
+            description: 'Amount in expense currency (decimal format, e.g., 25.50)'
           },
           expenseCurrencyID: {
             type: 'number',
-            description: 'Expense currency ID'
+            description: 'Expense currency ID. Common values: 1=USD, 2=EUR, 3=GBP, 4=CAD'
           },
           projectID: {
             type: 'number',
-            description: 'Project ID (if billable to project)'
+            description: 'Project ID (if billable to project) - refers to Projects entity'
           },
           taskID: {
             type: 'number',
-            description: 'Task ID (if billable to task)'
+            description: 'Task ID (if billable to task) - refers to Tasks entity'
           },
           ticketID: {
             type: 'number',
-            description: 'Ticket ID (if billable to ticket)'
+            description: 'Ticket ID (if billable to ticket) - refers to Tickets entity'
           },
           isBillableToCompany: {
             type: 'boolean',
-            description: 'Whether expense is billable to company'
+            description: 'Whether expense is billable to company (true/false)'
           },
           isReimbursable: {
             type: 'boolean',
-            description: 'Whether expense is reimbursable'
+            description: 'Whether expense is reimbursable (true/false)'
           },
           haveReceipt: {
             type: 'boolean',
-            description: 'Whether receipt is available'
+            description: 'Whether receipt is available (true/false)'
           },
           paymentType: {
             type: 'number',
-            description: 'Payment type ID'
+            description: 'Payment type ID. Common values: 1=Cash, 2=Check, 3=Credit Card, 4=Company Card'
           },
           workType: {
             type: 'number',
-            description: 'Work type ID'
+            description: 'Work type ID - refers to WorkTypes entity'
           },
           miles: {
             type: 'number',
@@ -1965,23 +1964,23 @@ export class EnhancedAutotaskToolHandler {
           },
           glCode: {
             type: 'string',
-            description: 'GL code'
+            description: 'GL code (general ledger code)'
           }
         },
         ['expenseReportID', 'companyID', 'description', 'expenseCategory', 'expenseDate']
       ),
       EnhancedAutotaskToolHandler.createTool(
         'update_expense_item',
-        'Update an existing expense item in an expense report (parent-child relationship)',
+        'Update an existing expense item in an expense report (parent-child relationship). Requires expense item ID from ExpenseItems entity.',
         'modify',
         {
           id: {
             type: 'number',
-            description: 'Expense item ID to update'
+            description: 'Expense item ID to update - refers to ExpenseItems entity'
           },
           expenseReportId: {
             type: 'number',
-            description: 'Expense report ID (recommended - parent entity)'
+            description: 'Expense report ID (recommended - parent entity) - refers to ExpenseReports entity'
           },
           description: {
             type: 'string',
@@ -1989,7 +1988,7 @@ export class EnhancedAutotaskToolHandler {
           },
           expenseCategory: {
             type: 'number',
-            description: 'Expense category ID'
+            description: 'Expense category ID. Common values: 1=Meals, 2=Lodging, 3=Transportation, 4=Entertainment, 5=Other'
           },
           expenseDate: {
             type: 'string',
@@ -1997,39 +1996,39 @@ export class EnhancedAutotaskToolHandler {
           },
           expenseCurrencyExpenseAmount: {
             type: 'number',
-            description: 'Amount in expense currency'
+            description: 'Amount in expense currency (decimal format, e.g., 25.50)'
           },
           projectID: {
             type: 'number',
-            description: 'Project ID (if billable to project)'
+            description: 'Project ID (if billable to project) - refers to Projects entity'
           },
           taskID: {
             type: 'number',
-            description: 'Task ID (if billable to task)'
+            description: 'Task ID (if billable to task) - refers to Tasks entity'
           },
           ticketID: {
             type: 'number',
-            description: 'Ticket ID (if billable to ticket)'
+            description: 'Ticket ID (if billable to ticket) - refers to Tickets entity'
           },
           isBillableToCompany: {
             type: 'boolean',
-            description: 'Whether expense is billable to company'
+            description: 'Whether expense is billable to company (true/false)'
           },
           isReimbursable: {
             type: 'boolean',
-            description: 'Whether expense is reimbursable'
+            description: 'Whether expense is reimbursable (true/false)'
           },
           haveReceipt: {
             type: 'boolean',
-            description: 'Whether receipt is available'
+            description: 'Whether receipt is available (true/false)'
           },
           paymentType: {
             type: 'number',
-            description: 'Payment type ID'
+            description: 'Payment type ID. Common values: 1=Cash, 2=Check, 3=Credit Card, 4=Company Card'
           },
           workType: {
             type: 'number',
-            description: 'Work type ID'
+            description: 'Work type ID - refers to WorkTypes entity'
           },
           miles: {
             type: 'number',
@@ -2053,7 +2052,7 @@ export class EnhancedAutotaskToolHandler {
           },
           glCode: {
             type: 'string',
-            description: 'GL code'
+            description: 'GL code (general ledger code)'
           }
         },
         ['id']
@@ -2062,40 +2061,40 @@ export class EnhancedAutotaskToolHandler {
       // Configuration Items Management
       EnhancedAutotaskToolHandler.createTool(
         'get_configuration_item',
-        'Get a specific configuration item by ID with full details',
+        'Get a specific configuration item by ID with full details from ConfigurationItems entity.',
         'read',
         {
           id: {
             type: 'number',
-            description: 'Configuration item ID to retrieve'
+            description: 'Configuration item ID to retrieve - refers to ConfigurationItems entity'
           }
         },
         ['id']
       ),
       EnhancedAutotaskToolHandler.createTool(
         'search_configuration_items',
-        'Search for configuration items in Autotask with filters',
+        'Search for configuration items in Autotask with filters. Returns configuration item records with company information.',
         'read',
         {
           companyId: {
             type: 'number',
-            description: 'Filter by company ID'
+            description: 'Filter by company ID - refers to Companies entity'
           },
           configurationItemType: {
             type: 'number',
-            description: 'Filter by configuration item type'
+            description: 'Filter by configuration item type. Common values: 1=Desktop, 2=Laptop, 3=Server, 4=Printer, 5=Network Device, 6=Software'
           },
           serialNumber: {
             type: 'string',
-            description: 'Filter by serial number'
+            description: 'Filter by serial number (partial match supported)'
           },
           referenceTitle: {
             type: 'string',
-            description: 'Filter by reference title'
+            description: 'Filter by reference title (partial match supported)'
           },
           searchTerm: {
             type: 'string',
-            description: 'Search term to filter configuration items'
+            description: 'Search term to filter configuration items (partial match supported)'
           },
           pageSize: {
             type: 'number',
@@ -2107,20 +2106,20 @@ export class EnhancedAutotaskToolHandler {
       ),
       EnhancedAutotaskToolHandler.createTool(
         'create_configuration_item',
-        'Create a new configuration item in Autotask',
+        'Create a new configuration item in Autotask. Returns the new configuration item ID.',
         'write',
         {
           companyID: {
             type: 'number',
-            description: 'Company ID for the configuration item'
+            description: 'Company ID for the configuration item (required) - refers to Companies entity'
           },
           configurationItemType: {
             type: 'number',
-            description: 'Configuration item type ID'
+            description: 'Configuration item type ID (required). Common values: 1=Desktop, 2=Laptop, 3=Server, 4=Printer, 5=Network Device, 6=Software'
           },
           referenceTitle: {
             type: 'string',
-            description: 'Reference title/name'
+            description: 'Reference title/name (required)'
           },
           serialNumber: {
             type: 'string',
@@ -2128,11 +2127,11 @@ export class EnhancedAutotaskToolHandler {
           },
           installedProductID: {
             type: 'number',
-            description: 'Installed product ID'
+            description: 'Installed product ID - refers to Products entity'
           },
           contactID: {
             type: 'number',
-            description: 'Contact ID'
+            description: 'Contact ID - refers to Contacts entity (person responsible for this item)'
           },
           location: {
             type: 'string',
@@ -2147,12 +2146,12 @@ export class EnhancedAutotaskToolHandler {
       ),
       EnhancedAutotaskToolHandler.createTool(
         'update_configuration_item',
-        'Update an existing configuration item in Autotask',
+        'Update an existing configuration item in Autotask. Requires configuration item ID from ConfigurationItems entity.',
         'modify',
         {
           id: {
             type: 'number',
-            description: 'Configuration item ID to update'
+            description: 'Configuration item ID to update - refers to ConfigurationItems entity'
           },
           referenceTitle: {
             type: 'string',
@@ -2164,11 +2163,11 @@ export class EnhancedAutotaskToolHandler {
           },
           installedProductID: {
             type: 'number',
-            description: 'Installed product ID'
+            description: 'Installed product ID - refers to Products entity'
           },
           contactID: {
             type: 'number',
-            description: 'Contact ID'
+            description: 'Contact ID - refers to Contacts entity (person responsible for this item)'
           },
           location: {
             type: 'string',
@@ -2185,24 +2184,24 @@ export class EnhancedAutotaskToolHandler {
       // ID-to-Name Mapping tools
       EnhancedAutotaskToolHandler.createTool(
         'get_company_name',
-        'Get company name by ID',
+        'Get company name by ID from Companies entity.',
         'read',
         {
           id: {
             type: 'number',
-            description: 'Company ID'
+            description: 'Company ID - refers to Companies entity'
           }
         },
         ['id']
       ),
       EnhancedAutotaskToolHandler.createTool(
         'get_resource_name',
-        'Get resource name by ID',
+        'Get resource name by ID from Resources entity.',
         'read',
         {
           id: {
             type: 'number',
-            description: 'Resource ID'
+            description: 'Resource ID - refers to Resources entity (employee/user)'
           }
         },
         ['id']
@@ -2211,7 +2210,7 @@ export class EnhancedAutotaskToolHandler {
       // Pagination helper tools
       EnhancedAutotaskToolHandler.createTool(
         'get_companies_page',
-        'Get a specific page of companies (optimized for pagination)',
+        'Get a specific page of companies (optimized for pagination). Returns company records with enhanced information.',
         'read',
         {
           page: {
@@ -2229,11 +2228,11 @@ export class EnhancedAutotaskToolHandler {
            },
           searchTerm: {
             type: 'string',
-            description: 'Optional search term to filter companies by name'
+            description: 'Optional search term to filter companies by name (partial match supported)'
           },
           isActive: {
             type: 'boolean',
-            description: 'Optional filter by active status'
+            description: 'Optional filter by active status (true for active companies, false for inactive)'
           }
         }
       ),
@@ -2241,7 +2240,7 @@ export class EnhancedAutotaskToolHandler {
       // Test connection tool
       EnhancedAutotaskToolHandler.createTool(
         'test_connection',
-        'Test connectivity to the Autotask API',
+        'Test connectivity to the Autotask API. Returns connection status and basic API information.',
         'read',
         {}
       ),
@@ -2794,7 +2793,7 @@ export class EnhancedAutotaskToolHandler {
           if (company.ownerResourceID) {
             try {
               enhanced._enhanced = enhanced._enhanced || {};
-              enhanced._enhanced.ownerResourceName = await mappingService.getResourceName(company.ownerResourceID);
+              enhanced._enhanced.ownerResourceName = await mappingService.getResourceName(company.ownerResourceID, tenantContext);
             } catch (error) {
               this.logger.info(`Failed to map owner resource ID ${company.ownerResourceID}:`, error);
               enhanced._enhanced = enhanced._enhanced || {};
@@ -2948,7 +2947,7 @@ export class EnhancedAutotaskToolHandler {
           if (contact.companyID) {
             try {
               enhanced._enhanced = enhanced._enhanced || {};
-              enhanced._enhanced.companyName = await mappingService.getCompanyName(contact.companyID);
+              enhanced._enhanced.companyName = await mappingService.getCompanyName(contact.companyID, tenantContext);
             } catch (error) {
               this.logger.info(`Failed to map company ID ${contact.companyID}:`, error);
               enhanced._enhanced = enhanced._enhanced || {};
@@ -3151,7 +3150,7 @@ export class EnhancedAutotaskToolHandler {
           if (ticket.companyID) {
             try {
               enhanced._enhanced = enhanced._enhanced || {};
-              enhanced._enhanced.companyName = await mappingService.getCompanyName(ticket.companyID);
+              enhanced._enhanced.companyName = await mappingService.getCompanyName(ticket.companyID, tenantContext);
             } catch (error) {
               this.logger.info(`Failed to map company ID ${ticket.companyID}:`, error);
               enhanced._enhanced = enhanced._enhanced || {};
@@ -3163,7 +3162,7 @@ export class EnhancedAutotaskToolHandler {
           if (ticket.assignedResourceID) {
             try {
               enhanced._enhanced = enhanced._enhanced || {};
-              enhanced._enhanced.assignedResourceName = await mappingService.getResourceName(ticket.assignedResourceID);
+              enhanced._enhanced.assignedResourceName = await mappingService.getResourceName(ticket.assignedResourceID, tenantContext);
             } catch (error) {
               this.logger.info(`Failed to map assigned resource ID ${ticket.assignedResourceID}:`, error);
               enhanced._enhanced = enhanced._enhanced || {};
@@ -3311,7 +3310,7 @@ export class EnhancedAutotaskToolHandler {
           if (project.companyID) {
             try {
               enhanced._enhanced = enhanced._enhanced || {};
-              enhanced._enhanced.companyName = await mappingService.getCompanyName(project.companyID);
+              enhanced._enhanced.companyName = await mappingService.getCompanyName(project.companyID, tenantContext);
             } catch (error) {
               this.logger.info(`Failed to map company ID ${project.companyID}:`, error);
               enhanced._enhanced = enhanced._enhanced || {};
@@ -3441,7 +3440,7 @@ export class EnhancedAutotaskToolHandler {
     }
   }
 
-  private async getCompanyName(args: Record<string, any>, _tenantContext?: TenantContext): Promise<McpToolResult> {
+  private async getCompanyName(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
     try {
       const companyId = args.id;
       if (typeof companyId !== 'number') {
@@ -3449,7 +3448,7 @@ export class EnhancedAutotaskToolHandler {
       }
 
       const mappingService = await this.getMappingService();
-      const companyName = await mappingService.getCompanyName(companyId);
+      const companyName = await mappingService.getCompanyName(companyId, tenantContext);
       
       return this.createDataResponse({ companyName });
     } catch (error) {
@@ -3457,7 +3456,7 @@ export class EnhancedAutotaskToolHandler {
     }
   }
 
-  private async getResourceName(args: Record<string, any>, _tenantContext?: TenantContext): Promise<McpToolResult> {
+  private async getResourceName(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
     try {
       const resourceId = args.id;
       if (typeof resourceId !== 'number') {
@@ -3465,7 +3464,7 @@ export class EnhancedAutotaskToolHandler {
       }
 
       const mappingService = await this.getMappingService();
-      const resourceName = await mappingService.getResourceName(resourceId);
+      const resourceName = await mappingService.getResourceName(resourceId, tenantContext);
       
       return this.createDataResponse({ resourceName });
     } catch (error) {
@@ -4933,7 +4932,7 @@ export class EnhancedAutotaskToolHandler {
           if (company.ownerResourceID) {
             try {
               enhanced._enhanced = enhanced._enhanced || {};
-              enhanced._enhanced.ownerResourceName = await mappingService.getResourceName(company.ownerResourceID);
+              enhanced._enhanced.ownerResourceName = await mappingService.getResourceName(company.ownerResourceID, tenantContext);
             } catch (error) {
               this.logger.info(`Failed to map owner resource ID ${company.ownerResourceID}:`, error);
               enhanced._enhanced = enhanced._enhanced || {};
