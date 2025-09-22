@@ -96,14 +96,10 @@ export class AutotaskMcpServer {
 
     // List available tools
     this.server.setRequestHandler(ListToolsRequestSchema, async () => {
-      try {
-        this.logger.info('Handling list tools request (no tenant context available at protocol level)');
+      try { 
         const tools = await this.toolHandler.listTools(); // No tenant context available during listTools
         
-        this.logger.info(`📋 Listed ${tools.length} tools`, {
-          mode: 'default (write - no tenant context)',
-          toolNames: tools.map(t => t.name)
-        });
+        this.logger.info(`📋 Listed ${tools.length} tools` );
         
         return { tools };
       } catch (error) {

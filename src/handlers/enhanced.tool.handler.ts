@@ -362,34 +362,12 @@ export class EnhancedAutotaskToolHandler {
    * Extract tenant context from tool arguments
    */
   private extractTenantContext(args: Record<string, any>): TenantContext | undefined {
-    this.logger.info('🔍 Extracting tenant context from tool arguments', {
-      hasArgs: !!args,
-      argKeys: Object.keys(args || {}),
-      has_tenant: !!(args && args._tenant),
-      hasTenant: !!(args && args.tenant),
-      hasCredentials: !!(args && args.credentials)
-    });
+     
 
     // Check if tenant credentials are provided in the arguments
     if (args._tenant || args.tenant || args.credentials) {
       const tenantData = args._tenant || args.tenant || args.credentials;
-      
-      this.logger.info('🏢 Found tenant data in arguments', {
-        dataSource: args._tenant ? '_tenant' : args.tenant ? 'tenant' : 'credentials',
-        hasUsername: !!tenantData.username,
-        hasSecret: !!tenantData.secret,
-        hasIntegrationCode: !!tenantData.integrationCode,
-        hasApiUrl: !!tenantData.apiUrl,
-        hasTenantId: !!tenantData.tenantId,
-        hasSessionId: !!tenantData.sessionId,
-        hasImpersonationResourceId: !!tenantData.impersonationResourceId,
-        hasMode: !!tenantData.mode,
-        tenantId: tenantData.tenantId,
-        username: tenantData.username ? `${tenantData.username.substring(0, 3)}***` : undefined,
-        apiUrl: tenantData.apiUrl,
-        impersonationResourceId: tenantData.impersonationResourceId,
-        mode: tenantData.mode
-      });
+       
       
       if (tenantData.username && tenantData.secret && tenantData.integrationCode) {
         const credentials: AutotaskCredentials = {
