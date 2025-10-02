@@ -428,13 +428,11 @@ export class EnhancedAutotaskToolHandler {
     const readOnlyTools = [
       'search_companies', 'search_contacts', 'search_tickets', 'search_projects', 'search_resources',
       'search_time_entries', 'search_tasks', 
-      'search_ticket_notes', 'get_ticket_note', 'search_project_notes', 'get_project_note',
+      'search_ticket_notes','search_project_notes',
       'search_company_notes', 'get_company_note', 'search_ticket_attachments', 'get_ticket_attachment',
-      'search_contracts', 'search_invoices', 'search_quotes', 'search_expense_reports',
-      'search_expense_items', 'get_expense_item',
-      'search_configuration_items', 'get_mapping_cache_stats',
-      'test_connection', 'test_zone_information',
-      'query_entity', 'get_entity', 'get_company_name', 'get_resource_name', 'get_companies_page', 'get_ticket_by_number'
+      'search_contracts', 'search_invoices', 'search_expense_reports',
+      'search_expense_items', 'get_expense_item', 
+      'query_entity', 'get_entity', 'get_companies_page', 'get_ticket_by_number'
     ];
     
     const writeTools = [
