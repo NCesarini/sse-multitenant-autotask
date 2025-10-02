@@ -99,7 +99,7 @@ export class AutotaskMcpServer {
       try { 
         const tools = await this.toolHandler.listTools(); // No tenant context available during listTools
         
-        this.logger.info(`📋 Listed ${tools.length} tools` );
+        this.logger.info(`📋 Listed ${tools.length} tools ${tools.map(t => t.name).join(', ')}` );
         
         return { tools };
       } catch (error) {

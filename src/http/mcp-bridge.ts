@@ -84,7 +84,7 @@ export class McpHttpBridge {
     try {
       const tools = await this.toolHandler.listTools(); // No tenant context available for HTTP tool listing
       
-      this.logger.info(`📋 HTTP: Listed ${tools.length} tools`, {
+      this.logger.info(`📋 HTTP: Listed ${tools.length} tools ${tools.map(t => t.name).join(', ')}`, {
         mode: 'default (write - no tenant context)',
         toolNames: tools.map(t => t.name)
       });
@@ -111,7 +111,7 @@ export class McpHttpBridge {
     try {
       const tools = await this.toolHandler.getToolsForTenant(tenantContext);
       
-      this.logger.info(`📋 HTTP: Listed ${tools.length} tools for tenant`, {
+      this.logger.info(`📋 HTTP: Listed ${tools.length} tools for tenant ${tools.map(t => t.name).join(', ')}`, {
         tenantId: tenantContext.tenantId,
         mode: tenantContext.mode,
         toolNames: tools.map(t => t.name)

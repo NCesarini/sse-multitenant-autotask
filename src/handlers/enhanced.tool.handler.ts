@@ -22,6 +22,151 @@ export const LARGE_RESPONSE_THRESHOLDS = {
 };
 
 
+/**
+ * Tool name constants - centralized list of all available tools
+ */
+export const TOOL_NAMES = {
+  // Company tools
+  SEARCH_COMPANIES: 'search_companies',
+  CREATE_COMPANY: 'create_company',
+  UPDATE_COMPANY: 'update_company',
+  
+  // Contact tools
+  SEARCH_CONTACTS: 'search_contacts',
+  CREATE_CONTACT: 'create_contact',
+  UPDATE_CONTACT: 'update_contact',
+  
+  // Ticket tools
+  SEARCH_TICKETS: 'search_tickets',
+  CREATE_TICKET: 'create_ticket',
+  UPDATE_TICKET: 'update_ticket',
+  GET_TICKET_BY_NUMBER: 'get_ticket_by_number',
+  
+  // Time Entry tools
+  CREATE_TIME_ENTRY: 'create_time_entry',
+  SEARCH_TIME_ENTRIES: 'search_time_entries',
+  
+  // Project tools
+  SEARCH_PROJECTS: 'search_projects',
+  CREATE_PROJECT: 'create_project',
+  UPDATE_PROJECT: 'update_project',
+  
+  // Resource tools
+  SEARCH_RESOURCES: 'search_resources',
+  
+  // Task tools
+  SEARCH_TASKS: 'search_tasks',
+  CREATE_TASK: 'create_task',
+  UPDATE_TASK: 'update_task',
+  
+  // Notes Management
+  SEARCH_TICKET_NOTES: 'search_ticket_notes',
+  GET_TICKET_NOTE: 'get_ticket_note',
+  CREATE_TICKET_NOTE: 'create_ticket_note',
+  SEARCH_PROJECT_NOTES: 'search_project_notes',
+  GET_PROJECT_NOTE: 'get_project_note',
+  CREATE_PROJECT_NOTE: 'create_project_note',
+  SEARCH_COMPANY_NOTES: 'search_company_notes',
+  GET_COMPANY_NOTE: 'get_company_note',
+  CREATE_COMPANY_NOTE: 'create_company_note',
+  
+  // Attachments Management
+  SEARCH_TICKET_ATTACHMENTS: 'search_ticket_attachments',
+  GET_TICKET_ATTACHMENT: 'get_ticket_attachment',
+  
+  // Financial Management
+  SEARCH_CONTRACTS: 'search_contracts',
+  SEARCH_INVOICES: 'search_invoices',
+  SEARCH_QUOTES: 'search_quotes',
+  CREATE_QUOTE: 'create_quote',
+  SEARCH_EXPENSE_REPORTS: 'search_expense_reports',
+  CREATE_EXPENSE_REPORT: 'create_expense_report',
+  UPDATE_EXPENSE_REPORT: 'update_expense_report',
+  
+  // Expense Items Management
+  SEARCH_EXPENSE_ITEMS: 'search_expense_items',
+  GET_EXPENSE_ITEM: 'get_expense_item',
+  CREATE_EXPENSE_ITEM: 'create_expense_item',
+  UPDATE_EXPENSE_ITEM: 'update_expense_item',
+  
+  // Configuration Items Management
+  SEARCH_CONFIGURATION_ITEMS: 'search_configuration_items',
+  CREATE_CONFIGURATION_ITEM: 'create_configuration_item',
+  UPDATE_CONFIGURATION_ITEM: 'update_configuration_item',
+  
+  // Pagination Helper Tools
+  GET_COMPANIES_PAGE: 'get_companies_page',
+  
+  // Generic Tools
+  QUERY_ENTITY: 'query_entity',
+  GET_ENTITY: 'get_entity'
+} as const;
+
+/**
+ * Read-only tools that don't modify data
+ */
+export const READ_ONLY_TOOLS = [
+  TOOL_NAMES.SEARCH_COMPANIES,
+  TOOL_NAMES.SEARCH_CONTACTS,
+  TOOL_NAMES.SEARCH_TICKETS,
+  TOOL_NAMES.SEARCH_PROJECTS,
+  TOOL_NAMES.SEARCH_RESOURCES,
+  TOOL_NAMES.SEARCH_TIME_ENTRIES,
+  TOOL_NAMES.SEARCH_TASKS,
+  TOOL_NAMES.SEARCH_TICKET_NOTES,
+  //TOOL_NAMES.GET_TICKET_NOTE,
+  TOOL_NAMES.SEARCH_PROJECT_NOTES,
+  //TOOL_NAMES.GET_PROJECT_NOTE,
+  TOOL_NAMES.SEARCH_COMPANY_NOTES,
+  //TOOL_NAMES.GET_COMPANY_NOTE,
+  //TOOL_NAMES.SEARCH_TICKET_ATTACHMENTS,
+  //TOOL_NAMES.GET_TICKET_ATTACHMENT,
+  TOOL_NAMES.SEARCH_CONTRACTS,
+  TOOL_NAMES.SEARCH_INVOICES,
+  TOOL_NAMES.SEARCH_QUOTES,
+  //TOOL_NAMES.SEARCH_EXPENSE_REPORTS,
+  //TOOL_NAMES.SEARCH_EXPENSE_ITEMS,
+  //TOOL_NAMES.GET_EXPENSE_ITEM,
+  //TOOL_NAMES.SEARCH_CONFIGURATION_ITEMS,
+  TOOL_NAMES.QUERY_ENTITY,
+  TOOL_NAMES.GET_ENTITY,
+  TOOL_NAMES.GET_COMPANIES_PAGE,
+  TOOL_NAMES.GET_TICKET_BY_NUMBER
+] as const;
+
+/**
+ * Write tools that create new data
+ */
+export const WRITE_TOOLS = [
+  TOOL_NAMES.CREATE_COMPANY,
+  TOOL_NAMES.CREATE_CONTACT,
+  TOOL_NAMES.CREATE_TICKET,
+  TOOL_NAMES.CREATE_TIME_ENTRY,
+  TOOL_NAMES.CREATE_TASK,
+  TOOL_NAMES.CREATE_PROJECT,
+  TOOL_NAMES.CREATE_TICKET_NOTE,
+  TOOL_NAMES.CREATE_PROJECT_NOTE,
+  TOOL_NAMES.CREATE_COMPANY_NOTE,
+  TOOL_NAMES.CREATE_QUOTE,
+  TOOL_NAMES.CREATE_EXPENSE_REPORT,
+  TOOL_NAMES.CREATE_EXPENSE_ITEM,
+  TOOL_NAMES.CREATE_CONFIGURATION_ITEM
+] as const;
+
+/**
+ * Modify tools that update existing data
+ */
+export const MODIFY_TOOLS = [
+  TOOL_NAMES.UPDATE_COMPANY,
+  TOOL_NAMES.UPDATE_CONTACT,
+  TOOL_NAMES.UPDATE_TICKET,
+  TOOL_NAMES.UPDATE_TASK,
+  TOOL_NAMES.UPDATE_PROJECT,
+  TOOL_NAMES.UPDATE_EXPENSE_REPORT,
+  TOOL_NAMES.UPDATE_EXPENSE_ITEM,
+  TOOL_NAMES.UPDATE_CONFIGURATION_ITEM
+] as const;
+
 export class EnhancedAutotaskToolHandler {
   private autotaskService: AutotaskService;
   private mappingService: MappingService | null = null;
@@ -62,6 +207,23 @@ export class EnhancedAutotaskToolHandler {
    */
   public static getLargeResponseThresholds(): typeof LARGE_RESPONSE_THRESHOLDS {
     return { ...LARGE_RESPONSE_THRESHOLDS };
+  }
+
+  /**
+   * Get all available tool names
+   * @returns Array of all tool names that are exposed
+   */
+  public static getAllToolNames(): string[] {
+    return Object.values(TOOL_NAMES);
+  }
+
+  /**
+   * Check if a tool name is valid
+   * @param toolName Tool name to check
+   * @returns True if the tool is exposed, false otherwise
+   */
+  public static isValidToolName(toolName: string): boolean {
+    return Object.values(TOOL_NAMES).includes(toolName as any);
   }
 
   // Common tenant schema for all tools
@@ -424,37 +586,17 @@ export class EnhancedAutotaskToolHandler {
   /**
    * Get the operation type for a tool
    */
-  private getToolOperationType(toolName: string): 'read' | 'write' | 'modify' {
-    const readOnlyTools = [
-      'search_companies', 'search_contacts', 'search_tickets', 'search_projects', 'search_resources',
-      'search_time_entries', 'search_tasks', 
-      'search_ticket_notes','search_project_notes',
-      'search_company_notes', 'get_company_note', 'search_ticket_attachments', 'get_ticket_attachment',
-      'search_contracts', 'search_invoices', 'search_expense_reports',
-      'search_expense_items', 'get_expense_item', 
-      'query_entity', 'get_entity', 'get_companies_page', 'get_ticket_by_number'
-    ];
-    
-    const writeTools = [
-      'create_company', 'create_contact', 'create_ticket', 'create_time_entry', 'create_task', 'create_project',
-      'create_ticket_note', 'create_project_note', 'create_company_note',
-      'create_quote', 'create_expense_report', 'create_expense_item', 'create_configuration_item'
-    ];
-    
-    const modifyTools = [
-      'update_company', 'update_contact', 'update_ticket', 'update_task', 'update_project',
-      'update_expense_report', 'update_expense_item', 'update_configuration_item', 'clear_mapping_cache', 'preload_mapping_cache'
-    ];
-    
-    if (readOnlyTools.includes(toolName)) {
+  private getToolOperationType(toolName: string): 'read' | 'write' | 'modify'| 'hidden'  {
+    if (READ_ONLY_TOOLS.includes(toolName as any)) {
       return 'read';
-    } else if (writeTools.includes(toolName)) {
+    } else if (WRITE_TOOLS.includes(toolName as any)) {
       return 'write';
-    } else if (modifyTools.includes(toolName)) {
+    } else if (MODIFY_TOOLS.includes(toolName as any)) {
       return 'modify';
     }
     
-    return 'read'; // Default to read for unknown tools
+    // Default to read for unknown tools (shouldn't happen with proper validation) 
+    return 'hidden';
   }
 
   async listTools(tenantContext?: TenantContext): Promise<McpTool[]> {
@@ -2102,13 +2244,7 @@ export class EnhancedAutotaskToolHandler {
         }
       ),
 
-      // Test connection tool
-      EnhancedAutotaskToolHandler.createTool(
-        'test_connection',
-        'Test connectivity to the Autotask API. Returns connection status and basic API information.',
-        'read',
-        {}
-      ),
+
 
       // Generic GET Query Tool (URL parameter-based search)
       EnhancedAutotaskToolHandler.createTool(
@@ -2131,7 +2267,6 @@ export class EnhancedAutotaskToolHandler {
         },
         ['entity', 'search']
       ),
-
       EnhancedAutotaskToolHandler.createTool(
         'get_entity',
         'Get a specific entity by ID with full details. Works for any major Autotask entity type. This is a read-only operation that retrieves a single record.',
@@ -2172,7 +2307,7 @@ export class EnhancedAutotaskToolHandler {
     ];
 
     // Extract mode from tenant context
-    const mode = tenantContext?.mode || 'read'; // Default to write mode if no tenant context
+    const mode = tenantContext?.mode || 'read'; // Default to read mode if no tenant context
     
     this.logger.info('MODE from tenant context', { 
       mode, 
@@ -2189,7 +2324,7 @@ export class EnhancedAutotaskToolHandler {
       });
     }
     
-    // For write mode or no tenant context specified, return all tools
+    // For write mode, return all tools
     return allTools;
   }
 
@@ -2210,6 +2345,22 @@ export class EnhancedAutotaskToolHandler {
     const toolCallId = `${name}_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     
     try {
+      // Validate tool name
+      if (!EnhancedAutotaskToolHandler.isValidToolName(name)) {
+        this.logger.error(`❌ Invalid tool name: ${name}`, {
+          toolCallId,
+          availableTools: EnhancedAutotaskToolHandler.getAllToolNames()
+        });
+        
+        return {
+          content: [{
+            type: 'text',
+            text: `Error: Unknown tool '${name}'. This tool is not exposed in the current configuration.`
+          }],
+          isError: true
+        };
+      }
+
       this.logger.info(`🛠️ Tool call started: ${name}`, {
         toolCallId,
         toolName: name,
@@ -2357,43 +2508,6 @@ export class EnhancedAutotaskToolHandler {
           this.logger.info(`📊 Executing search_resources`, { toolCallId });
           result = await this.searchResources(args, tenantContext);
           break;
-
-        // ID-to-Name Mapping tools
-        case 'get_company_name':
-          this.logger.info(`🏷️ Executing get_company_name`, { toolCallId });
-          result = await this.getCompanyName(args, tenantContext);
-          break;
-
-        case 'get_resource_name':
-          this.logger.info(`🏷️ Executing get_resource_name`, { toolCallId });
-          result = await this.getResourceName(args, tenantContext);
-          break;
-
-        case 'get_mapping_cache_stats':
-          this.logger.info(`📈 Executing get_mapping_cache_stats`, { toolCallId });
-          result = await this.getMappingCacheStats(args, tenantContext);
-          break;
-
-        case 'clear_mapping_cache':
-          this.logger.info(`🗑️ Executing clear_mapping_cache`, { toolCallId });
-          result = await this.clearMappingCache(args, tenantContext);
-          break;
-
-        case 'preload_mapping_cache':
-          this.logger.info(`🚀 Executing preload_mapping_cache`, { toolCallId });
-          result = await this.preloadMappingCache(args, tenantContext);
-          break;
-        
-        case 'test_connection':
-          this.logger.info(`🔗 Executing test_connection`, { toolCallId });
-          result = await this.testConnection(tenantContext);
-          break;
-
-        case 'test_zone_information':
-          this.logger.info(`🌐 Executing test_zone_information`, { toolCallId });
-          result = await this.testZoneInformation(tenantContext);
-          break;
-
         // Get ticket by number (special case - not by ID)
         case 'get_ticket_by_number':
           this.logger.info(`🎫 Executing get_ticket_by_number`, { toolCallId });
@@ -2478,7 +2592,6 @@ export class EnhancedAutotaskToolHandler {
           result = await this.createCompanyNote(args, tenantContext);
           break;
 
-        // Attachments Management
         case 'search_ticket_attachments':
           this.logger.info(`📎 Executing search_ticket_attachments`, { toolCallId });
           result = await this.searchTicketAttachments(args, tenantContext);
@@ -2562,7 +2675,7 @@ export class EnhancedAutotaskToolHandler {
           result = await this.updateConfigurationItem(args, tenantContext);
           break;
 
-        // Pagination helper tools
+        // Pagination Helper Tools
         case 'get_companies_page':
           this.logger.info(`📄 Executing get_companies_page`, { toolCallId });
           result = await this.getCompaniesPage(args, tenantContext);
@@ -2579,8 +2692,13 @@ export class EnhancedAutotaskToolHandler {
           break;
 
         default:
-          this.logger.error(`❌ Unknown tool: ${name}`, { toolCallId, toolName: name });
-          throw new Error(`Unknown tool: ${name}`);
+          // This should never happen due to validation above, but keep as failsafe
+          this.logger.error(`❌ Unhandled tool in switch statement: ${name}`, { 
+            toolCallId, 
+            toolName: name,
+            isValidTool: EnhancedAutotaskToolHandler.isValidToolName(name)
+          });
+          throw new Error(`Tool '${name}' is defined but not implemented in callTool switch statement`);
       }
 
       const executionTime = Date.now() - startTime;
@@ -3390,275 +3508,6 @@ export class EnhancedAutotaskToolHandler {
       };
     } catch (error) {
       throw new Error(`Failed to search resources: ${error instanceof Error ? error.message : 'Unknown error'}`);
-    }
-  }
-
-  private async getCompanyName(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
-    try {
-      const companyId = args.id;
-      if (typeof companyId !== 'number') {
-        throw new Error('Company ID must be provided');
-      }
-
-      const mappingService = await this.getMappingService();
-      const companyName = await mappingService.getCompanyName(companyId, tenantContext);
-      
-      return this.createDataResponse({ companyName });
-    } catch (error) {
-      throw new Error(`Failed to get company name: ${error instanceof Error ? error.message : 'Unknown error'}`);
-    }
-  }
-
-  private async getResourceName(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
-    try {
-      const resourceId = args.id;
-      if (typeof resourceId !== 'number') {
-        throw new Error('Resource ID must be provided');
-      }
-
-      const mappingService = await this.getMappingService();
-      const resourceName = await mappingService.getResourceName(resourceId, tenantContext);
-      
-      return this.createDataResponse({ resourceName });
-    } catch (error) {
-      throw new Error(`Failed to get resource name: ${error instanceof Error ? error.message : 'Unknown error'}`);
-    }
-  }
-
-  private async getMappingCacheStats(_args: Record<string, any>, _tenantContext?: TenantContext): Promise<McpToolResult> {
-    try {
-      const mappingService = await this.getMappingService();
-      const stats = mappingService.getCacheStats();
-      
-      return this.createDataResponse({ stats });
-    } catch (error) {
-      throw new Error(`Failed to get mapping cache stats: ${error instanceof Error ? error.message : 'Unknown error'}`);
-    }
-  }
-
-  private async clearMappingCache(_args: Record<string, any>, _tenantContext?: TenantContext): Promise<McpToolResult> {
-    try {
-      const mappingService = await this.getMappingService();
-      mappingService.clearCache();
-      
-      return this.createDataResponse({ message: 'Mapping cache cleared successfully.' });
-    } catch (error) {
-      throw new Error(`Failed to clear mapping cache: ${error instanceof Error ? error.message : 'Unknown error'}`);
-    }
-  }
-
-  private async preloadMappingCache(_args: Record<string, any>, _tenantContext?: TenantContext): Promise<McpToolResult> {
-    try {
-      const mappingService = await this.getMappingService();
-      await mappingService.preloadCaches();
-      
-      return this.createDataResponse({ message: 'Mapping cache preloaded successfully.' });
-    } catch (error) {
-      throw new Error(`Failed to preload mapping cache: ${error instanceof Error ? error.message : 'Unknown error'}`);
-    }
-  }
-
-  private async testConnection(tenantContext?: TenantContext): Promise<McpToolResult> {
-    try {
-      // DEBUG: Show what we actually received
-      this.logger.info('🔗 TEST_CONNECTION DEBUG - Starting comprehensive test', {
-        hasTenantContext: !!tenantContext,
-        tenantContextKeys: tenantContext ? Object.keys(tenantContext) : 'none',
-        tenantId: tenantContext?.tenantId,
-        hasCredentials: !!(tenantContext?.credentials),
-        impersonationResourceId: tenantContext?.impersonationResourceId,
-        mode: tenantContext?.mode,
-        sessionId: tenantContext?.sessionId
-      });
-
-      if (tenantContext?.credentials) {
-        this.logger.info('🔑 CREDENTIALS DEBUG', {
-          hasUsername: !!tenantContext.credentials.username,
-          usernameLength: tenantContext.credentials.username?.length || 0,
-          usernamePreview: tenantContext.credentials.username ? `${tenantContext.credentials.username.substring(0, 5)}***` : 'none',
-          hasSecret: !!tenantContext.credentials.secret,
-          secretLength: tenantContext.credentials.secret?.length || 0,
-          hasIntegrationCode: !!tenantContext.credentials.integrationCode,
-          integrationCodeLength: tenantContext.credentials.integrationCode?.length || 0,
-          integrationCodePreview: tenantContext.credentials.integrationCode ? `${tenantContext.credentials.integrationCode.substring(0, 8)}***` : 'none',
-          hasApiUrl: !!tenantContext.credentials.apiUrl,
-          apiUrl: tenantContext.credentials.apiUrl
-        });
-      }
-
-      // Try to make a simple API call to list resources (limit to 1 for minimal impact)
-      this.logger.info('🚀 Attempting simple resources API call...');
-      
-      try {
-        const resourcesOptions = {
-          filter: [{ field: 'id', op: 'gte', value: 0 }],
-          pageSize: 1
-        };
-
-        this.logger.info('📞 Making autotaskService.searchResources call', {
-          options: resourcesOptions,
-          tenantContext: {
-            tenantId: tenantContext?.tenantId,
-            hasCredentials: !!(tenantContext?.credentials),
-            impersonationResourceId: tenantContext?.impersonationResourceId,
-            mode: tenantContext?.mode
-          }
-        });
-
-        const resources = await this.autotaskService.searchResources(resourcesOptions, tenantContext);
-        
-        this.logger.info('✅ API CALL SUCCESS - Resources response received', {
-          resourcesType: typeof resources,
-          resourcesIsArray: Array.isArray(resources),
-          resourcesLength: Array.isArray(resources) ? resources.length : 'not an array',
-          resourcesKeys: resources && typeof resources === 'object' ? Object.keys(resources) : 'not an object',
-          firstResourceId: Array.isArray(resources) && resources.length > 0 ? resources[0]?.id : 'no resources',
-          firstResourceName: Array.isArray(resources) && resources.length > 0 ? 
-            `${resources[0]?.firstName || 'unknown'} ${resources[0]?.lastName || 'unknown'}`.trim() : 'no name',
-          rawResponse: JSON.stringify(resources, null, 2).substring(0, 500) + (JSON.stringify(resources).length > 500 ? '...[truncated]' : '')
-        });
-
-        const message = tenantContext 
-          ? `✅ Successfully connected to Autotask API for tenant: ${tenantContext.tenantId}${tenantContext.impersonationResourceId ? ` (impersonating resource ${tenantContext.impersonationResourceId})` : ''}\n\n` +
-            `API Test Result:\n` +
-            `- Retrieved ${Array.isArray(resources) ? resources.length : 0} resource(s)\n` +
-            `- Response type: ${typeof resources}\n` +
-            `- First resource: ${Array.isArray(resources) && resources.length > 0 ? 
-              `ID ${resources[0]?.id} - ${resources[0]?.firstName || 'unknown'} ${resources[0]?.lastName || 'unknown'}`.trim() : 'None'}\n` +
-            `- Full response: ${JSON.stringify(resources, null, 2).substring(0, 200)}${JSON.stringify(resources).length > 200 ? '...' : ''}`
-          : `✅ Successfully connected to Autotask API\n\n` +
-            `API Test Result:\n` +
-            `- Retrieved ${Array.isArray(resources) ? resources.length : 0} resource(s)\n` +
-            `- Response type: ${typeof resources}\n` +
-            `- First resource: ${Array.isArray(resources) && resources.length > 0 ? 
-              `ID ${resources[0]?.id} - ${resources[0]?.firstName || 'unknown'} ${resources[0]?.lastName || 'unknown'}`.trim() : 'None'}\n` +
-            `- Full response: ${JSON.stringify(resources, null, 2).substring(0, 200)}${JSON.stringify(resources).length > 200 ? '...' : ''}`;
-
-        return {
-          content: [{
-            type: 'text',
-            text: message
-          }],
-          isError: false
-        };
-
-      } catch (apiError) {
-        this.logger.error('❌ API CALL FAILED - Detailed error information', {
-          errorType: typeof apiError,
-          errorName: apiError instanceof Error ? apiError.name : 'unknown',
-          errorMessage: apiError instanceof Error ? apiError.message : String(apiError),
-          errorStack: apiError instanceof Error ? apiError.stack : 'no stack',
-          errorKeys: apiError && typeof apiError === 'object' ? Object.keys(apiError) : 'not an object',
-          fullError: JSON.stringify(apiError, Object.getOwnPropertyNames(apiError), 2)
-        });
-
-        // Also log any response details if it's an HTTP error
-        if (apiError && typeof apiError === 'object') {
-          const err = apiError as any;
-          if (err.response) {
-            this.logger.error('📡 HTTP Response details', {
-              status: err.response.status,
-              statusText: err.response.statusText,
-              headers: err.response.headers,
-              data: typeof err.response.data === 'string' ? 
-                err.response.data.substring(0, 500) + (err.response.data.length > 500 ? '...[truncated]' : '') :
-                JSON.stringify(err.response.data, null, 2).substring(0, 500) + (JSON.stringify(err.response.data).length > 500 ? '...[truncated]' : ''),
-              url: err.response.config?.url,
-              method: err.response.config?.method
-            });
-          }
-          if (err.request) {
-            this.logger.error('📤 Request details', {
-              url: err.request.url,
-              method: err.request.method,
-              headers: err.request.headers
-            });
-          }
-        }
-
-        const errorMessage = apiError instanceof Error ? apiError.message : String(apiError);
-        const message = tenantContext 
-          ? `❌ Failed to connect to Autotask API for tenant: ${tenantContext.tenantId}\n\nError Details:\n${errorMessage}`
-          : `❌ Failed to connect to Autotask API\n\nError Details:\n${errorMessage}`;
-
-        return {
-          content: [{
-            type: 'text',
-            text: message
-          }],
-          isError: true
-        };
-      }
-
-    } catch (error) {
-      this.logger.error('💥 OUTER CATCH - Unexpected error in test connection', {
-        errorType: typeof error,
-        errorName: error instanceof Error ? error.name : 'unknown',
-        errorMessage: error instanceof Error ? error.message : String(error),
-        errorStack: error instanceof Error ? error.stack : 'no stack',
-        fullError: JSON.stringify(error, Object.getOwnPropertyNames(error), 2)
-      });
-
-      throw new Error(`Connection test failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
-    }
-  }
-
-  private async testZoneInformation(tenantContext?: TenantContext): Promise<McpToolResult> {
-    try {
-      this.logger.info('🌐 TEST_ZONE_INFORMATION DEBUG', {
-        hasTenantContext: !!tenantContext,
-        tenantContextKeys: tenantContext ? Object.keys(tenantContext) : 'none',
-        tenantId: tenantContext?.tenantId,
-        hasCredentials: !!(tenantContext?.credentials),
-        impersonationResourceId: tenantContext?.impersonationResourceId
-      });
-
-      const zoneInfo = await this.autotaskService.testZoneInformation(tenantContext);
-      
-      if (zoneInfo) {
-        const message = tenantContext 
-          ? `✅ Successfully discovered Autotask zone information for tenant: ${tenantContext.tenantId}${tenantContext.impersonationResourceId ? ` (impersonating resource ${tenantContext.impersonationResourceId})` : ''}\n\n` +
-            `Zone URL: ${zoneInfo.url || 'N/A'}\n` +
-            `Web URL: ${zoneInfo.webUrl || 'N/A'}\n` +
-            `Full Zone Info: ${JSON.stringify(zoneInfo, null, 2)}`
-          : `✅ Successfully discovered Autotask zone information\n\n` +
-            `Zone URL: ${zoneInfo.url || 'N/A'}\n` +
-            `Web URL: ${zoneInfo.webUrl || 'N/A'}\n` +
-            `Full Zone Info: ${JSON.stringify(zoneInfo, null, 2)}`;
-
-        return {
-          content: [{
-            type: 'text',
-            text: message
-          }],
-          isError: false
-        };
-      } else {
-        const message = tenantContext
-          ? `❌ Failed to discover Autotask zone information for tenant: ${tenantContext.tenantId}`
-          : '❌ Failed to discover Autotask zone information';
-
-        return {
-          content: [{
-            type: 'text',
-            text: message
-          }],
-          isError: true
-        };
-      }
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      const message = tenantContext 
-        ? `❌ Zone information test failed for tenant ${tenantContext.tenantId}: ${errorMessage}`
-        : `❌ Zone information test failed: ${errorMessage}`;
-
-      return {
-        content: [{
-          type: 'text',
-          text: message
-        }],
-        isError: true
-      };
     }
   }
 
