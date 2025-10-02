@@ -206,28 +206,6 @@ export class EnhancedAutotaskToolHandler {
   /**
    * Generic entity getter method
    */
-  private async getEntity<T>(
-    id: number,
-    entityName: string,
-    getMethod: (id: number, tenantContext?: TenantContext) => Promise<T | null>,
-    tenantContext?: TenantContext
-  ): Promise<McpToolResult> {
-    try {
-      const validId = this.validateId(id, entityName);
-      const entity = await getMethod(validId, tenantContext);
-      
-      if (!entity) {
-        return this.createNotFoundResponse(entityName, validId);
-      }
-
-      return this.createDataResponse(entity);
-    } catch (error) {
-      throw new Error(`Failed to get ${entityName.toLowerCase()}: ${error instanceof Error ? error.message : 'Unknown error'}`);
-    }
-  }
-
-
-
   /**
    * Generic update method
    */
@@ -449,18 +427,14 @@ export class EnhancedAutotaskToolHandler {
   private getToolOperationType(toolName: string): 'read' | 'write' | 'modify' {
     const readOnlyTools = [
       'search_companies', 'search_contacts', 'search_tickets', 'search_projects', 'search_resources',
-      'get_company', 'get_contact', 'get_ticket', 'get_project', 'get_resource',
-      'search_time_entries', 'get_time_entry', 'search_tasks', 'get_task',
+      'search_time_entries', 'search_tasks', 
       'search_ticket_notes', 'get_ticket_note', 'search_project_notes', 'get_project_note',
       'search_company_notes', 'get_company_note', 'search_ticket_attachments', 'get_ticket_attachment',
-      'get_contract', 'search_contracts', 'get_invoice', 'search_invoices',
-      'get_quote', 'search_quotes', 'get_expense_report', 'search_expense_reports',
+      'search_contracts', 'search_invoices', 'search_quotes', 'search_expense_reports',
       'search_expense_items', 'get_expense_item',
-      'get_configuration_item', 'search_configuration_items','get_mapping_cache_stats',
+      'search_configuration_items', 'get_mapping_cache_stats',
       'test_connection', 'test_zone_information',
-      'query_companies', 'query_contacts', 'query_tickets', 'query_projects', 'query_resources',
-      'query_tasks', 'query_contracts', 'query_quotes', 'query_invoices', 'query_time_entries',
-      'query_configuration_items', 'query_expense_reports'
+      'query_entity', 'get_entity', 'get_company_name', 'get_resource_name', 'get_companies_page', 'get_ticket_by_number'
     ];
     
     const writeTools = [
@@ -986,48 +960,8 @@ export class EnhancedAutotaskToolHandler {
 
       // Individual Entity Getters
       EnhancedAutotaskToolHandler.createTool(
-        'get_company',
-        'Get a specific company by ID with full details from Companies entity.',
-        'read',
-        {
-          id: {
-            type: 'number',
-            description: 'Company ID to retrieve - refers to Companies entity'
-          }
-        },
-        ['id']
-      ),
-      EnhancedAutotaskToolHandler.createTool(
-        'get_contact',
-        'Get a specific contact by ID with full details from Contacts entity.',
-        'read',
-        {
-          id: {
-            type: 'number',
-            description: 'Contact ID to retrieve - refers to Contacts entity'
-          }
-        },
-        ['id']
-      ),
-      EnhancedAutotaskToolHandler.createTool(
-        'get_ticket',
-        'Get a specific ticket by ID with full details from Tickets entity.',
-        'read',
-        {
-          id: {
-            type: 'number',
-            description: 'Ticket ID to retrieve - refers to Tickets entity'
-          },
-          fullDetails: {
-            type: 'boolean',
-            description: 'Whether to include full details (default: false for optimized response)'
-          }
-        },
-        ['id']
-      ),
-      EnhancedAutotaskToolHandler.createTool(
         'get_ticket_by_number',
-        'Get a specific ticket by ticket number (e.g., T20250914.0008) with full details from Tickets entity.',
+        'Get a specific ticket by ticket number (e.g., T20250914.0008) with full details from Tickets entity. Use get_entity for retrieving by ID.',
         'read',
         {
           ticketNumber: {
@@ -1040,30 +974,6 @@ export class EnhancedAutotaskToolHandler {
           }
         },
         ['ticketNumber']
-      ),
-      EnhancedAutotaskToolHandler.createTool(
-        'get_project',
-        'Get a specific project by ID with full details from Projects entity.',
-        'read',
-        {
-          id: {
-            type: 'number',
-            description: 'Project ID to retrieve - refers to Projects entity'
-          }
-        },
-        ['id']
-      ),
-      EnhancedAutotaskToolHandler.createTool(
-        'get_resource',
-        'Get a specific resource (employee) by ID with full details from Resources entity.',
-        'read',
-        {
-          id: {
-            type: 'number',
-            description: 'Resource ID to retrieve - refers to Resources entity (employee/user)'
-          }
-        },
-        ['id']
       ),
       EnhancedAutotaskToolHandler.createTool(
         'create_project',
@@ -1184,18 +1094,6 @@ export class EnhancedAutotaskToolHandler {
           }
         }
       ),
-      EnhancedAutotaskToolHandler.createTool(
-        'get_time_entry',
-        'Get a specific time entry by ID with full details from TimeEntries entity.',
-        'read',
-        {
-          id: {
-            type: 'number',
-            description: 'Time entry ID to retrieve - refers to TimeEntries entity'
-          }
-        },
-        ['id']
-      ),
 
       // Task Management
       EnhancedAutotaskToolHandler.createTool(
@@ -1246,18 +1144,6 @@ export class EnhancedAutotaskToolHandler {
             maximum: 100
           }
         }
-      ),
-      EnhancedAutotaskToolHandler.createTool(
-        'get_task',
-        'Get a specific task by ID with full details from Tasks entity.',
-        'read',
-        {
-          id: {
-            type: 'number',
-            description: 'Task ID to retrieve - refers to Tasks entity'
-          }
-        },
-        ['id']
       ),
       EnhancedAutotaskToolHandler.createTool(
         'create_task',
@@ -1580,18 +1466,6 @@ export class EnhancedAutotaskToolHandler {
 
       // Financial Management
       EnhancedAutotaskToolHandler.createTool(
-        'get_contract',
-        'Get a specific contract by ID with full details from Contracts entity.',
-        'read',
-        {
-          id: {
-            type: 'number',
-            description: 'Contract ID to retrieve - refers to Contracts entity'
-          }
-        },
-        ['id']
-      ),
-      EnhancedAutotaskToolHandler.createTool(
         'search_contracts',
         'Search for contracts in Autotask with filters. Returns contract records with company information.',
         'read',
@@ -1622,18 +1496,6 @@ export class EnhancedAutotaskToolHandler {
       ),
 
       EnhancedAutotaskToolHandler.createTool(
-        'get_invoice',
-        'Get a specific invoice by ID with full details from Invoices entity.',
-        'read',
-        {
-          id: {
-            type: 'number',
-            description: 'Invoice ID to retrieve - refers to Invoices entity'
-          }
-        },
-        ['id']
-      ),
-      EnhancedAutotaskToolHandler.createTool(
         'search_invoices',
         'Search for invoices in Autotask with filters. Returns invoice records with company information.',
         'read',
@@ -1663,18 +1525,6 @@ export class EnhancedAutotaskToolHandler {
         }
       ),
 
-      EnhancedAutotaskToolHandler.createTool(
-        'get_quote',
-        'Get a specific quote by ID with full details from Quotes entity.',
-        'read',
-        {
-          id: {
-            type: 'number',
-            description: 'Quote ID to retrieve - refers to Quotes entity'
-          }
-        },
-        ['id']
-      ),
       EnhancedAutotaskToolHandler.createTool(
         'search_quotes',
         'Search for quotes in Autotask with filters. Returns quote records with company and contact information.',
@@ -1749,18 +1599,6 @@ export class EnhancedAutotaskToolHandler {
         ['accountId', 'contactId', 'title']
       ),
 
-      EnhancedAutotaskToolHandler.createTool(
-        'get_expense_report',
-        'Get a specific expense report by ID with full details from ExpenseReports entity.',
-        'read',
-        {
-          id: {
-            type: 'number',
-            description: 'Expense report ID to retrieve - refers to ExpenseReports entity'
-          }
-        },
-        ['id']
-      ),
       EnhancedAutotaskToolHandler.createTool(
         'search_expense_reports',
         'Search for expense reports in Autotask with filters. Returns expense report records with submitter information.',
@@ -2101,18 +1939,6 @@ export class EnhancedAutotaskToolHandler {
 
       // Configuration Items Management
       EnhancedAutotaskToolHandler.createTool(
-        'get_configuration_item',
-        'Get a specific configuration item by ID with full details from ConfigurationItems entity.',
-        'read',
-        {
-          id: {
-            type: 'number',
-            description: 'Configuration item ID to retrieve - refers to ConfigurationItems entity'
-          }
-        },
-        ['id']
-      ),
-      EnhancedAutotaskToolHandler.createTool(
         'search_configuration_items',
         'Search for configuration items in Autotask with filters. Returns configuration item records with company information.',
         'read',
@@ -2286,150 +2112,63 @@ export class EnhancedAutotaskToolHandler {
         {}
       ),
 
-      // GET Query Tools (URL parameter-based search)
+      // Generic GET Query Tool (URL parameter-based search)
       EnhancedAutotaskToolHandler.createTool(
-        'query_companies',
-        'Query companies using URL parameter search string (alternative to search_companies). Uses GET /V1.0/Companies/query endpoint with search parameter for simple text-based searches.',
+        'query_entity',
+        'Query any Autotask entity using simple text-based search (alternative to advanced POST-based search_* tools). Uses GET /V1.0/{Entity}/query endpoint with search parameter for quick lookups across entity text fields. This is simpler than the POST-based search tools but less flexible - use this for basic text searches, use search_* tools for advanced filtering with multiple criteria.',
         'read',
         {
+          entity: {
+            type: 'string',
+            description: 'Entity type to query (required). Must be one of: companies, contacts, tickets, projects, resources, tasks, contracts, quotes, invoices, timeentries, configurationitems, expensereports'
+          },
           search: {
             type: 'string',
-            description: 'Search string to query companies (required). Searches across company name and other indexed fields. Example: "Microsoft" or "Acme Corp"'
+            description: 'Search string to query the entity (required). Searches across relevant text fields like names, titles, descriptions, numbers, etc. Examples: "Microsoft", "john@email.com", "T20240001", "login issue"'
+          },
+          pageSize: {
+            type: 'number',
+            description: 'Number of results to return (default: 500, max: 500)'
           }
         },
-        ['search']
+        ['entity', 'search']
+      ),
+
+      EnhancedAutotaskToolHandler.createTool(
+        'get_entity',
+        'Get a specific entity by ID with full details. Works for any major Autotask entity type. This is a read-only operation that retrieves a single record.',
+        'read',
+        {
+          entity: {
+            type: 'string',
+            description: 'Entity type to retrieve (required). Must be one of: companies, contacts, tickets, projects, resources, tasks, contracts, quotes, invoices, timeentries, configurationitems, expensereports'
+          },
+          id: {
+            type: 'number',
+            description: 'Entity ID to retrieve (required)'
+          },
+          fullDetails: {
+            type: 'boolean',
+            description: 'Whether to include full details (optional, only applicable to some entities like tickets for optimized responses)'
+          }
+        },
+        ['entity', 'id']
       ),
       EnhancedAutotaskToolHandler.createTool(
-        'query_contacts',
-        'Query contacts using URL parameter search string (alternative to search_contacts). Uses GET /V1.0/Contacts/query endpoint with search parameter for simple text-based searches.',
+        'get_ticket_by_number',
+        'Get a specific ticket by ticket number (e.g., T20250914.0008) with full details from Tickets entity.',
         'read',
         {
-          search: {
+          ticketNumber: {
             type: 'string',
-            description: 'Search string to query contacts (required). Searches across contact name, email and other indexed fields. Example: "john.smith@company.com" or "John Smith"'
+            description: 'Ticket number to retrieve (e.g., T20250914.0008) - refers to ticketNumber field in Tickets entity'
+          },
+          fullDetails: {
+            type: 'boolean',
+            description: 'Whether to include full details (default: false for optimized response)'
           }
         },
-        ['search']
-      ),
-      EnhancedAutotaskToolHandler.createTool(
-        'query_tickets',
-        'Query tickets using URL parameter search string (alternative to search_tickets). Uses GET /V1.0/Tickets/query endpoint with search parameter for simple text-based searches.',
-        'read',
-        {
-          search: {
-            type: 'string',
-            description: 'Search string to query tickets (required). Searches across ticket number, title and other indexed fields. Example: "T20250914.0008" or "email issue"'
-          }
-        },
-        ['search']
-      ),
-      EnhancedAutotaskToolHandler.createTool(
-        'query_projects',
-        'Query projects using URL parameter search string (alternative to search_projects). Uses GET /V1.0/Projects/query endpoint with search parameter for simple text-based searches.',
-        'read',
-        {
-          search: {
-            type: 'string',
-            description: 'Search string to query projects (required). Searches across project name, description and other indexed fields. Example: "Migration Project" or "Server Upgrade"'
-          }
-        },
-        ['search']
-      ),
-      EnhancedAutotaskToolHandler.createTool(
-        'query_resources',
-        'Query resources (employees) using URL parameter search string (alternative to search_resources). Uses GET /V1.0/Resources/query endpoint with search parameter for simple text-based searches.',
-        'read',
-        {
-          search: {
-            type: 'string',
-            description: 'Search string to query resources (required). Searches across resource name, email and other indexed fields. Example: "john.smith@company.com" or "John Smith"'
-          }
-        },
-        ['search']
-      ),
-      EnhancedAutotaskToolHandler.createTool(
-        'query_tasks',
-        'Query tasks using URL parameter search string (alternative to search_tasks). Uses GET /V1.0/Tasks/query endpoint with search parameter for simple text-based searches.',
-        'read',
-        {
-          search: {
-            type: 'string',
-            description: 'Search string to query tasks (required). Searches across task title, description and other indexed fields. Example: "Database Migration" or "Setup Email"'
-          }
-        },
-        ['search']
-      ),
-      EnhancedAutotaskToolHandler.createTool(
-        'query_contracts',
-        'Query contracts using URL parameter search string (alternative to search_contracts). Uses GET /V1.0/Contracts/query endpoint with search parameter for simple text-based searches.',
-        'read',
-        {
-          search: {
-            type: 'string',
-            description: 'Search string to query contracts (required). Searches across contract name and other indexed fields. Example: "Support Contract" or "Annual Agreement"'
-          }
-        },
-        ['search']
-      ),
-      EnhancedAutotaskToolHandler.createTool(
-        'query_quotes',
-        'Query quotes using URL parameter search string (alternative to search_quotes). Uses GET /V1.0/Quotes/query endpoint with search parameter for simple text-based searches.',
-        'read',
-        {
-          search: {
-            type: 'string',
-            description: 'Search string to query quotes (required). Searches across quote title, description and other indexed fields. Example: "New Server Quote" or "Q-2024-001"'
-          }
-        },
-        ['search']
-      ),
-      EnhancedAutotaskToolHandler.createTool(
-        'query_invoices',
-        'Query invoices using URL parameter search string (alternative to search_invoices). Uses GET /V1.0/Invoices/query endpoint with search parameter for simple text-based searches.',
-        'read',
-        {
-          search: {
-            type: 'string',
-            description: 'Search string to query invoices (required). Searches across invoice number and other indexed fields. Example: "INV-2024-001" or invoice number'
-          }
-        },
-        ['search']
-      ),
-      EnhancedAutotaskToolHandler.createTool(
-        'query_time_entries',
-        'Query time entries using URL parameter search string (alternative to search_time_entries). Uses GET /V1.0/TimeEntries/query endpoint with search parameter for simple text-based searches.',
-        'read',
-        {
-          search: {
-            type: 'string',
-            description: 'Search string to query time entries (required). Searches across time entry notes and other indexed fields.'
-          }
-        },
-        ['search']
-      ),
-      EnhancedAutotaskToolHandler.createTool(
-        'query_configuration_items',
-        'Query configuration items using URL parameter search string (alternative to search_configuration_items). Uses GET /V1.0/ConfigurationItems/query endpoint with search parameter for simple text-based searches.',
-        'read',
-        {
-          search: {
-            type: 'string',
-            description: 'Search string to query configuration items (required). Searches across reference title, serial number and other indexed fields. Example: "DESKTOP-001" or "PRINTER-HP-001"'
-          }
-        },
-        ['search']
-      ),
-      EnhancedAutotaskToolHandler.createTool(
-        'query_expense_reports',
-        'Query expense reports using URL parameter search string (alternative to search_expense_reports). Uses GET /V1.0/ExpenseReports/query endpoint with search parameter for simple text-based searches.',
-        'read',
-        {
-          search: {
-            type: 'string',
-            description: 'Search string to query expense reports (required). Searches across expense report name and other indexed fields.'
-          }
-        },
-        ['search']
+        ['ticketNumber']
       ),
 
     ];
@@ -2657,35 +2396,10 @@ export class EnhancedAutotaskToolHandler {
           result = await this.testZoneInformation(tenantContext);
           break;
 
-        // Individual Entity Getters
-        case 'get_company':
-          this.logger.info(`🏢 Executing get_company`, { toolCallId });
-          result = await this.getCompany(args, tenantContext);
-          break;
-
-        case 'get_contact':
-          this.logger.info(`👤 Executing get_contact`, { toolCallId });
-          result = await this.getContact(args, tenantContext);
-          break;
-
-        case 'get_ticket':
-          this.logger.info(`🎫 Executing get_ticket`, { toolCallId });
-          result = await this.getTicket(args, tenantContext);
-          break;
-
+        // Get ticket by number (special case - not by ID)
         case 'get_ticket_by_number':
           this.logger.info(`🎫 Executing get_ticket_by_number`, { toolCallId });
           result = await this.getTicketByNumber(args, tenantContext);
-          break;
-
-        case 'get_project':
-          this.logger.info(`📋 Executing get_project`, { toolCallId });
-          result = await this.getProject(args, tenantContext);
-          break;
-
-        case 'get_resource':
-          this.logger.info(`👨‍💼 Executing get_resource`, { toolCallId });
-          result = await this.getResource(args, tenantContext);
           break;
 
         case 'create_project':
@@ -2704,20 +2418,10 @@ export class EnhancedAutotaskToolHandler {
           result = await this.searchTimeEntries(args, tenantContext);
           break;
 
-        case 'get_time_entry':
-          this.logger.info(`⏰ Executing get_time_entry`, { toolCallId });
-          result = await this.getTimeEntry(args, tenantContext);
-          break;
-
         // Task Management
         case 'search_tasks':
           this.logger.info(`📝 Executing search_tasks`, { toolCallId });
           result = await this.searchTasks(args, tenantContext);
-          break;
-
-        case 'get_task':
-          this.logger.info(`📝 Executing get_task`, { toolCallId });
-          result = await this.getTask(args, tenantContext);
           break;
 
         case 'create_task':
@@ -2788,29 +2492,14 @@ export class EnhancedAutotaskToolHandler {
           break;
 
         // Financial Management
-        case 'get_contract':
-          this.logger.info(`📄 Executing get_contract`, { toolCallId });
-          result = await this.getContract(args, tenantContext);
-          break;
-
         case 'search_contracts':
           this.logger.info(`📄 Executing search_contracts`, { toolCallId });
           result = await this.searchContracts(args, tenantContext);
           break;
 
-        case 'get_invoice':
-          this.logger.info(`🧾 Executing get_invoice`, { toolCallId });
-          result = await this.getInvoice(args, tenantContext);
-          break;
-
         case 'search_invoices':
           this.logger.info(`🧾 Executing search_invoices`, { toolCallId });
           result = await this.searchInvoices(args, tenantContext);
-          break;
-
-        case 'get_quote':
-          this.logger.info(`💰 Executing get_quote`, { toolCallId });
-          result = await this.getQuote(args, tenantContext);
           break;
 
         case 'search_quotes':
@@ -2821,11 +2510,6 @@ export class EnhancedAutotaskToolHandler {
         case 'create_quote':
           this.logger.info(`➕ Executing create_quote`, { toolCallId });
           result = await this.createQuote(args, tenantContext);
-          break;
-
-        case 'get_expense_report':
-          this.logger.info(`💳 Executing get_expense_report`, { toolCallId });
-          result = await this.getExpenseReport(args, tenantContext);
           break;
 
         case 'search_expense_reports':
@@ -2865,11 +2549,6 @@ export class EnhancedAutotaskToolHandler {
           break;
 
         // Configuration Items Management
-        case 'get_configuration_item':
-          this.logger.info(`🖥️ Executing get_configuration_item`, { toolCallId });
-          result = await this.getConfigurationItem(args, tenantContext);
-          break;
-
         case 'search_configuration_items':
           this.logger.info(`🖥️ Executing search_configuration_items`, { toolCallId });
           result = await this.searchConfigurationItems(args, tenantContext);
@@ -2891,64 +2570,14 @@ export class EnhancedAutotaskToolHandler {
           result = await this.getCompaniesPage(args, tenantContext);
           break;
 
-        case 'query_companies':
-          this.logger.info(`🔍 Executing query_companies`, { toolCallId });
-          result = await this.queryCompanies(args, tenantContext);
+        case 'query_entity':
+          this.logger.info(`🔍 Executing query_entity`, { toolCallId });
+          result = await this.queryEntity(args, tenantContext);
           break;
 
-        case 'query_contacts':
-          this.logger.info(`👥 Executing query_contacts`, { toolCallId });
-          result = await this.queryContacts(args, tenantContext);
-          break;
-
-        case 'query_tickets':
-          this.logger.info(`🎫 Executing query_tickets`, { toolCallId });
-          result = await this.queryTickets(args, tenantContext);
-          break;
-
-        case 'query_projects':
-          this.logger.info(`📋 Executing query_projects`, { toolCallId });
-          result = await this.queryProjects(args, tenantContext);
-          break;
-
-        case 'query_resources':
-          this.logger.info(`👨‍💼 Executing query_resources`, { toolCallId });
-          result = await this.queryResources(args, tenantContext);
-          break;
-
-        case 'query_tasks':
-          this.logger.info(`📝 Executing query_tasks`, { toolCallId });
-          result = await this.queryTasks(args, tenantContext);
-          break;
-
-        case 'query_contracts':
-          this.logger.info(`📄 Executing query_contracts`, { toolCallId });
-          result = await this.queryContracts(args, tenantContext);
-          break;
-
-        case 'query_quotes':
-          this.logger.info(`💰 Executing query_quotes`, { toolCallId });
-          result = await this.queryQuotes(args, tenantContext);
-          break;
-
-        case 'query_invoices':
-          this.logger.info(`🧾 Executing query_invoices`, { toolCallId });
-          result = await this.queryInvoices(args, tenantContext);
-          break;
-
-        case 'query_time_entries':
-          this.logger.info(`⏰ Executing query_time_entries`, { toolCallId });
-          result = await this.queryTimeEntries(args, tenantContext);
-          break;
-
-        case 'query_configuration_items':
-          this.logger.info(`🖥️ Executing query_configuration_items`, { toolCallId });
-          result = await this.queryConfigurationItems(args, tenantContext);
-          break;
-
-        case 'query_expense_reports':
-          this.logger.info(`💳 Executing query_expense_reports`, { toolCallId });
-          result = await this.queryExpenseReports(args, tenantContext);
+        case 'get_entity':
+          this.logger.info(`🏢 Executing get_entity`, { toolCallId });
+          result = await this.getEntityById(args, tenantContext);
           break;
 
         default:
@@ -4039,44 +3668,6 @@ export class EnhancedAutotaskToolHandler {
   // Phase 1: Individual Entity Getters
   // ===================================
 
-  private async getCompany(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
-    return this.getEntity(
-      args.id,
-      'Company',
-      (id, ctx) => this.autotaskService.getCompany(id, ctx),
-      tenantContext
-    );
-  }
-
-  private async getContact(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
-    return this.getEntity(
-      args.id,
-      'Contact',
-      (id, ctx) => this.autotaskService.getContact(id, ctx),
-      tenantContext
-    );
-  }
-
-  private async getTicket(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
-    try {
-      const { id, fullDetails = false } = args;
-      
-      if (!id || typeof id !== 'number') {
-        throw new Error('Ticket ID is required and must be a number');
-      }
-
-      const ticket = await this.autotaskService.getTicket(id, fullDetails, tenantContext);
-      
-      if (!ticket) {
-        return this.createNotFoundResponse('ticket', id);
-      }
-
-      return this.createDataResponse(ticket);
-    } catch (error) {
-      throw new Error(`Failed to get ticket: ${error instanceof Error ? error.message : 'Unknown error'}`);
-    }
-  }
-
   private async getTicketByNumber(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
     try {
       const { ticketNumber, fullDetails = false } = args;
@@ -4095,24 +3686,6 @@ export class EnhancedAutotaskToolHandler {
     } catch (error) {
       throw new Error(`Failed to get ticket by number: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
-  }
-
-  private async getProject(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
-    return this.getEntity(
-      args.id,
-      'Project',
-      (id, ctx) => this.autotaskService.getProject(id, ctx),
-      tenantContext
-    );
-  }
-
-  private async getResource(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
-    return this.getEntity(
-      args.id,
-      'Resource',
-      (id, ctx) => this.autotaskService.getResource(id, ctx),
-      tenantContext
-    );
   }
 
   private async createProject(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
@@ -4281,26 +3854,6 @@ export class EnhancedAutotaskToolHandler {
     }
   }
 
-  private async getTimeEntry(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
-    try {
-      const { id } = args;
-      
-      if (!id || typeof id !== 'number') {
-        throw new Error('Time Entry ID is required and must be a number');
-      }
-
-      const timeEntry = await this.autotaskService.getTimeEntry(id, tenantContext);
-      
-      if (!timeEntry) {
-        return this.createNotFoundResponse('time entry', id);
-      }
-
-      return this.createDataResponse(timeEntry);
-    } catch (error) {
-      throw new Error(`Failed to get time entry: ${error instanceof Error ? error.message : 'Unknown error'}`);
-    }
-  }
-
   // ===================================
   // Phase 1: Task Management
   // ===================================
@@ -4374,26 +3927,6 @@ export class EnhancedAutotaskToolHandler {
       };
     } catch (error) {
       throw new Error(`Failed to search tasks: ${error instanceof Error ? error.message : 'Unknown error'}`);
-    }
-  }
-
-  private async getTask(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
-    try {
-      const { id } = args;
-      
-      if (!id || typeof id !== 'number') {
-        throw new Error('Task ID is required and must be a number');
-      }
-
-      const task = await this.autotaskService.getTask(id, tenantContext);
-      
-      if (!task) {
-        return this.createNotFoundResponse('task', id);
-      }
-
-      return this.createDataResponse(task);
-    } catch (error) {
-      throw new Error(`Failed to get task: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   }
 
@@ -4745,26 +4278,6 @@ export class EnhancedAutotaskToolHandler {
   // Phase 3: Financial Management
   // ===================================
 
-  private async getContract(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
-    try {
-      const { id } = args;
-      
-      if (!id || typeof id !== 'number') {
-        throw new Error('Contract ID is required and must be a number');
-      }
-
-      const contract = await this.autotaskService.getContract(id, tenantContext);
-      
-      if (!contract) {
-        return this.createNotFoundResponse('contract', id);
-      }
-
-      return this.createDataResponse(contract);
-    } catch (error) {
-      throw new Error(`Failed to get contract: ${error instanceof Error ? error.message : 'Unknown error'}`);
-    }
-  }
-
   private async searchContracts(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
     try {
       const { companyId, status, contractType, searchTerm, pageSize } = args;
@@ -4806,26 +4319,6 @@ export class EnhancedAutotaskToolHandler {
     }
   }
 
-  private async getInvoice(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
-    try {
-      const { id } = args;
-      
-      if (!id || typeof id !== 'number') {
-        throw new Error('Invoice ID is required and must be a number');
-      }
-
-      const invoice = await this.autotaskService.getInvoice(id, tenantContext);
-      
-      if (!invoice) {
-        return this.createNotFoundResponse('invoice', id);
-      }
-
-      return this.createDataResponse(invoice);
-    } catch (error) {
-      throw new Error(`Failed to get invoice: ${error instanceof Error ? error.message : 'Unknown error'}`);
-    }
-  }
-
   private async searchInvoices(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
     try {
       const { companyId, fromDate, toDate, pageSize } = args;
@@ -4862,26 +4355,6 @@ export class EnhancedAutotaskToolHandler {
       return this.createDataResponse(invoices);
     } catch (error) {
       throw new Error(`Failed to search invoices: ${error instanceof Error ? error.message : 'Unknown error'}`);
-    }
-  }
-
-  private async getQuote(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
-    try {
-      const { id } = args;
-      
-      if (!id || typeof id !== 'number') {
-        throw new Error('Quote ID is required and must be a number');
-      }
-
-      const quote = await this.autotaskService.getQuote(id, tenantContext);
-      
-      if (!quote) {
-        return this.createNotFoundResponse('quote', id);
-      }
-
-      return this.createDataResponse(quote);
-    } catch (error) {
-      throw new Error(`Failed to get quote: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   }
 
@@ -4961,26 +4434,6 @@ export class EnhancedAutotaskToolHandler {
       return this.createCreationResponse('quote', quoteId);
     } catch (error) {
       throw new Error(`Failed to create quote: ${error instanceof Error ? error.message : 'Unknown error'}`);
-    }
-  }
-
-  private async getExpenseReport(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
-    try {
-      const { id } = args;
-      
-      if (!id || typeof id !== 'number') {
-        throw new Error('Expense report ID is required and must be a number');
-      }
-
-      const expenseReport = await this.autotaskService.getExpenseReport(id, tenantContext);
-      
-      if (!expenseReport) {
-        return this.createNotFoundResponse('expense report', id);
-      }
-
-      return this.createDataResponse(expenseReport);
-    } catch (error) {
-      throw new Error(`Failed to get expense report: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   }
 
@@ -5098,26 +4551,6 @@ export class EnhancedAutotaskToolHandler {
   // ===================================
   // Configuration Items Management  
   // ===================================
-
-  private async getConfigurationItem(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
-    try {
-      const { id } = args;
-      
-      if (!id || typeof id !== 'number') {
-        throw new Error('Configuration item ID is required and must be a number');
-      }
-
-      const configItem = await this.autotaskService.getConfigurationItem(id, tenantContext);
-      
-      if (!configItem) {
-        return this.createNotFoundResponse('configuration item', id);
-      }
-
-      return this.createDataResponse(configItem);
-    } catch (error) {
-      throw new Error(`Failed to get configuration item: ${error instanceof Error ? error.message : 'Unknown error'}`);
-    }
-  }
 
   private async searchConfigurationItems(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
     try {
@@ -5458,171 +4891,126 @@ export class EnhancedAutotaskToolHandler {
     }
   }
 
-  private async queryCompanies(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
+  private async queryEntity(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
     try {
-      const search = args.search;
-      if (!search) {
-        throw new Error('Search string is required');
+      const { entity, search, pageSize } = args;
+      
+      if (!entity || !search) {
+        return {
+          isError: true,
+          content: [{ type: 'text', text: 'Both entity and search parameters are required' }]
+        };
       }
 
-      const companies = await this.autotaskService.queryCompanies({ search }, tenantContext);
-      return this.createDataResponse(companies);
-    } catch (error) {
-      throw new Error(`Failed to query companies: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      // Map entity name to service method
+      const entityMethodMap: Record<string, string> = {
+        'companies': 'queryCompanies',
+        'contacts': 'queryContacts',
+        'tickets': 'queryTickets',
+        'projects': 'queryProjects',
+        'resources': 'queryResources',
+        'tasks': 'queryTasks',
+        'contracts': 'queryContracts',
+        'quotes': 'queryQuotes',
+        'invoices': 'queryInvoices',
+        'timeentries': 'queryTimeEntries',
+        'configurationitems': 'queryConfigurationItems',
+        'expensereports': 'queryExpenseReports'
+      };
+
+      const methodName = entityMethodMap[entity.toLowerCase()];
+      if (!methodName) {
+        return {
+          isError: true,
+          content: [{ 
+            type: 'text', 
+            text: `Invalid entity type: ${entity}. Must be one of: ${Object.keys(entityMethodMap).join(', ')}` 
+          }]
+        };
+      }
+
+      // Call the appropriate service method
+      const serviceMethod = (this.autotaskService as any)[methodName];
+      if (typeof serviceMethod !== 'function') {
+        return {
+          isError: true,
+          content: [{ type: 'text', text: `Service method ${methodName} not implemented` }]
+        };
+      }
+
+      const queryOptions = { search, pageSize };
+      const results = await serviceMethod.call(this.autotaskService, queryOptions, tenantContext);
+      
+      return this.createDataResponse(results);
+    } catch (error: any) {
+      return { 
+        isError: true, 
+        content: [{ type: 'text', text: `Failed to query ${args.entity}: ${error.message}` }] 
+      };
     }
   }
 
-  private async queryContacts(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
+  private async getEntityById(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
     try {
-      const search = args.search;
-      if (!search) {
-        throw new Error('Search string is required');
+      const { entity, id, fullDetails } = args;
+      
+      if (!entity || !id) {
+        return {
+          isError: true,
+          content: [{ type: 'text', text: 'Both entity and id parameters are required' }]
+        };
       }
 
-      const contacts = await this.autotaskService.queryContacts({ search }, tenantContext);
-      return this.createDataResponse(contacts);
-    } catch (error) {
-      throw new Error(`Failed to query contacts: ${error instanceof Error ? error.message : 'Unknown error'}`);
-    }
-  }
+      // Map entity name to get method
+      const entityMethodMap: Record<string, string> = {
+        'companies': 'getCompany',
+        'contacts': 'getContact',
+        'tickets': 'getTicket',
+        'projects': 'getProject',
+        'resources': 'getResource',
+        'tasks': 'getTask',
+        'contracts': 'getContract',
+        'quotes': 'getQuote',
+        'invoices': 'getInvoice',
+        'timeentries': 'getTimeEntry',
+        'configurationitems': 'getConfigurationItem',
+        'expensereports': 'getExpenseReport'
+      };
 
-  private async queryTickets(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
-    try {
-      const search = args.search;
-      if (!search) {
-        throw new Error('Search string is required');
+      const methodName = entityMethodMap[entity.toLowerCase()];
+      if (!methodName) {
+        return {
+          isError: true,
+          content: [{ 
+            type: 'text', 
+            text: `Invalid entity type: ${entity}. Must be one of: ${Object.keys(entityMethodMap).join(', ')}` 
+          }]
+        };
       }
 
-      const tickets = await this.autotaskService.queryTickets({ search }, tenantContext);
-      return this.createDataResponse(tickets);
-    } catch (error) {
-      throw new Error(`Failed to query tickets: ${error instanceof Error ? error.message : 'Unknown error'}`);
-    }
-  }
-
-  private async queryProjects(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
-    try {
-      const search = args.search;
-      if (!search) {
-        throw new Error('Search string is required');
+      // Call the appropriate service method
+      const serviceMethod = (this.autotaskService as any)[methodName];
+      if (typeof serviceMethod !== 'function') {
+        return {
+          isError: true,
+          content: [{ type: 'text', text: `Service method ${methodName} not implemented` }]
+        };
       }
 
-      const projects = await this.autotaskService.queryProjects({ search }, tenantContext);
-      return this.createDataResponse(projects);
-    } catch (error) {
-      throw new Error(`Failed to query projects: ${error instanceof Error ? error.message : 'Unknown error'}`);
-    }
-  }
-
-  private async queryResources(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
-    try {
-      const search = args.search;
-      if (!search) {
-        throw new Error('Search string is required');
+      // Some entities support fullDetails parameter
+      const getOptions = fullDetails !== undefined ? { id, fullDetails } : id;
+      const result = await serviceMethod.call(this.autotaskService, getOptions, tenantContext);
+      
+      if (!result) {
+        return this.createNotFoundResponse(entity, id);
       }
-
-      const resources = await this.autotaskService.queryResources({ search }, tenantContext);
-      return this.createDataResponse(resources);
-    } catch (error) {
-      throw new Error(`Failed to query resources: ${error instanceof Error ? error.message : 'Unknown error'}`);
-    }
-  }
-
-  private async queryTasks(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
-    try {
-      const search = args.search;
-      if (!search) {
-        throw new Error('Search string is required');
-      }
-
-      const tasks = await this.autotaskService.queryTasks({ search }, tenantContext);
-      return this.createDataResponse(tasks);
-    } catch (error) {
-      throw new Error(`Failed to query tasks: ${error instanceof Error ? error.message : 'Unknown error'}`);
-    }
-  }
-
-  private async queryContracts(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
-    try {
-      const search = args.search;
-      if (!search) {
-        throw new Error('Search string is required');
-      }
-
-      const contracts = await this.autotaskService.queryContracts({ search }, tenantContext);
-      return this.createDataResponse(contracts);
-    } catch (error) {
-      throw new Error(`Failed to query contracts: ${error instanceof Error ? error.message : 'Unknown error'}`);
-    }
-  }
-
-  private async queryQuotes(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
-    try {
-      const search = args.search;
-      if (!search) {
-        throw new Error('Search string is required');
-      }
-
-      const quotes = await this.autotaskService.queryQuotes({ search }, tenantContext);
-      return this.createDataResponse(quotes);
-    } catch (error) {
-      throw new Error(`Failed to query quotes: ${error instanceof Error ? error.message : 'Unknown error'}`);
-    }
-  }
-
-  private async queryInvoices(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
-    try {
-      const search = args.search;
-      if (!search) {
-        throw new Error('Search string is required');
-      }
-
-      const invoices = await this.autotaskService.queryInvoices({ search }, tenantContext);
-      return this.createDataResponse(invoices);
-    } catch (error) {
-      throw new Error(`Failed to query invoices: ${error instanceof Error ? error.message : 'Unknown error'}`);
-    }
-  }
-
-  private async queryTimeEntries(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
-    try {
-      const search = args.search;
-      if (!search) {
-        throw new Error('Search string is required');
-      }
-
-      const timeEntries = await this.autotaskService.queryTimeEntries({ search }, tenantContext);
-      return this.createDataResponse(timeEntries);
-    } catch (error) {
-      throw new Error(`Failed to query time entries: ${error instanceof Error ? error.message : 'Unknown error'}`);
-    }
-  }
-
-  private async queryConfigurationItems(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
-    try {
-      const search = args.search;
-      if (!search) {
-        throw new Error('Search string is required');
-      }
-
-      const configItems = await this.autotaskService.queryConfigurationItems({ search }, tenantContext);
-      return this.createDataResponse(configItems);
-    } catch (error) {
-      throw new Error(`Failed to query configuration items: ${error instanceof Error ? error.message : 'Unknown error'}`);
-    }
-  }
-
-  private async queryExpenseReports(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
-    try {
-      const search = args.search;
-      if (!search) {
-        throw new Error('Search string is required');
-      }
-
-      const expenseReports = await this.autotaskService.queryExpenseReports({ search }, tenantContext);
-      return this.createDataResponse(expenseReports);
-    } catch (error) {
-      throw new Error(`Failed to query expense reports: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      
+      return this.createDataResponse(result);
+    } catch (error: any) {
+      return { 
+        isError: true, 
+        content: [{ type: 'text', text: `Failed to get ${args.entity}: ${error.message}` }] 
+      };
     }
   }
 }
