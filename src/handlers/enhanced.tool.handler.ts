@@ -457,7 +457,10 @@ export class EnhancedAutotaskToolHandler {
       'get_quote', 'search_quotes', 'get_expense_report', 'search_expense_reports',
       'search_expense_items', 'get_expense_item',
       'get_configuration_item', 'search_configuration_items','get_mapping_cache_stats',
-      'test_connection', 'test_zone_information'
+      'test_connection', 'test_zone_information',
+      'query_companies', 'query_contacts', 'query_tickets', 'query_projects', 'query_resources',
+      'query_tasks', 'query_contracts', 'query_quotes', 'query_invoices', 'query_time_entries',
+      'query_configuration_items', 'query_expense_reports'
     ];
     
     const writeTools = [
@@ -494,9 +497,29 @@ export class EnhancedAutotaskToolHandler {
             type: 'string',
             description: 'Search term to filter companies by name using partial matching (case-insensitive). Searches the companyName field. Use for finding companies when you know part of their name. Examples: "Microsoft" finds "Microsoft Corporation", "Acme" finds "Acme Industries LLC". Essential for user-friendly company lookup when exact names are unknown. Combine with other filters to narrow results further.'
           },
+          companyType: {
+            type: 'number',
+            description: 'Filter by company type classification. Values: 1=Customer (active service recipient), 2=Lead (potential customer, early sales stage), 3=Prospect (qualified potential customer), 4=Dead (disqualified prospect), 5=Suspect (unqualified potential), 6=Vendor (service/product provider). Essential for segmenting companies by business relationship. Example: companyType=1 finds all customers, companyType=6 finds all vendors.'
+          },
+          ownerResourceID: {
+            type: 'number',
+            description: 'Filter by owner resource ID - refers to Resources entity (account manager/sales rep). Find all companies managed by a specific person. Essential for territory management, account manager dashboards, workload distribution. Example: ownerResourceID=123 shows all companies owned by employee #123.'
+          },
           isActive: {
             type: 'boolean',
             description: 'Filter by active status to control which companies appear in results. TRUE returns only active companies (current customers/prospects), FALSE returns only inactive companies (former customers, closed prospects). Active companies can have tickets, projects, and contracts assigned. Inactive companies are typically kept for historical records. Most operational searches should use TRUE. Use FALSE for cleanup or historical analysis.'
+          },
+          city: {
+            type: 'string',
+            description: 'Filter by city name (partial match supported). Use for geographical filtering, territory management, or regional reporting. Example: city="New York" finds all companies in New York City. Combine with state/country for more precise location filtering.'
+          },
+          state: {
+            type: 'string',
+            description: 'Filter by state/province (partial match supported). Use for regional filtering or territory-based searches. Example: state="CA" finds all California companies. Important for regional sales, service territories, and compliance reporting.'
+          },
+          country: {
+            type: 'string',
+            description: 'Filter by country name or code (partial match supported). Use for international operations, multi-country reporting, or region-specific analysis. Example: country="United States" or country="US". Essential for global operations.'
           },
           pageSize: {
             type: 'number',
@@ -729,6 +752,10 @@ export class EnhancedAutotaskToolHandler {
                   type: 'number',
                   description: 'Filter by ticket status ID to focus on tickets in specific workflow stages. Values: 1=New (just created, not assigned), 2=In Progress (actively being worked), 3=Customer Reply Needed (waiting for customer response), 4=Waiting Customer (customer action required), 5=Complete (resolved and closed), 8=On Hold (temporarily suspended), 9=Escalate (needs management attention), 29=Waiting Materials (pending parts/resources). Critical for workload management and SLA tracking.'
                 },
+                priority: {
+                  type: 'number',
+                  description: 'Filter by ticket priority level indicating urgency and business impact. Values: 1=Critical (system down, business stopped, immediate attention required), 2=High (significant impact, work hampered), 3=Medium (standard priority, normal workflow), 4=Low (minor issue, convenience item). Priority affects SLA timelines, escalation procedures, and resource allocation. Essential for finding urgent tickets or filtering by severity.'
+                },
                 companyID: {
                   type: 'number',
                   description: 'Filter by specific company ID - refers to Companies entity. Shows only tickets submitted by or for a particular customer/company. Essential for: customer-specific support dashboards, account management, billing analysis, company-focused reporting. Use when you need to see all support activity for a specific customer or when troubleshooting company-wide issues.'
@@ -748,6 +775,14 @@ export class EnhancedAutotaskToolHandler {
                 unassigned: {
                   type: 'boolean',
                   description: 'Filter for unassigned tickets requiring attention. TRUE returns only tickets with no assigned technician (need assignment), FALSE returns only assigned tickets. Unassigned tickets represent work that needs to be distributed to team members. Critical for: work distribution, ensuring no tickets are overlooked, queue management, workload balancing. Use TRUE to find tickets needing assignment.'
+                },
+                createdDateFrom: {
+                  type: 'string',
+                  description: 'Filter tickets created on or after this date (YYYY-MM-DD format). Use for time-bounded reporting like "tickets created this month" or trend analysis. Example: "2024-01-01" finds tickets created since January 1st. Combine with createdDateTo for specific date ranges. Essential for historical analysis and reporting periods.'
+                },
+                createdDateTo: {
+                  type: 'string',
+                  description: 'Filter tickets created on or before this date (YYYY-MM-DD format). Works with createdDateFrom to create date ranges. Example: "2024-01-31" finds tickets up to end of January. Use for periodic reports, billing cycles, or historical analysis. Inclusive - tickets created ON this date are included.'
                 },
                 pageSize: {
                   type: 'number',
@@ -880,20 +915,28 @@ export class EnhancedAutotaskToolHandler {
       // Project tools
                   EnhancedAutotaskToolHandler.createTool(
               'search_projects',
-              'Search for projects in Autotask. Returns project records with company information.',
+              'Search for projects in Autotask with advanced filtering. Returns project records with company and project manager information.',
               'read',
               {
                 searchTerm: {
                   type: 'string',
-                  description: 'Search term to filter projects by name (partial match supported)'
+                  description: 'Search term to filter projects by name (partial match supported). Searches the projectName field. Example: "Migration" finds "Server Migration", "Email Migration Project", etc.'
                 },
                 companyId: {
                   type: 'number',
-                  description: 'Filter by company ID - refers to Companies entity'
+                  description: 'Filter by company ID - refers to Companies entity. Find all projects for a specific customer/company. Essential for account management and customer-specific project tracking.'
                 },
                 status: {
                   type: 'number',
-                  description: 'Filter by status. Common values: 1=New, 2=In Progress, 3=Complete, 4=Canceled, 5=On Hold'
+                  description: 'Filter by project status. Values: 1=New, 2=In Progress, 3=Complete, 4=Canceled, 5=On Hold. Use to focus on active projects (status=2) or review completed work (status=3). Critical for project portfolio management and resource planning.'
+                },
+                projectType: {
+                  type: 'number',
+                  description: 'Filter by project type (billing model). Values: 1=Fixed Price (set budget, fixed deliverables), 2=Time and Materials (hourly billing, flexible scope), 3=Retainer (pre-paid hours, ongoing support), 4=Internal (company projects, no billing). Essential for financial reporting, billing analysis, and project categorization. Example: projectType=2 finds all T&M projects.'
+                },
+                projectManagerResourceID: {
+                  type: 'number',
+                  description: 'Filter by project manager resource ID - refers to Resources entity (employee managing the project). Find all projects managed by a specific PM. Essential for: PM workload analysis, portfolio management by PM, capacity planning, performance tracking. Example: projectManagerResourceID=123 shows all projects managed by employee #123.'
                 },
                 pageSize: {
                   type: 'number',
@@ -1157,24 +1200,44 @@ export class EnhancedAutotaskToolHandler {
       // Task Management
       EnhancedAutotaskToolHandler.createTool(
         'search_tasks',
-        'Search for tasks in Autotask with filters. Returns task records with project and resource information.',
+        'Search for tasks in Autotask with comprehensive filtering. Returns task records with project, resource, and priority information. Essential for task management, deadline tracking, and workload planning.',
         'read',
         {
           projectId: {
             type: 'number',
-            description: 'Filter by project ID - refers to Projects entity'
+            description: 'Filter by project ID - refers to Projects entity. Find all tasks within a specific project. Essential for project-specific task tracking and project management dashboards.'
           },
           assignedResourceId: {
             type: 'number',
-            description: 'Filter by assigned resource ID - refers to Resources entity (employee assigned to task)'
+            description: 'Filter by assigned resource ID - refers to Resources entity (employee assigned to task). Find all tasks assigned to a specific person. Essential for individual workload management, capacity planning, and performance tracking.'
           },
           status: {
             type: 'number',
-            description: 'Filter by status ID. Common values: 1=New, 2=In Progress, 3=Complete, 4=Canceled, 5=On Hold'
+            description: 'Filter by task status. Values: 1=New (not started), 2=In Progress (actively worked), 3=Complete (finished), 4=Canceled, 5=On Hold. Use to focus on active tasks or review completed work. Critical for task management and progress tracking.'
+          },
+          priorityLabel: {
+            type: 'string',
+            description: 'Filter by task priority level. Values: "Critical" (urgent, immediate attention), "High" (important, near-term deadline), "Normal" (standard priority), "Low" (can be delayed). Essential for prioritizing work, finding urgent tasks, or balancing workloads. Example: priorityLabel="Critical" finds all critical-priority tasks.'
           },
           searchTerm: {
             type: 'string',
-            description: 'Search term to filter tasks by title (partial match supported)'
+            description: 'Search term to filter tasks by title (partial match supported). Example: "Setup" finds "Email Setup", "Server Setup Task", etc. Use for finding tasks by keywords or topic.'
+          },
+          dueDateFrom: {
+            type: 'string',
+            description: 'Filter tasks with due date on or after this date (YYYY-MM-DD format). Use to find upcoming deadlines or overdue tasks. Example: dueDateFrom=today finds tasks due today or later. Essential for deadline tracking and schedule management. Combine with dueDateTo for date ranges.'
+          },
+          dueDateTo: {
+            type: 'string',
+            description: 'Filter tasks with due date on or before this date (YYYY-MM-DD format). Works with dueDateFrom to create date ranges. Example: dueDateTo=today finds overdue tasks and tasks due today. Critical for finding missed deadlines or near-term deliverables. Inclusive - tasks due ON this date are included.'
+          },
+          createdDateFrom: {
+            type: 'string',
+            description: 'Filter tasks created on or after this date (YYYY-MM-DD format). Use for time-bounded task analysis or tracking task creation trends. Example: "2024-01-01" finds tasks created since January 1st. Useful for project phase analysis or historical reporting.'
+          },
+          createdDateTo: {
+            type: 'string',
+            description: 'Filter tasks created on or before this date (YYYY-MM-DD format). Works with createdDateFrom for date ranges. Use for periodic reports or historical analysis. Example: "2024-01-31" finds tasks created through end of January.'
           },
           pageSize: {
             type: 'number',
@@ -2223,6 +2286,152 @@ export class EnhancedAutotaskToolHandler {
         {}
       ),
 
+      // GET Query Tools (URL parameter-based search)
+      EnhancedAutotaskToolHandler.createTool(
+        'query_companies',
+        'Query companies using URL parameter search string (alternative to search_companies). Uses GET /V1.0/Companies/query endpoint with search parameter for simple text-based searches.',
+        'read',
+        {
+          search: {
+            type: 'string',
+            description: 'Search string to query companies (required). Searches across company name and other indexed fields. Example: "Microsoft" or "Acme Corp"'
+          }
+        },
+        ['search']
+      ),
+      EnhancedAutotaskToolHandler.createTool(
+        'query_contacts',
+        'Query contacts using URL parameter search string (alternative to search_contacts). Uses GET /V1.0/Contacts/query endpoint with search parameter for simple text-based searches.',
+        'read',
+        {
+          search: {
+            type: 'string',
+            description: 'Search string to query contacts (required). Searches across contact name, email and other indexed fields. Example: "john.smith@company.com" or "John Smith"'
+          }
+        },
+        ['search']
+      ),
+      EnhancedAutotaskToolHandler.createTool(
+        'query_tickets',
+        'Query tickets using URL parameter search string (alternative to search_tickets). Uses GET /V1.0/Tickets/query endpoint with search parameter for simple text-based searches.',
+        'read',
+        {
+          search: {
+            type: 'string',
+            description: 'Search string to query tickets (required). Searches across ticket number, title and other indexed fields. Example: "T20250914.0008" or "email issue"'
+          }
+        },
+        ['search']
+      ),
+      EnhancedAutotaskToolHandler.createTool(
+        'query_projects',
+        'Query projects using URL parameter search string (alternative to search_projects). Uses GET /V1.0/Projects/query endpoint with search parameter for simple text-based searches.',
+        'read',
+        {
+          search: {
+            type: 'string',
+            description: 'Search string to query projects (required). Searches across project name, description and other indexed fields. Example: "Migration Project" or "Server Upgrade"'
+          }
+        },
+        ['search']
+      ),
+      EnhancedAutotaskToolHandler.createTool(
+        'query_resources',
+        'Query resources (employees) using URL parameter search string (alternative to search_resources). Uses GET /V1.0/Resources/query endpoint with search parameter for simple text-based searches.',
+        'read',
+        {
+          search: {
+            type: 'string',
+            description: 'Search string to query resources (required). Searches across resource name, email and other indexed fields. Example: "john.smith@company.com" or "John Smith"'
+          }
+        },
+        ['search']
+      ),
+      EnhancedAutotaskToolHandler.createTool(
+        'query_tasks',
+        'Query tasks using URL parameter search string (alternative to search_tasks). Uses GET /V1.0/Tasks/query endpoint with search parameter for simple text-based searches.',
+        'read',
+        {
+          search: {
+            type: 'string',
+            description: 'Search string to query tasks (required). Searches across task title, description and other indexed fields. Example: "Database Migration" or "Setup Email"'
+          }
+        },
+        ['search']
+      ),
+      EnhancedAutotaskToolHandler.createTool(
+        'query_contracts',
+        'Query contracts using URL parameter search string (alternative to search_contracts). Uses GET /V1.0/Contracts/query endpoint with search parameter for simple text-based searches.',
+        'read',
+        {
+          search: {
+            type: 'string',
+            description: 'Search string to query contracts (required). Searches across contract name and other indexed fields. Example: "Support Contract" or "Annual Agreement"'
+          }
+        },
+        ['search']
+      ),
+      EnhancedAutotaskToolHandler.createTool(
+        'query_quotes',
+        'Query quotes using URL parameter search string (alternative to search_quotes). Uses GET /V1.0/Quotes/query endpoint with search parameter for simple text-based searches.',
+        'read',
+        {
+          search: {
+            type: 'string',
+            description: 'Search string to query quotes (required). Searches across quote title, description and other indexed fields. Example: "New Server Quote" or "Q-2024-001"'
+          }
+        },
+        ['search']
+      ),
+      EnhancedAutotaskToolHandler.createTool(
+        'query_invoices',
+        'Query invoices using URL parameter search string (alternative to search_invoices). Uses GET /V1.0/Invoices/query endpoint with search parameter for simple text-based searches.',
+        'read',
+        {
+          search: {
+            type: 'string',
+            description: 'Search string to query invoices (required). Searches across invoice number and other indexed fields. Example: "INV-2024-001" or invoice number'
+          }
+        },
+        ['search']
+      ),
+      EnhancedAutotaskToolHandler.createTool(
+        'query_time_entries',
+        'Query time entries using URL parameter search string (alternative to search_time_entries). Uses GET /V1.0/TimeEntries/query endpoint with search parameter for simple text-based searches.',
+        'read',
+        {
+          search: {
+            type: 'string',
+            description: 'Search string to query time entries (required). Searches across time entry notes and other indexed fields.'
+          }
+        },
+        ['search']
+      ),
+      EnhancedAutotaskToolHandler.createTool(
+        'query_configuration_items',
+        'Query configuration items using URL parameter search string (alternative to search_configuration_items). Uses GET /V1.0/ConfigurationItems/query endpoint with search parameter for simple text-based searches.',
+        'read',
+        {
+          search: {
+            type: 'string',
+            description: 'Search string to query configuration items (required). Searches across reference title, serial number and other indexed fields. Example: "DESKTOP-001" or "PRINTER-HP-001"'
+          }
+        },
+        ['search']
+      ),
+      EnhancedAutotaskToolHandler.createTool(
+        'query_expense_reports',
+        'Query expense reports using URL parameter search string (alternative to search_expense_reports). Uses GET /V1.0/ExpenseReports/query endpoint with search parameter for simple text-based searches.',
+        'read',
+        {
+          search: {
+            type: 'string',
+            description: 'Search string to query expense reports (required). Searches across expense report name and other indexed fields.'
+          }
+        },
+        ['search']
+      ),
+
     ];
 
     // Extract mode from tenant context
@@ -2682,6 +2891,66 @@ export class EnhancedAutotaskToolHandler {
           result = await this.getCompaniesPage(args, tenantContext);
           break;
 
+        case 'query_companies':
+          this.logger.info(`🔍 Executing query_companies`, { toolCallId });
+          result = await this.queryCompanies(args, tenantContext);
+          break;
+
+        case 'query_contacts':
+          this.logger.info(`👥 Executing query_contacts`, { toolCallId });
+          result = await this.queryContacts(args, tenantContext);
+          break;
+
+        case 'query_tickets':
+          this.logger.info(`🎫 Executing query_tickets`, { toolCallId });
+          result = await this.queryTickets(args, tenantContext);
+          break;
+
+        case 'query_projects':
+          this.logger.info(`📋 Executing query_projects`, { toolCallId });
+          result = await this.queryProjects(args, tenantContext);
+          break;
+
+        case 'query_resources':
+          this.logger.info(`👨‍💼 Executing query_resources`, { toolCallId });
+          result = await this.queryResources(args, tenantContext);
+          break;
+
+        case 'query_tasks':
+          this.logger.info(`📝 Executing query_tasks`, { toolCallId });
+          result = await this.queryTasks(args, tenantContext);
+          break;
+
+        case 'query_contracts':
+          this.logger.info(`📄 Executing query_contracts`, { toolCallId });
+          result = await this.queryContracts(args, tenantContext);
+          break;
+
+        case 'query_quotes':
+          this.logger.info(`💰 Executing query_quotes`, { toolCallId });
+          result = await this.queryQuotes(args, tenantContext);
+          break;
+
+        case 'query_invoices':
+          this.logger.info(`🧾 Executing query_invoices`, { toolCallId });
+          result = await this.queryInvoices(args, tenantContext);
+          break;
+
+        case 'query_time_entries':
+          this.logger.info(`⏰ Executing query_time_entries`, { toolCallId });
+          result = await this.queryTimeEntries(args, tenantContext);
+          break;
+
+        case 'query_configuration_items':
+          this.logger.info(`🖥️ Executing query_configuration_items`, { toolCallId });
+          result = await this.queryConfigurationItems(args, tenantContext);
+          break;
+
+        case 'query_expense_reports':
+          this.logger.info(`💳 Executing query_expense_reports`, { toolCallId });
+          result = await this.queryExpenseReports(args, tenantContext);
+          break;
+
         default:
           this.logger.error(`❌ Unknown tool: ${name}`, { toolCallId, toolName: name });
           throw new Error(`Unknown tool: ${name}`);
@@ -2726,21 +2995,67 @@ export class EnhancedAutotaskToolHandler {
     try {
       const options: any = {};
       
+      // Build filter array
+      const filters: any[] = [];
+      
       if (args.searchTerm) {
-        options.filter = [{
+        filters.push({
           field: 'companyName',
           op: 'contains',
           value: args.searchTerm
-        }];
+        });
+      }
+      
+      if (typeof args.companyType === 'number') {
+        filters.push({
+          field: 'companyType',
+          op: 'eq',
+          value: args.companyType
+        });
+      }
+      
+      if (typeof args.ownerResourceID === 'number') {
+        filters.push({
+          field: 'ownerResourceID',
+          op: 'eq',
+          value: args.ownerResourceID
+        });
       }
       
       if (typeof args.isActive === 'boolean') {
-        if (!options.filter) options.filter = [];
-        options.filter.push({
+        filters.push({
           field: 'isActive',
           op: 'eq',
           value: args.isActive
         });
+      }
+      
+      if (args.city) {
+        filters.push({
+          field: 'city',
+          op: 'contains',
+          value: args.city
+        });
+      }
+      
+      if (args.state) {
+        filters.push({
+          field: 'state',
+          op: 'contains',
+          value: args.state
+        });
+      }
+      
+      if (args.country) {
+        filters.push({
+          field: 'country',
+          op: 'contains',
+          value: args.country
+        });
+      }
+      
+      if (filters.length > 0) {
+        options.filter = filters;
       }
       
       // Handle pagination parameters
@@ -2994,6 +3309,10 @@ export class EnhancedAutotaskToolHandler {
         options.status = args.status;
       }
       
+      if (typeof args.priority === 'number') {
+        options.priority = args.priority;
+      }
+      
       if (typeof args.companyID === 'number') {
         options.companyId = args.companyID;
       }
@@ -3012,6 +3331,14 @@ export class EnhancedAutotaskToolHandler {
       
       if (typeof args.unassigned === 'boolean') {
         options.unassigned = args.unassigned;
+      }
+      
+      if (args.createdDateFrom) {
+        options.createdDateFrom = args.createdDateFrom;
+      }
+      
+      if (args.createdDateTo) {
+        options.createdDateTo = args.createdDateTo;
       }
       
       if (args.pageSize) {
@@ -3246,17 +3573,19 @@ export class EnhancedAutotaskToolHandler {
     try {
       const options: any = {};
       
+      // Build filter array
+      const filters: any[] = [];
+      
       if (args.searchTerm) {
-        options.filter = [{
+        filters.push({
           field: 'projectName',
           op: 'contains',
           value: args.searchTerm
-        }];
+        });
       }
       
       if (typeof args.companyId === 'number') {
-        if (!options.filter) options.filter = [];
-        options.filter.push({
+        filters.push({
           field: 'companyID',
           op: 'eq',
           value: args.companyId
@@ -3264,12 +3593,31 @@ export class EnhancedAutotaskToolHandler {
       }
       
       if (typeof args.status === 'number') {
-        if (!options.filter) options.filter = [];
-        options.filter.push({
+        filters.push({
           field: 'status',
           op: 'eq',
           value: args.status
         });
+      }
+      
+      if (typeof args.projectType === 'number') {
+        filters.push({
+          field: 'projectType',
+          op: 'eq',
+          value: args.projectType
+        });
+      }
+      
+      if (typeof args.projectManagerResourceID === 'number') {
+        filters.push({
+          field: 'projectManagerResourceID',
+          op: 'eq',
+          value: args.projectManagerResourceID
+        });
+      }
+      
+      if (filters.length > 0) {
+        options.filter = filters;
       }
       
       if (args.pageSize) {
@@ -3959,7 +4307,7 @@ export class EnhancedAutotaskToolHandler {
 
   private async searchTasks(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
     try {
-      const { projectId, assignedResourceId, status, searchTerm, pageSize } = args;
+      const { projectId, assignedResourceId, status, priorityLabel, searchTerm, dueDateFrom, dueDateTo, createdDateFrom, createdDateTo, pageSize } = args;
       
       // Build filter for tasks search
       const filter: any[] = [];
@@ -3976,8 +4324,28 @@ export class EnhancedAutotaskToolHandler {
         filter.push({ field: 'status', op: 'eq', value: status });
       }
       
+      if (priorityLabel) {
+        filter.push({ field: 'priorityLabel', op: 'eq', value: priorityLabel });
+      }
+      
       if (searchTerm) {
         filter.push({ field: 'title', op: 'contains', value: searchTerm });
+      }
+      
+      if (dueDateFrom) {
+        filter.push({ field: 'endDateTime', op: 'gte', value: dueDateFrom });
+      }
+      
+      if (dueDateTo) {
+        filter.push({ field: 'endDateTime', op: 'lte', value: dueDateTo });
+      }
+      
+      if (createdDateFrom) {
+        filter.push({ field: 'createDateTime', op: 'gte', value: createdDateFrom });
+      }
+      
+      if (createdDateTo) {
+        filter.push({ field: 'createDateTime', op: 'lte', value: createdDateTo });
       }
       
       // If no specific filters, get all active tasks
@@ -5087,6 +5455,174 @@ export class EnhancedAutotaskToolHandler {
       return this.createUpdateResponse('expense item', id);
     } catch (error) {
       throw new Error(`Failed to update expense item: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+  private async queryCompanies(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
+    try {
+      const search = args.search;
+      if (!search) {
+        throw new Error('Search string is required');
+      }
+
+      const companies = await this.autotaskService.queryCompanies({ search }, tenantContext);
+      return this.createDataResponse(companies);
+    } catch (error) {
+      throw new Error(`Failed to query companies: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+  private async queryContacts(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
+    try {
+      const search = args.search;
+      if (!search) {
+        throw new Error('Search string is required');
+      }
+
+      const contacts = await this.autotaskService.queryContacts({ search }, tenantContext);
+      return this.createDataResponse(contacts);
+    } catch (error) {
+      throw new Error(`Failed to query contacts: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+  private async queryTickets(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
+    try {
+      const search = args.search;
+      if (!search) {
+        throw new Error('Search string is required');
+      }
+
+      const tickets = await this.autotaskService.queryTickets({ search }, tenantContext);
+      return this.createDataResponse(tickets);
+    } catch (error) {
+      throw new Error(`Failed to query tickets: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+  private async queryProjects(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
+    try {
+      const search = args.search;
+      if (!search) {
+        throw new Error('Search string is required');
+      }
+
+      const projects = await this.autotaskService.queryProjects({ search }, tenantContext);
+      return this.createDataResponse(projects);
+    } catch (error) {
+      throw new Error(`Failed to query projects: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+  private async queryResources(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
+    try {
+      const search = args.search;
+      if (!search) {
+        throw new Error('Search string is required');
+      }
+
+      const resources = await this.autotaskService.queryResources({ search }, tenantContext);
+      return this.createDataResponse(resources);
+    } catch (error) {
+      throw new Error(`Failed to query resources: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+  private async queryTasks(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
+    try {
+      const search = args.search;
+      if (!search) {
+        throw new Error('Search string is required');
+      }
+
+      const tasks = await this.autotaskService.queryTasks({ search }, tenantContext);
+      return this.createDataResponse(tasks);
+    } catch (error) {
+      throw new Error(`Failed to query tasks: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+  private async queryContracts(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
+    try {
+      const search = args.search;
+      if (!search) {
+        throw new Error('Search string is required');
+      }
+
+      const contracts = await this.autotaskService.queryContracts({ search }, tenantContext);
+      return this.createDataResponse(contracts);
+    } catch (error) {
+      throw new Error(`Failed to query contracts: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+  private async queryQuotes(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
+    try {
+      const search = args.search;
+      if (!search) {
+        throw new Error('Search string is required');
+      }
+
+      const quotes = await this.autotaskService.queryQuotes({ search }, tenantContext);
+      return this.createDataResponse(quotes);
+    } catch (error) {
+      throw new Error(`Failed to query quotes: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+  private async queryInvoices(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
+    try {
+      const search = args.search;
+      if (!search) {
+        throw new Error('Search string is required');
+      }
+
+      const invoices = await this.autotaskService.queryInvoices({ search }, tenantContext);
+      return this.createDataResponse(invoices);
+    } catch (error) {
+      throw new Error(`Failed to query invoices: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+  private async queryTimeEntries(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
+    try {
+      const search = args.search;
+      if (!search) {
+        throw new Error('Search string is required');
+      }
+
+      const timeEntries = await this.autotaskService.queryTimeEntries({ search }, tenantContext);
+      return this.createDataResponse(timeEntries);
+    } catch (error) {
+      throw new Error(`Failed to query time entries: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+  private async queryConfigurationItems(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
+    try {
+      const search = args.search;
+      if (!search) {
+        throw new Error('Search string is required');
+      }
+
+      const configItems = await this.autotaskService.queryConfigurationItems({ search }, tenantContext);
+      return this.createDataResponse(configItems);
+    } catch (error) {
+      throw new Error(`Failed to query configuration items: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+  private async queryExpenseReports(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
+    try {
+      const search = args.search;
+      if (!search) {
+        throw new Error('Search string is required');
+      }
+
+      const expenseReports = await this.autotaskService.queryExpenseReports({ search }, tenantContext);
+      return this.createDataResponse(expenseReports);
+    } catch (error) {
+      throw new Error(`Failed to query expense reports: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   }
 }

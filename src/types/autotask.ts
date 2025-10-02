@@ -306,8 +306,13 @@ export interface AutotaskQueryOptionsExtended extends AutotaskQueryOptions {
   opportunityId?: number;
   searchTerm?: string;
   status?: number;
+  priority?: number;
   assignedResourceID?: number;
   unassigned?: boolean;
+  projectId?: number;
+  contractId?: number;
+  createdDateFrom?: string;
+  createdDateTo?: string;
   // Note: Pagination is now enabled by default. Only specify pageSize to limit results.
 }
 

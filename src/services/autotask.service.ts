@@ -946,12 +946,56 @@ export class AutotaskService {
         });
       }
       
+      // Handle priority filter
+      if (options.priority !== undefined) {
+        filters.push({
+          op: 'eq',
+          field: 'priority',
+          value: options.priority
+        });
+      }
+      
       // Only add company filter if explicitly provided
       if (options.companyId !== undefined) {
         filters.push({
           op: 'eq',
           field: 'companyID',
           value: options.companyId
+        });
+      }
+      
+      // Handle projectID filter
+      if (options.projectId !== undefined) {
+        filters.push({
+          op: 'eq',
+          field: 'projectID',
+          value: options.projectId
+        });
+      }
+      
+      // Handle contractID filter
+      if (options.contractId !== undefined) {
+        filters.push({
+          op: 'eq',
+          field: 'contractID',
+          value: options.contractId
+        });
+      }
+      
+      // Handle createdDate range filters
+      if (options.createdDateFrom) {
+        filters.push({
+          op: 'gte',
+          field: 'createDate',
+          value: options.createdDateFrom
+        });
+      }
+      
+      if (options.createdDateTo) {
+        filters.push({
+          op: 'lte',
+          field: 'createDate',
+          value: options.createdDateTo
         });
       }
       
@@ -2831,5 +2875,179 @@ export class AutotaskService {
 
   async searchDepartments(_options: AutotaskQueryOptionsExtended = {}, _tenantContext?: TenantContext): Promise<AutotaskDepartment[]> {
     throw new Error('Departments API not directly available in autotask-node library');
+  }
+
+  // ===================================
+  // GET Query Methods (URL parameter-based search)
+  // These use simpler filter-based searches as GET /V1.0/{Entity}/query 
+  // endpoints are not directly supported by autotask-node library
+  // ===================================
+
+  async queryCompanies(options: { search: string }, tenantContext?: TenantContext): Promise<AutotaskCompany[]> {
+    this.logger.info('🔍 Querying companies with search parameter:', options.search);
+    
+    // Use existing searchCompanies with contains filter
+    return this.searchCompanies({
+      filter: [{
+        field: 'companyName',
+        op: 'contains',
+        value: options.search
+      }],
+      pageSize: 50
+    }, tenantContext);
+  }
+
+  async queryContacts(options: { search: string }, tenantContext?: TenantContext): Promise<AutotaskContact[]> {
+    this.logger.info('🔍 Querying contacts with search parameter:', options.search);
+    
+    // Use existing searchContacts with contains filter
+    return this.searchContacts({
+      filter: [{
+        field: 'firstName',
+        op: 'contains',
+        value: options.search
+      }, {
+        field: 'lastName',
+        op: 'contains',
+        value: options.search
+      }, {
+        field: 'emailAddress',
+        op: 'contains',
+        value: options.search
+      }],
+      pageSize: 50
+    }, tenantContext);
+  }
+
+  async queryTickets(options: { search: string }, tenantContext?: TenantContext): Promise<AutotaskTicket[]> {
+    this.logger.info('🔍 Querying tickets with search parameter:', options.search);
+    
+    // Use existing searchTickets with searchTerm
+    return this.searchTickets({
+      searchTerm: options.search,
+      pageSize: 50
+    }, tenantContext);
+  }
+
+  async queryProjects(options: { search: string }, tenantContext?: TenantContext): Promise<AutotaskProject[]> {
+    this.logger.info('🔍 Querying projects with search parameter:', options.search);
+    
+    // Use existing searchProjects with contains filter
+    return this.searchProjects({
+      filter: [{
+        field: 'projectName',
+        op: 'contains',
+        value: options.search
+      }],
+      pageSize: 50
+    }, tenantContext);
+  }
+
+  async queryResources(options: { search: string }, tenantContext?: TenantContext): Promise<AutotaskResource[]> {
+    this.logger.info('🔍 Querying resources with search parameter:', options.search);
+    
+    // Use existing searchResources with contains filter
+    return this.searchResources({
+      filter: [{
+        field: 'firstName',
+        op: 'contains',
+        value: options.search
+      }],
+      pageSize: 50
+    }, tenantContext);
+  }
+
+  async queryTasks(options: { search: string }, tenantContext?: TenantContext): Promise<AutotaskTask[]> {
+    this.logger.info('🔍 Querying tasks with search parameter:', options.search);
+    
+    // Use existing searchTasks with contains filter
+    return this.searchTasks({
+      filter: [{
+        field: 'title',
+        op: 'contains',
+        value: options.search
+      }],
+      pageSize: 50
+    }, tenantContext);
+  }
+
+  async queryContracts(options: { search: string }, tenantContext?: TenantContext): Promise<AutotaskContract[]> {
+    this.logger.info('🔍 Querying contracts with search parameter:', options.search);
+    
+    // Use existing searchContracts with contains filter
+    return this.searchContracts({
+      filter: [{
+        field: 'contractName',
+        op: 'contains',
+        value: options.search
+      }],
+      pageSize: 50
+    }, tenantContext);
+  }
+
+  async queryQuotes(options: { search: string }, tenantContext?: TenantContext): Promise<AutotaskQuote[]> {
+    this.logger.info('🔍 Querying quotes with search parameter:', options.search);
+    
+    // Use existing searchQuotes with searchTerm
+    return this.searchQuotes({
+      searchTerm: options.search,
+      pageSize: 50
+    }, tenantContext);
+  }
+
+  async queryInvoices(options: { search: string }, tenantContext?: TenantContext): Promise<AutotaskInvoice[]> {
+    this.logger.info('🔍 Querying invoices with search parameter:', options.search);
+    
+    // Use existing searchInvoices with filter
+    return this.searchInvoices({
+      filter: [{
+        field: 'invoiceNumber',
+        op: 'contains',
+        value: options.search
+      }],
+      pageSize: 50
+    }, tenantContext);
+  }
+
+  async queryTimeEntries(options: { search: string }, tenantContext?: TenantContext): Promise<AutotaskTimeEntry[]> {
+    this.logger.info('🔍 Querying time entries with search parameter:', options.search);
+    
+    // Use existing getTimeEntries with filter
+    return this.getTimeEntries({
+      filter: [{
+        field: 'summaryNotes',
+        op: 'contains',
+        value: options.search
+      }],
+      pageSize: 50
+    }, tenantContext);
+  }
+
+  async queryConfigurationItems(options: { search: string }, tenantContext?: TenantContext): Promise<AutotaskConfigurationItem[]> {
+    this.logger.info('🔍 Querying configuration items with search parameter:', options.search);
+    
+    // Use existing searchConfigurationItems with filter
+    return this.searchConfigurationItems({
+      filter: [{
+        field: 'referenceTitle',
+        op: 'contains',
+        value: options.search
+      }],
+      pageSize: 50
+    }, tenantContext);
+  }
+
+  async queryExpenseReports(options: { search: string }, tenantContext?: TenantContext): Promise<AutotaskExpenseReport[]> {
+    this.logger.info('🔍 Querying expense reports with search parameter:', options.search);
+    
+    // Use existing searchExpenseReports with filter
+    return this.searchExpenseReports({
+      filter: [{
+        field: 'name',
+        op: 'contains',
+        value: options.search
+      }],
+      pageSize: 50
+    }, tenantContext);
   }
 } 
