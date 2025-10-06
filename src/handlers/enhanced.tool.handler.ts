@@ -10,7 +10,7 @@ import { MappingService } from '../utils/mapping.service.js';
 import { AutotaskCredentials, TenantContext } from '../types/mcp.js'; 
 
 export const LARGE_RESPONSE_THRESHOLDS = {
-  tickets: 50,        
+  tickets: 100,        
   companies: 100,     
   contacts: 100,     
   projects: 50,      
@@ -2821,36 +2821,16 @@ export class EnhancedAutotaskToolHandler {
 
       const companies = await this.autotaskService.searchCompanies(options, tenantContext);
       
-      // Enhanced results with mapped names
-      const mappingService = await this.getMappingService();
-      const enhancedCompanies = await Promise.all(
-        companies.map(async (company: any) => {
-          const enhanced: any = { ...company };
-          
-          // Add owner resource name if available
-          if (company.ownerResourceID) {
-            try {
-              enhanced._enhanced = enhanced._enhanced || {};
-              enhanced._enhanced.ownerResourceName = await mappingService.getResourceName(company.ownerResourceID, tenantContext);
-            } catch (error) {
-              this.logger.info(`Failed to map owner resource ID ${company.ownerResourceID}:`, error);
-              enhanced._enhanced = enhanced._enhanced || {};
-              enhanced._enhanced.ownerResourceName = `Unknown (${company.ownerResourceID})`;
-            }
-          }
-          
-          return enhanced;
-        })
-      );
+      // Enhanc 
 
       // Prepare pagination info
       const currentPage = args.page || 1;
       const pageSize = args.pageSize || 50;
-      const isLimitedResults = enhancedCompanies.length === pageSize && !args.getAllPages;
+      const isLimitedResults = companies.length === pageSize && !args.getAllPages;
       
       let resultsText = '';
-      if (enhancedCompanies.length > 0) {
-        resultsText = `Found ${enhancedCompanies.length} companies`;
+      if (companies.length > 0) {
+        resultsText = `Found ${companies.length} companies`;
         
         // Add pagination context
         if (currentPage > 1) {
@@ -2860,7 +2840,7 @@ export class EnhancedAutotaskToolHandler {
           resultsText += ` - use page=${currentPage + 1} to get more results`;
         }
         
-        resultsText += `:\n\n${enhancedCompanies.map(company => 
+        resultsText += `:\n\n${companies.map(company => 
           `ID: ${company.id}\nName: ${company.companyName}\nType: ${company.companyType}\nActive: ${company.isActive}\nOwner: ${company._enhanced?.ownerResourceName || 'Unknown'}\n`
         ).join('\n')}`;
       } else {
@@ -2878,7 +2858,7 @@ export class EnhancedAutotaskToolHandler {
       // Check if we're hitting the threshold limit and show guidance proactively
       const threshold = LARGE_RESPONSE_THRESHOLDS.companies;
       const isHittingLimit = args.pageSize !== undefined && args.pageSize >= threshold;
-      const shouldShowGuidance = isHittingLimit || enhancedCompanies.length >= threshold;
+      const shouldShowGuidance = isHittingLimit || companies.length >= threshold;
 
       let contentWithGuidance = content;
       if (shouldShowGuidance) {
@@ -2887,7 +2867,7 @@ export class EnhancedAutotaskToolHandler {
             `  • Use \`searchTerm\` with company name or partial name\n` +
             `  • Add specific filters in your search criteria\n` +
             `  • Use smaller \`pageSize\` parameter (current: ${args.pageSize})`
-          : this.generateSearchGuidance('companies', enhancedCompanies.length, Math.round(JSON.stringify(content).length / 1024));
+          : this.generateSearchGuidance('companies', companies.length, Math.round(JSON.stringify(content).length / 1024));
 
         contentWithGuidance = [
           ...content,

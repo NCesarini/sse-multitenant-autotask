@@ -30,7 +30,7 @@ import { Logger } from '../utils/logger';
 
 
 export const LARGE_RESPONSE_THRESHOLDS = {
-  tickets: 50,        
+  tickets: 100,        
   companies: 100,     
   contacts: 100,     
   projects: 50,      
@@ -549,20 +549,50 @@ export class AutotaskService {
       operation: 'searchCompanies'
     });
 
-    this.logger.info('📋 API Parameters for searchCompanies', {
-      tenantId: tenantContext?.tenantId,
-      impersonationResourceId: tenantContext?.impersonationResourceId?.toString(),
-      queryOptions: options,
-      apiEndpoint: 'client.accounts.list'
-    });
-
     const client = await this.getClientForTenant(tenantContext);
     
     try {
       this.logger.info('Searching companies with options:', options);
       
+      
+      this.logger.info('Making direct POST API call to Companies/query with JSON body');
+       
+      // Prepare search body in the same format as working endpoints
+      const searchBody: any = {};
+      
+      // Ensure there's a filter - Autotask API requires a filter
+      if (!options.filter || (Array.isArray(options.filter) && options.filter.length === 0) || 
+          (!Array.isArray(options.filter) && Object.keys(options.filter).length === 0)) {
+        searchBody.filter = [
+          {
+            "op": "gte",
+            "field": "id",
+            "value": 0
+          }
+        ];
+      } else {
+        // If filter is provided as an object, convert to array format expected by API
+        if (!Array.isArray(options.filter)) {
+          const filterArray = [];
+          for (const [field, value] of Object.entries(options.filter)) {
+            filterArray.push({
+              "op": "eq",
+              "field": field,
+              "value": value
+            });
+          }
+          searchBody.filter = filterArray;
+        } else {
+          searchBody.filter = options.filter;
+        }
+      }
+
+      // Add other search parameters
+      if (options.sort) searchBody.sort = options.sort;
+      if (options.page) searchBody.page = options.page;
+       
       // THRESHOLD-BASED PAGINATION: Use thresholds to prevent oversized responses
-      const THRESHOLD_LIMIT = LARGE_RESPONSE_THRESHOLDS.companies;
+      const THRESHOLD_LIMIT = LARGE_RESPONSE_THRESHOLDS.companies; // 100
       const DEFAULT_PAGE_SIZE = 50; // Reasonable default for UI display
       
       let requestedPageSize = options.pageSize;
@@ -575,7 +605,7 @@ export class AutotaskService {
       } else {
         // Cap at threshold limit to prevent oversized responses
         const originalRequest = requestedPageSize;
-        requestedPageSize = Math.min(requestedPageSize, THRESHOLD_LIMIT);
+        requestedPageSize = Math.max(requestedPageSize, THRESHOLD_LIMIT);
         isHittingLimit = originalRequest >= THRESHOLD_LIMIT;
         
         if (isHittingLimit) {
@@ -583,26 +613,88 @@ export class AutotaskService {
         }
       }
       
-      // Simple threshold-based request (always use this approach now)
-      const queryOptions = {
-        ...options,
-        pageSize: requestedPageSize
-      };
+      searchBody.pageSize = requestedPageSize;
+      searchBody.MaxRecords = requestedPageSize;  // Add MaxRecords for response size control
 
-      this.logger.info('Threshold-limited request:', queryOptions);
-      
-      const result = await client.accounts.list(queryOptions as any);
-      const companies = (result.data as AutotaskCompany[]) || [];
-      
-      const executionTime = Date.now() - startTime;
-      this.logger.info(`✅ Retrieved ${companies.length} companies (threshold-limited)`, {
-        tenantId: tenantContext?.tenantId,
-        resultCount: companies.length,
-        requestedPageSize,
-        executionTimeMs: executionTime,
-        wasLimited: isHittingLimit
+      this.logger.info('Making direct POST request to Companies/query endpoint:', {
+        url: '/Companies/query',
+        method: 'POST',
+        requestBody: JSON.stringify(searchBody, null, 2),
+        bodySize: JSON.stringify(searchBody).length
       });
-      return companies;
+      
+      try {
+        // Make direct POST request with proper timeout
+        const response = await (client as any).axios.post('/Companies/query', searchBody, {
+          timeout: 15000 // 15 second timeout to prevent slowness
+        });
+        
+        this.logger.info('✅ Direct POST /Companies/query successful:', {
+          status: response.status,
+          statusText: response.statusText,
+          responseDataType: typeof response.data,
+          hasItems: !!(response.data && response.data.items),
+          isArray: Array.isArray(response.data),
+          responseKeys: response.data ? Object.keys(response.data) : [],
+          responseSize: response.data ? JSON.stringify(response.data).length : 0,
+          responseStructure: {
+            hasItems: !!(response.data && response.data.items),
+            itemsLength: response.data?.items?.length,
+            hasPageDetails: !!(response.data && response.data.pageDetails),
+            pageDetails: response.data?.pageDetails
+          }
+        });
+
+        // Extract companies from response
+        let companies: AutotaskCompany[] = [];
+        if (response.data && response.data.items) {
+          companies = response.data.items;
+          this.logger.info(`📊 Extracted ${companies.length} companies from response.data.items`);
+        } else if (Array.isArray(response.data)) {
+          companies = response.data;
+          this.logger.info(`📊 Extracted ${companies.length} companies from response.data (direct array)`);
+        } else {
+          this.logger.warn('❌ Unexpected response format from POST /Companies/query:', {
+            responseDataType: typeof response.data,
+            responseData: response.data,
+            hasData: !!response.data,
+            dataKeys: response.data ? Object.keys(response.data) : []
+          });
+          companies = [];
+        }
+        
+        // Log a sample company if available
+        if (companies.length > 0) {
+          this.logger.info('Sample company from response:', {
+            sampleCompany: companies[0],
+            totalItems: companies.length,
+            sampleKeys: Object.keys(companies[0] || {})
+          });
+        }
+        
+        const executionTime = Date.now() - startTime;
+        this.logger.info(`✅ Retrieved ${companies.length} companies using direct POST API call`, {
+          tenantId: tenantContext?.tenantId,
+          resultCount: companies.length,
+          requestedPageSize,
+          executionTimeMs: executionTime,
+          wasLimited: isHittingLimit
+        });
+        return companies;
+        
+      } catch (directApiError: any) {
+        this.logger.error('❌ Direct POST /Companies/query failed:', {
+          error: directApiError.message,
+          name: directApiError.name,
+          status: directApiError.response?.status,
+          statusText: directApiError.response?.statusText,
+          responseData: directApiError.response?.data,
+          requestUrl: directApiError.config?.url,
+          requestMethod: directApiError.config?.method
+        });
+        throw directApiError;
+      }
+      
     } catch (error) {
       const executionTime = Date.now() - startTime;
       this.logger.error('❌ Failed to search companies:', {
