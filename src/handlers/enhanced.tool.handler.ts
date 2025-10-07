@@ -13,9 +13,9 @@ export const LARGE_RESPONSE_THRESHOLDS = {
   tickets: 100,        
   companies: 100,     
   contacts: 100,     
-  projects: 50,      
-  resources: 50,     
-  tasks: 50,          
+  projects: 100,      
+  resources: 100,     
+  tasks: 100,          
   timeentries: 100,    
   default: 100,        
   responseSizeKB: 200  
@@ -50,6 +50,7 @@ export const TOOL_NAMES = {
   SEARCH_PROJECTS: 'search_projects',
   CREATE_PROJECT: 'create_project',
   UPDATE_PROJECT: 'update_project',
+  GET_PROJECT_DETAILS: 'get_project_details',
   
   // Resource tools
   SEARCH_RESOURCES: 'search_resources',
@@ -60,18 +61,18 @@ export const TOOL_NAMES = {
   UPDATE_TASK: 'update_task',
   
   // Notes Management
-  SEARCH_TICKET_NOTES: 'search_ticket_notes',
+  //SEARCH_TICKET_NOTES: 'search_ticket_notes',
   GET_TICKET_NOTE: 'get_ticket_note',
   CREATE_TICKET_NOTE: 'create_ticket_note',
-  SEARCH_PROJECT_NOTES: 'search_project_notes',
+  //SEARCH_PROJECT_NOTES: 'search_project_notes',
   GET_PROJECT_NOTE: 'get_project_note',
   CREATE_PROJECT_NOTE: 'create_project_note',
-  SEARCH_COMPANY_NOTES: 'search_company_notes',
+  //SEARCH_COMPANY_NOTES: 'search_company_notes',
   GET_COMPANY_NOTE: 'get_company_note',
   CREATE_COMPANY_NOTE: 'create_company_note',
   
   // Attachments Management
-  SEARCH_TICKET_ATTACHMENTS: 'search_ticket_attachments',
+  //SEARCH_TICKET_ATTACHMENTS: 'search_ticket_attachments',
   GET_TICKET_ATTACHMENT: 'get_ticket_attachment',
   
   // Financial Management
@@ -113,11 +114,9 @@ export const READ_ONLY_TOOLS = [
   TOOL_NAMES.SEARCH_RESOURCES,
   TOOL_NAMES.SEARCH_TIME_ENTRIES,
   TOOL_NAMES.SEARCH_TASKS,
-  TOOL_NAMES.SEARCH_TICKET_NOTES,
+  TOOL_NAMES.GET_PROJECT_DETAILS,
   //TOOL_NAMES.GET_TICKET_NOTE,
-  TOOL_NAMES.SEARCH_PROJECT_NOTES,
   //TOOL_NAMES.GET_PROJECT_NOTE,
-  TOOL_NAMES.SEARCH_COMPANY_NOTES,
   //TOOL_NAMES.GET_COMPANY_NOTE,
   //TOOL_NAMES.SEARCH_TICKET_ATTACHMENTS,
   //TOOL_NAMES.GET_TICKET_ATTACHMENT,
@@ -2286,22 +2285,54 @@ export class EnhancedAutotaskToolHandler {
           }
         },
         ['entity', 'id']
-      ),
+      ), 
       EnhancedAutotaskToolHandler.createTool(
-        'get_ticket_by_number',
-        'Get a specific ticket by ticket number (e.g., T20250914.0008) with full details from Tickets entity.',
+        'get_project_details',
+        'Get comprehensive project details including tasks and time entries in a single optimized call. This tool efficiently fetches project information along with its associated tasks and time entries, minimizing data transfer by returning only essential fields. Perfect for project status reports, resource planning, and project analysis without multiple API calls. Returns project info, task summaries, and time entry summaries with minimal data overhead.',
         'read',
         {
-          ticketNumber: {
-            type: 'string',
-            description: 'Ticket number to retrieve (e.g., T20250914.0008) - refers to ticketNumber field in Tickets entity'
+          projectId: {
+            type: 'number',
+            description: 'Project ID to retrieve details for (REQUIRED) - refers to Projects entity. Use this to get comprehensive project information including all associated tasks and time entries in one efficient call.'
           },
-          fullDetails: {
+          searchTerm: {
+            type: 'string',
+            description: 'Search term to find project by name (alternative to projectId). Searches projectName field using partial matching. Use when you know part of the project name but not the exact ID. Examples: "Website Redesign" finds "Website Redesign Phase 1".'
+          },
+          includeTasks: {
             type: 'boolean',
-            description: 'Whether to include full details (default: false for optimized response)'
+            description: 'Whether to include project tasks in the response (default: true). Set to false to exclude task data and reduce response size if only project info is needed.',
+            default: true
+          },
+          includeTimeEntries: {
+            type: 'boolean',
+            description: 'Whether to include time entries in the response (default: true). Set to false to exclude time entry data and reduce response size if only project and task info is needed.',
+            default: true
+          },
+          taskPageSize: {
+            type: 'number',
+            description: 'Number of tasks to return (default: 25, max: 100). Controls task data volume. Use smaller values for quick overviews, larger values for comprehensive task lists.',
+            minimum: 1,
+            maximum: 100,
+            default: 25
+          },
+          timeEntryPageSize: {
+            type: 'number',
+            description: 'Number of time entries to return (default: 25, max: 100). Controls time entry data volume. Use smaller values for recent activity overviews, larger values for comprehensive time tracking analysis.',
+            minimum: 1,
+            maximum: 100,
+            default: 25
+          },
+          timeEntryDateFrom: {
+            type: 'string',
+            description: 'Start date for time entries filter (YYYY-MM-DD format). Use to limit time entries to specific date ranges. Example: "2024-01-01" gets entries from January 1st onwards. Helps focus on recent or specific period activity.'
+          },
+          timeEntryDateTo: {
+            type: 'string',
+            description: 'End date for time entries filter (YYYY-MM-DD format). Use with timeEntryDateFrom to create date ranges. Example: "2024-12-31" gets entries up to December 31st. Helps focus on specific periods or recent activity.'
           }
         },
-        ['ticketNumber']
+        []
       ),
 
     ];
@@ -2522,6 +2553,11 @@ export class EnhancedAutotaskToolHandler {
         case 'update_project':
           this.logger.info(`✏️ Executing update_project`, { toolCallId });
           result = await this.updateProject(args, tenantContext);
+          break;
+
+        case 'get_project_details':
+          this.logger.info(`📋 Executing get_project_details`, { toolCallId });
+          result = await this.getProjectDetails(args, tenantContext);
           break;
 
         // Time Entry Management
@@ -3589,6 +3625,385 @@ export class EnhancedAutotaskToolHandler {
       return this.createUpdateResponse('project', id);
     } catch (error) {
       throw new Error(`Failed to update project: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+  private async getProjectDetails(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
+    try {
+      const { 
+        projectId, 
+        searchTerm,  
+        taskPageSize = 25,
+        timeEntryPageSize = 25,
+        timeEntryDateFrom,
+        timeEntryDateTo
+      } = args;
+      
+      this.logger.info(`Getting project details for project ${projectId}`, { projectId: projectId });
+      let project: any = null;
+      
+      // Get project by ID or search term
+      if (projectId) {
+        project = await this.autotaskService.getProject(projectId, tenantContext);
+        if (!project) {
+          return this.createNotFoundResponse('project', projectId);
+        }
+      } else if (searchTerm) {
+        // Search for project by name
+        const projects = await this.autotaskService.searchProjects({
+          filter: [{
+            field: 'projectName',
+            op: 'contains',
+            value: searchTerm
+          }],
+          pageSize: 1
+        }, tenantContext);
+        
+        if (projects.length === 0) {
+          return this.createNotFoundResponse('project', searchTerm);
+        }
+        
+        project = projects[0];
+      } else {
+        throw new Error('Either projectId or searchTerm must be provided');
+      }
+
+      this.logger.info(`Project details: ${JSON.stringify(project)}`);
+      
+      // Handle the case where project data is wrapped in an 'item' object
+      const projectData = project.item || project;
+      
+      const result: any = {
+        project: {
+          id: projectData.id,
+          projectName: projectData.projectName,
+          description: projectData.description,
+          status: projectData.status,
+          projectType: projectData.projectType,
+          projectManagerResourceID: projectData.projectManagerResourceID,
+          companyID: projectData.companyID,
+          startDateTime: projectData.startDateTime,
+          endDateTime: projectData.endDateTime,
+          estimatedHours: projectData.estimatedTime,
+          actualHours: projectData.actualHours,
+          createDateTime: projectData.createDateTime,
+          lastActivityDateTime: projectData.lastActivityDateTime,
+          projectNumber: projectData.projectNumber,
+          completedPercentage: projectData.completedPercentage,
+          contractID: projectData.contractID,
+          department: projectData.department,
+          projectLeadResourceID: projectData.projectLeadResourceID,
+          userDefinedFields: projectData.userDefinedFields
+        }
+      };
+
+      // Get company name if available
+      if (projectData.companyID) {
+        try {
+          const mappingService = await this.getMappingService();
+          result.project.companyName = await mappingService.getCompanyName(projectData.companyID, tenantContext);
+        } catch (error) {
+          this.logger.info(`Failed to map company ID ${projectData.companyID}:`, error);
+          result.project.companyName = `Unknown (${projectData.companyID})`;
+        }
+      }
+ 
+        try {
+          this.logger.info(`Fetching tasks for project ${projectData.id}`, { projectId: projectData.id });
+          
+          const tasks = await this.autotaskService.searchTasks({
+            filter: [{
+              field: 'projectID',
+              op: 'eq',
+              value: projectData.id
+            }],
+            pageSize: Math.max(taskPageSize, 130)
+          }, tenantContext);
+
+          this.logger.info(`Found ${tasks.length} tasks for project ${projectData.id}`);
+
+          // Get resource information for tasks
+          const uniqueTaskResourceIds = [...new Set(tasks.map((task: any) => task.assignedResourceID).filter(id => id))];
+          const taskResourceMap = new Map();
+          
+          if (uniqueTaskResourceIds.length > 0) {
+            this.logger.info(`Fetching resource information for ${uniqueTaskResourceIds.length} unique task resources ${JSON.stringify(uniqueTaskResourceIds)}`);
+            
+            for (const resourceId of uniqueTaskResourceIds) {
+              try {
+                const resource = await this.autotaskService.getResource(resourceId, tenantContext);
+                if (resource) {
+                  taskResourceMap.set(resourceId, {
+                    id: resource.id,
+                    firstName: resource.firstName,
+                    lastName: resource.lastName,
+                    userName: resource.userName,
+                    email: resource.email,
+                    title: resource.title,
+                    department: resource.department
+                  });
+                }
+              } catch (error) {
+                this.logger.warn(`Failed to fetch task resource ${resourceId}:`, error);
+                taskResourceMap.set(resourceId, {
+                  id: resourceId,
+                  firstName: 'Unknown',
+                  lastName: `Resource ${resourceId}`,
+                  userName: `resource_${resourceId}`,
+                  email: null,
+                  title: null,
+                  department: null
+                });
+              }
+            }
+          }
+          result.tasks = tasks.map((task: any) => {
+            const resourceInfo = taskResourceMap.get(task.assignedResourceID);
+            return {
+              id: task.id,
+              title: task.title,
+              description: task.description,
+              status: task.status,
+              priorityLabel: task.priorityLabel,
+              assignedResourceID: task.assignedResourceID,
+              assignedResource: resourceInfo ? {
+                id: resourceInfo.id,
+                name: `${resourceInfo.firstName} ${resourceInfo.lastName}`.trim(),
+                userName: resourceInfo.userName,
+                email: resourceInfo.email,
+                title: resourceInfo.title,
+                department: resourceInfo.department
+              } : task.assignedResourceID ? {
+                id: task.assignedResourceID,
+                name: `Unknown Resource ${task.assignedResourceID}`,
+                userName: `resource_${task.assignedResourceID}`,
+                email: null,
+                title: null,
+                department: null
+              } : null,
+              startDateTime: task.startDateTime,
+              endDateTime: task.endDateTime,
+              estimatedHours: task.estimatedHours,
+              actualHours: task.actualHours,
+              createDateTime: task.createDateTime,
+              lastActivityDateTime: task.lastActivityDateTime
+            };
+          });
+
+          result.tasksSummary = {
+            total: tasks.length,
+            completed: tasks.filter((t: any) => t.status === 5).length, // Assuming 5 is completed status
+            inProgress: tasks.filter((t: any) => t.status === 2).length, // Assuming 2 is in progress
+            notStarted: tasks.filter((t: any) => t.status === 1).length, // Assuming 1 is not started
+            uniqueResources: uniqueTaskResourceIds.length,
+            resourceBreakdown: Array.from(taskResourceMap.entries()).map(([resourceId, resourceInfo]) => ({
+              resourceId,
+              resourceName: `${resourceInfo.firstName} ${resourceInfo.lastName}`.trim(),
+              taskCount: tasks.filter(t => t.assignedResourceID === resourceId).length,
+              completedTasks: tasks.filter(t => t.assignedResourceID === resourceId && t.status === 5).length,
+              inProgressTasks: tasks.filter(t => t.assignedResourceID === resourceId && t.status === 2).length,
+              notStartedTasks: tasks.filter(t => t.assignedResourceID === resourceId && t.status === 1).length
+            })).sort((a, b) => b.taskCount - a.taskCount) // Sort by task count descending
+          };
+        } catch (error) {
+          this.logger.warn(`Failed to fetch tasks for project ${projectData.id}:`, error);
+          result.tasks = [];
+          result.tasksSummary = { total: 0, completed: 0, inProgress: 0, notStarted: 0 };
+        } 
+
+       try {
+         this.logger.info(`Fetching time entries for project ${projectData.id}`, { projectId: projectData.id });
+        
+        // For time entries, we need to get them by task IDs since time entries are associated with tasks, not directly with projects
+        let timeEntries: any[] = [];
+        
+        if (result.tasks && result.tasks.length > 0) {
+          this.logger.info(`Getting time entries for ${result.tasks.length} tasks`);
+          // Get time entries for all tasks in the project
+          const taskIds = result.tasks.map((task: any) => task.id);
+          
+          for (const taskId of taskIds) {
+            try {
+              const taskTimeEntries = await this.autotaskService.getTimeEntries({
+                filter: [{
+                  field: 'taskID',
+                  op: 'eq',
+                  value: taskId
+                }],
+                pageSize: Math.min(timeEntryPageSize, 100)
+              }, tenantContext);
+              
+              this.logger.info(`Found ${taskTimeEntries.length} time entries for task ${taskId}`);
+              timeEntries = timeEntries.concat(taskTimeEntries);
+            } catch (error) {
+              this.logger.warn(`Failed to fetch time entries for task ${taskId}:`, error);
+            }
+          }
+        } else {
+          this.logger.info(`No tasks found, trying direct projectID filter for time entries`);
+           // If no tasks, try to get time entries directly by projectID (if the field exists)
+           const timeEntryFilter: any[] = [{
+             field: 'projectID',
+             op: 'eq',
+             value: projectData.id
+           }];
+
+          // Add date filters if provided
+          if (timeEntryDateFrom) {
+            timeEntryFilter.push({
+              field: 'dateWorked',
+              op: 'gte',
+              value: timeEntryDateFrom
+            });
+          }
+          if (timeEntryDateTo) {
+            timeEntryFilter.push({
+              field: 'dateWorked',
+              op: 'lte',
+              value: timeEntryDateTo
+            });
+          }
+
+          timeEntries = await this.autotaskService.getTimeEntries({
+            filter: timeEntryFilter,
+            pageSize: Math.min(timeEntryPageSize, 100)
+          }, tenantContext);
+          
+          this.logger.info(`Found ${timeEntries.length} time entries with direct projectID filter`);
+        }
+
+        result.timeEntries = timeEntries.map((entry: any) => ({
+          id: entry.id,
+          resourceID: entry.resourceID,
+          ticketID: entry.ticketID,
+          taskID: entry.taskID,
+          projectID: entry.projectID,
+          dateWorked: entry.dateWorked,
+          hoursWorked: entry.hoursWorked,
+          hoursToBill: entry.hoursToBill,
+          description: entry.description,
+          createDateTime: entry.createDateTime,
+          lastModifiedDateTime: entry.lastModifiedDateTime
+        }));
+
+        // Get resource information for time entries
+        const uniqueResourceIds = [...new Set(timeEntries.map((entry: any) => entry.resourceID).filter(id => id))];
+        const resourceMap = new Map();
+        
+        if (uniqueResourceIds.length > 0) {
+          this.logger.info(`Fetching resource information for ${uniqueResourceIds.length} unique resources`);
+          
+          for (const resourceId of uniqueResourceIds) {
+            try {
+              const resource = await this.autotaskService.getResource(resourceId, tenantContext);
+              if (resource) {
+                resourceMap.set(resourceId, {
+                  id: resource.id,
+                  firstName: resource.firstName,
+                  lastName: resource.lastName,
+                  userName: resource.userName,
+                  email: resource.email,
+                  title: resource.title,
+                  department: resource.department
+                });
+              }
+            } catch (error) {
+              this.logger.warn(`Failed to fetch resource ${resourceId}:`, error);
+              resourceMap.set(resourceId, {
+                id: resourceId,
+                firstName: 'Unknown',
+                lastName: `Resource ${resourceId}`,
+                userName: `resource_${resourceId}`,
+                email: null,
+                title: null,
+                department: null
+              });
+            }
+          }
+        }
+
+        // Add resource information to time entries
+        result.timeEntries = result.timeEntries.map((entry: any) => {
+          const resourceInfo = resourceMap.get(entry.resourceID);
+          return {
+            ...entry,
+            resource: resourceInfo ? {
+              id: resourceInfo.id,
+              name: `${resourceInfo.firstName} ${resourceInfo.lastName}`.trim(),
+              userName: resourceInfo.userName,
+              email: resourceInfo.email,
+              title: resourceInfo.title,
+              department: resourceInfo.department
+            } : {
+              id: entry.resourceID,
+              name: `Unknown Resource ${entry.resourceID}`,
+              userName: `resource_${entry.resourceID}`,
+              email: null,
+              title: null,
+              department: null
+            }
+          };
+        });
+
+        // Calculate time summary with resource breakdown
+        const totalHours = timeEntries.reduce((sum: number, entry: any) => sum + (entry.hoursWorked || 0), 0);
+        const totalBillableHours = timeEntries.reduce((sum: number, entry: any) => sum + (entry.hoursToBill || 0), 0);
+        
+        // Calculate hours by resource
+        const resourceHours = new Map();
+        timeEntries.forEach((entry: any) => {
+          const resourceId = entry.resourceID;
+          const hours = entry.hoursWorked || 0;
+          const billableHours = entry.hoursToBill || 0;
+          
+          if (!resourceHours.has(resourceId)) {
+            resourceHours.set(resourceId, { totalHours: 0, billableHours: 0, entries: 0 });
+          }
+          
+          const current = resourceHours.get(resourceId);
+          current.totalHours += hours;
+          current.billableHours += billableHours;
+          current.entries += 1;
+        });
+
+        // Convert resource hours to array with names
+        const resourceBreakdown = Array.from(resourceHours.entries()).map(([resourceId, data]) => {
+          const resourceInfo = resourceMap.get(resourceId);
+          return {
+            resourceId,
+            resourceName: resourceInfo ? `${resourceInfo.firstName} ${resourceInfo.lastName}`.trim() : `Unknown Resource ${resourceId}`,
+            totalHours: data.totalHours,
+            billableHours: data.billableHours,
+            entries: data.entries,
+            averageHoursPerEntry: data.entries > 0 ? data.totalHours / data.entries : 0
+          };
+        }).sort((a, b) => b.totalHours - a.totalHours); // Sort by total hours descending
+        
+        result.timeSummary = {
+          totalEntries: timeEntries.length,
+          totalHoursWorked: totalHours,
+          totalBillableHours: totalBillableHours,
+          averageHoursPerEntry: timeEntries.length > 0 ? totalHours / timeEntries.length : 0,
+          uniqueResources: uniqueResourceIds.length,
+          resourceBreakdown: resourceBreakdown
+        };
+       } catch (error) {
+         this.logger.warn(`Failed to fetch time entries for project ${projectData.id}:`, error);
+         result.timeEntries = [];
+         result.timeSummary = { totalEntries: 0, totalHoursWorked: 0, totalBillableHours: 0, averageHoursPerEntry: 0 };
+       }
+
+      const content = [{
+        type: 'text',
+        text: JSON.stringify(result, null, 2)
+      }];
+
+      return {
+        content,
+        isError: false
+      };
+    } catch (error) {
+      throw new Error(`Failed to get project details: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   }
 

@@ -33,9 +33,9 @@ export const LARGE_RESPONSE_THRESHOLDS = {
   tickets: 100,        
   companies: 100,     
   contacts: 100,     
-  projects: 50,      
-  resources: 50,     
-  tasks: 50,          
+  projects: 100,      
+  resources: 100,     
+  tasks: 100,          
   timeentries: 100,    
   default: 100,        
   responseSizeKB: 200  
@@ -524,7 +524,9 @@ export class AutotaskService {
         executionTimeMs: executionTime
       });
       
-      return result.data as AutotaskCompany || null;
+      // Handle the case where company data is wrapped in an 'item' object
+      const companyData = result.data?.item || result.data;
+      return companyData as AutotaskCompany || null;
     } catch (error) {
       const executionTime = Date.now() - startTime;
       this.logger.error(`❌ Failed to get company ${id}:`, {
@@ -593,7 +595,7 @@ export class AutotaskService {
        
       // THRESHOLD-BASED PAGINATION: Use thresholds to prevent oversized responses
       const THRESHOLD_LIMIT = LARGE_RESPONSE_THRESHOLDS.companies; // 100
-      const DEFAULT_PAGE_SIZE = 50; // Reasonable default for UI display
+      const DEFAULT_PAGE_SIZE = 80; // Reasonable default for UI display
       
       let requestedPageSize = options.pageSize;
       let isHittingLimit = false;
@@ -762,7 +764,9 @@ export class AutotaskService {
     try {
       this.logger.info(`Getting contact with ID: ${id}`);
       const result = await client.contacts.get(id);
-      return result.data as AutotaskContact || null;
+      // Handle the case where contact data is wrapped in an 'item' object
+      const contactData = result.data?.item || result.data;
+      return contactData as AutotaskContact || null;
     } catch (error) {
       this.logger.error(`Failed to get contact ${id}:`, error);
       throw error;
@@ -894,7 +898,9 @@ export class AutotaskService {
       this.logger.info(`Getting ticket with ID: ${id}, fullDetails: ${fullDetails}`);
       
       const result = await client.tickets.get(id);
-      const ticket = result.data as AutotaskTicket;
+      // Handle the case where ticket data is wrapped in an 'item' object
+      const ticketData = result.data?.item || result.data;
+      const ticket = ticketData as AutotaskTicket;
       
       if (!ticket) {
         return null;
@@ -1093,7 +1099,7 @@ export class AutotaskService {
       
       // THRESHOLD-BASED PAGINATION: Use thresholds to prevent oversized responses
       const THRESHOLD_LIMIT = LARGE_RESPONSE_THRESHOLDS.tickets;
-      const DEFAULT_PAGE_SIZE = 50; // Reasonable default for UI display
+      const DEFAULT_PAGE_SIZE = 100; // Reasonable default for UI display
       
       let requestedPageSize = options.pageSize;
       let isHittingLimit = false;
@@ -1318,7 +1324,7 @@ export class AutotaskService {
       // Use threshold-based limiting to prevent oversized responses
       const THRESHOLD_LIMIT = LARGE_RESPONSE_THRESHOLDS.timeentries;
       
-      let finalPageSize = 25; // Default if not provided
+      let finalPageSize = 100; // Default if not provided
       let isHittingLimit = false;
       
       if (options.pageSize !== undefined) {
@@ -1406,7 +1412,10 @@ export class AutotaskService {
     try {
       this.logger.info(`Getting project with ID: ${id}`);
       const result = await client.projects.get(id);
-      return result.data as unknown as AutotaskProject || null;
+      
+      // Handle the case where project data is wrapped in an 'item' object
+      const projectData = result.data?.item || result.data;
+      return projectData as unknown as AutotaskProject || null;
     } catch (error) {
       this.logger.error(`Failed to get project ${id}:`, error);
       throw error;
@@ -1459,7 +1468,7 @@ export class AutotaskService {
       
       // THRESHOLD-BASED PAGINATION: Use thresholds to prevent oversized responses
       const THRESHOLD_LIMIT = LARGE_RESPONSE_THRESHOLDS.projects;
-      const DEFAULT_PAGE_SIZE = 50; // Reasonable default for UI display
+      const DEFAULT_PAGE_SIZE = 100; // Reasonable default for UI display
       
       let requestedPageSize = options.pageSize;
       let isHittingLimit = false;
@@ -1573,10 +1582,12 @@ export class AutotaskService {
   async getResource(id: number, tenantContext?: TenantContext): Promise<AutotaskResource | null> {
     const client = await this.getClientForTenant(tenantContext);
     
-    try {
-      this.logger.info(`Getting resource with ID: ${id}`);
-      const result = await client.resources.get(id);
-      return result.data as AutotaskResource || null;
+    try { 
+      const result = await client.resources.get(id); 
+      
+      // Handle the case where resource data is wrapped in an 'item' object
+      const resourceData = result.data?.item || result.data;
+      return resourceData as AutotaskResource || null;
     } catch (error) {
       this.logger.error(`Failed to get resource ${id}:`, error);
       throw error;
@@ -1626,7 +1637,7 @@ export class AutotaskService {
       
       // THRESHOLD-BASED PAGINATION: Use thresholds to prevent oversized responses
       const THRESHOLD_LIMIT = LARGE_RESPONSE_THRESHOLDS.resources;
-      const DEFAULT_PAGE_SIZE = 50; // Reasonable default for UI display
+      const DEFAULT_PAGE_SIZE = 100; // Reasonable default for UI display
       
       let requestedPageSize = options.pageSize;
       let isHittingLimit = false;
@@ -1791,7 +1802,9 @@ export class AutotaskService {
     try {
       this.logger.info(`Getting configuration item with ID: ${id}`);
       const result = await client.configurationItems.get(id);
-      return result.data as AutotaskConfigurationItem || null;
+      // Handle the case where configuration item data is wrapped in an 'item' object
+      const configItemData = result.data?.item || result.data;
+      return configItemData as AutotaskConfigurationItem || null;
     } catch (error) {
       this.logger.error(`Failed to get configuration item ${id}:`, error);
       throw error;
@@ -1967,7 +1980,7 @@ export class AutotaskService {
        
       // THRESHOLD-BASED PAGINATION: Use thresholds to prevent oversized responses
       const THRESHOLD_LIMIT = LARGE_RESPONSE_THRESHOLDS.default; // Use default threshold for invoices
-      const DEFAULT_PAGE_SIZE = 25; // Reasonable default for UI display
+      const DEFAULT_PAGE_SIZE = 100; // Reasonable default for UI display
       
       let requestedPageSize = options.pageSize;
       let isHittingLimit = false;
@@ -2162,7 +2175,7 @@ export class AutotaskService {
       
       // THRESHOLD-BASED PAGINATION: Use thresholds to prevent oversized responses
       const THRESHOLD_LIMIT = LARGE_RESPONSE_THRESHOLDS.tasks;
-      const DEFAULT_PAGE_SIZE = 25; // Reasonable default for UI display
+      const DEFAULT_PAGE_SIZE = 100; // Reasonable default for UI display
       
       let requestedPageSize = options.pageSize;
       let isHittingLimit = false;
