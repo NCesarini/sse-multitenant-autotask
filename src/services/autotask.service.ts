@@ -37,6 +37,7 @@ export const LARGE_RESPONSE_THRESHOLDS = {
   resources: 100,     
   tasks: 100,          
   timeentries: 100,    
+  contracts: 100,      
   default: 100,        
   responseSizeKB: 200  
 };
@@ -1898,8 +1899,123 @@ export class AutotaskService {
     
     try {
       this.logger.info('Searching contracts with options:', options);
-      const result = await client.contracts.list(options as any);
-      return (result.data as unknown as AutotaskContract[]) || [];
+      
+      // Build search body for POST /V1.0/Contracts/query endpoint
+      const searchBody: any = {
+        MaxRecords: 100, // Default limit as requested
+        IncludeFields: [],
+        Filter: []
+      };
+
+      // Add filters if provided
+      if (options.filter) {
+        if (Array.isArray(options.filter)) {
+          // Convert simple filter array to Autotask format
+          const filterArray = options.filter.map(filter => {
+            if (typeof filter === 'string') {
+              // Simple string filter - convert to basic format
+              return {
+                op: "contains",
+                field: "ContractName", // Default field for string searches
+                value: filter,
+                udf: false,
+                items: []
+              };
+            }
+            return filter;
+          });
+          searchBody.Filter = filterArray;
+        } else {
+          searchBody.Filter = options.filter;
+        }
+      }
+
+      // Add other search parameters
+      if (options.sort) searchBody.sort = options.sort;
+      if (options.page) searchBody.page = options.page;
+       
+      // THRESHOLD-BASED PAGINATION: Use thresholds to prevent oversized responses
+      const THRESHOLD_LIMIT = LARGE_RESPONSE_THRESHOLDS.contracts; // 100
+      const DEFAULT_PAGE_SIZE = 100; // Reasonable default for UI display
+      
+      let requestedPageSize = options.pageSize;
+      let isHittingLimit = false;
+      
+      // If no pageSize specified, use default
+      if (!requestedPageSize) {
+        requestedPageSize = DEFAULT_PAGE_SIZE;
+        this.logger.info(`No pageSize specified, using default: ${DEFAULT_PAGE_SIZE}`);
+      } else {
+        // Cap at threshold limit to prevent oversized responses
+        const originalRequest = requestedPageSize;
+        requestedPageSize = Math.min(requestedPageSize, THRESHOLD_LIMIT);
+        isHittingLimit = originalRequest >= THRESHOLD_LIMIT;
+        
+        if (isHittingLimit) {
+          this.logger.info(`🔍 Contracts request hits threshold limit (${THRESHOLD_LIMIT}), capped from ${originalRequest} to ${requestedPageSize}`);
+        }
+      }
+
+      // Set the MaxRecords in the search body
+      searchBody.MaxRecords = requestedPageSize;
+
+      // Log the search request details
+      this.logger.info(`📋 Contracts search: MaxRecords=${searchBody.MaxRecords}, Filters=${searchBody.Filter.length}, Page=${options.page || 1}`, {
+        bodySize: JSON.stringify(searchBody).length
+      });
+      
+      try {
+        // Make direct POST request with proper timeout
+        const response = await (client as any).axios.post('/Contracts/query', searchBody, {
+          timeout: 15000 // 15 second timeout to prevent slowness
+        });
+        
+        this.logger.info('✅ Direct POST /Contracts/query successful:', {
+          status: response.status,
+          statusText: response.statusText,
+          responseDataType: typeof response.data,
+          hasItems: !!(response.data && response.data.items),
+          isArray: Array.isArray(response.data),
+          responseKeys: response.data ? Object.keys(response.data) : [],
+          responseSize: response.data ? JSON.stringify(response.data).length : 0,
+          responseStructure: {
+            hasItems: !!(response.data && response.data.items),
+            itemsLength: response.data?.items?.length,
+            hasPageDetails: !!(response.data && response.data.pageDetails),
+            pageDetails: response.data?.pageDetails
+          }
+        });
+
+        // Extract contracts from response
+        let contracts: AutotaskContract[] = [];
+        if (response.data && response.data.items) {
+          contracts = response.data.items;
+          this.logger.info(`📊 Extracted ${contracts.length} contracts from response.data.items`);
+        } else if (Array.isArray(response.data)) {
+          contracts = response.data;
+          this.logger.info(`📊 Extracted ${contracts.length} contracts from response.data (direct array)`);
+        } else {
+          this.logger.warn('❌ Unexpected response format from POST /Contracts/query:', {
+            responseDataType: typeof response.data,
+            responseData: response.data,
+            hasData: !!response.data,
+            dataKeys: response.data ? Object.keys(response.data) : []
+          });
+          contracts = [];
+        }
+        
+        // Log results summary
+        this.logger.info(`✅ Contracts search completed: ${contracts.length} contracts found`);
+        
+        if (isHittingLimit) {
+          this.logger.warn(`⚠️ Contracts search was capped at ${THRESHOLD_LIMIT} results. Consider using more specific filters.`);
+        }
+        
+        return contracts;
+      } catch (error) {
+        this.logger.error('Failed to search contracts:', error);
+        throw error;
+      }
     } catch (error) {
       this.logger.error('Failed to search contracts:', error);
       throw error;
@@ -3154,5 +3270,76 @@ export class AutotaskService {
       }],
       pageSize: 50
     }, tenantContext);
+  }
+
+  // Company Categories operations
+  async getCompanyCategories(includeInactive: boolean = false, tenantContext?: TenantContext): Promise<any[]> {
+    const client = await this.getClientForTenant(tenantContext);
+    
+    try {
+      this.logger.info('📋 Getting company categories', {
+        includeInactive,
+        tenantId: tenantContext?.tenantId
+      });
+
+      // Build filter for company categories
+      const filters: any[] = [];
+      
+      if (!includeInactive) {
+        filters.push({
+          field: 'isActive',
+          op: 'eq',
+          value: true
+        });
+      }
+
+      // Always include a base filter to ensure we get results
+      if (filters.length === 0) {
+        filters.push({
+          field: 'id',
+          op: 'gte',
+          value: 0
+        });
+      }
+
+      // Make direct API call to CompanyCategories/query
+      const searchBody = {
+        filter: filters,
+        pageSize: 100 // Company categories are typically few in number
+      };
+
+      this.logger.info('Making direct API call to CompanyCategories/query:', searchBody);
+
+      const response = await (client as any).axios.post('/CompanyCategories/query', searchBody);
+      
+      // Extract categories from response
+      let categories: any[] = [];
+      if (response.data && response.data.items) {
+        categories = response.data.items;
+        this.logger.info(`📊 Extracted ${categories.length} company categories from response.data.items`);
+      } else if (Array.isArray(response.data)) {
+        categories = response.data;
+        this.logger.info(`📊 Extracted ${categories.length} company categories from response.data (direct array)`);
+      } else {
+        this.logger.warn('❌ Unexpected response format from CompanyCategories/query:', {
+          responseDataType: typeof response.data,
+          responseData: response.data,
+          hasData: !!response.data,
+          dataKeys: response.data ? Object.keys(response.data) : []
+        });
+        categories = [];
+      }
+
+      this.logger.info(`✅ Retrieved ${categories.length} company categories`);
+      return categories;
+    } catch (error: any) {
+      this.logger.error('❌ Failed to get company categories:', {
+        error: error.message,
+        status: error.response?.status,
+        statusText: error.response?.statusText,
+        responseData: error.response?.data
+      });
+      throw error;
+    }
   }
 } 

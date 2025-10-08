@@ -100,7 +100,11 @@ export const TOOL_NAMES = {
   
   // Generic Tools
   QUERY_ENTITY: 'query_entity',
-  GET_ENTITY: 'get_entity'
+  GET_ENTITY: 'get_entity',
+  
+  // Managed Services Tools
+  GET_COMPANY_CATEGORIES: 'get_company_categories',
+  FIND_CLIENTS_BY_CATEGORY: 'find_clients_by_category'
 } as const;
 
 /**
@@ -130,7 +134,9 @@ export const READ_ONLY_TOOLS = [
   TOOL_NAMES.QUERY_ENTITY,
   TOOL_NAMES.GET_ENTITY,
   TOOL_NAMES.GET_COMPANIES_PAGE,
-  TOOL_NAMES.GET_TICKET_BY_NUMBER
+  TOOL_NAMES.GET_TICKET_BY_NUMBER,
+  TOOL_NAMES.GET_COMPANY_CATEGORIES,
+  TOOL_NAMES.FIND_CLIENTS_BY_CATEGORY
 ] as const;
 
 /**
@@ -2335,6 +2341,50 @@ export class EnhancedAutotaskToolHandler {
         []
       ),
 
+      // Managed Services Tools - Using CompanyCategories entity
+      EnhancedAutotaskToolHandler.createTool(
+        'get_company_categories',
+        'Get all available company categories from Autotask. This tool queries the CompanyCategories entity to show you the actual classification values available in your Autotask instance. Perfect for discovering what company categories/classifications exist before filtering clients. Returns category ID, name, nickname, and status information.',
+        'read',
+        {
+          includeInactive: {
+            type: 'boolean',
+            description: 'Whether to include inactive categories (default: false). Set to true to see all categories including inactive ones.',
+            default: false
+          }
+        },
+        []
+      ),
+
+      EnhancedAutotaskToolHandler.createTool(
+        'find_clients_by_category',
+        'Find clients by company category with their related contracts. Uses the actual CompanyCategories from Autotask instead of guessing field types. Perfect for managed services teams to find clients in specific categories like "MCS" or other managed services categories. Returns comprehensive client information including contact details and associated contract analysis.',
+        'read',
+        {
+          categoryName: {
+            type: 'string',
+            description: 'Company category name or nickname to search for (REQUIRED). Examples: "MCS", "Managed Services", "Standard Client". The tool will automatically find the matching category ID from CompanyCategories.'
+          },
+          categoryId: {
+            type: 'number',
+            description: 'Company category ID to filter by (alternative to categoryName). Use get_company_categories first to find the correct category ID for your managed services clients.'
+          },
+          includeContracts: {
+            type: 'boolean',
+            description: 'Whether to include contract information for each client (default: true). Set to false to get only client information without contract details for faster response.',
+            default: true
+          },
+          pageSize: {
+            type: 'number',
+            description: 'Number of clients to return (default: 25, max: 50). Controls response size and analysis scope.',
+            minimum: 1,
+            maximum: 50,
+            default: 25
+          }
+        },
+        []
+      ),
+
     ];
 
     // Extract mode from tenant context
@@ -2725,6 +2775,17 @@ export class EnhancedAutotaskToolHandler {
         case 'get_entity':
           this.logger.info(`🏢 Executing get_entity`, { toolCallId });
           result = await this.getEntityById(args, tenantContext);
+          break;
+
+        // Managed Services Tools
+        case 'get_company_categories':
+          this.logger.info(`📋 Executing get_company_categories`, { toolCallId });
+          result = await this.getCompanyCategories(args, tenantContext);
+          break;
+
+        case 'find_clients_by_category':
+          this.logger.info(`🏢 Executing find_clients_by_category`, { toolCallId });
+          result = await this.findClientsByCategory(args, tenantContext);
           break;
 
         default:
@@ -5254,5 +5315,249 @@ export class EnhancedAutotaskToolHandler {
         content: [{ type: 'text', text: `Failed to get ${args.entity}: ${error.message}` }] 
       };
     }
+  }
+
+  /**
+   * Get company categories from Autotask CompanyCategories entity
+   * This shows the actual classification values available in the system
+   */
+  private async getCompanyCategories(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
+    try {
+      const { includeInactive = false } = args;
+      
+      this.logger.info('📋 Getting company categories', {
+        includeInactive,
+        tenantId: tenantContext?.tenantId
+      });
+
+      const categories = await this.autotaskService.getCompanyCategories(includeInactive, tenantContext);
+
+      const categoryInfo = {
+        summary: {
+          totalCategories: categories.length,
+          activeCategories: categories.filter(c => c.isActive).length,
+          inactiveCategories: categories.filter(c => !c.isActive).length,
+          includeInactive: includeInactive
+        },
+        categories: categories.map(category => ({
+          id: category.id,
+          name: category.name,
+          nickname: category.nickname,
+          isActive: category.isActive,
+          isApiOnly: category.isApiOnly,
+          isGlobalDefault: category.isGlobalDefault,
+          displayColorRGB: category.displayColorRGB
+        }))
+      };
+
+      const guidance = `\n\n📋 **Company Categories Summary**: Found ${categories.length} categories. ` +
+        `Use the category ID (not name) when filtering companies by category. ` +
+        `Look for categories that match your managed services classification (e.g., "MCS", "Managed Services", etc.).`;
+
+      return {
+        isError: false,
+        content: [{
+          type: 'text',
+          text: `# Company Categories${guidance}\n\n` + JSON.stringify(categoryInfo, null, 2)
+        }]
+      };
+    } catch (error: any) {
+      return {
+        isError: true,
+        content: [{ type: 'text', text: `Failed to get company categories: ${error.message}` }]
+      };
+    }
+  }
+
+  /**
+   * Find clients by company category ID with their related contracts
+   * Uses the actual CompanyCategories from Autotask instead of guessing field types
+   * Now supports both categoryName (string) and categoryId (number) for better usability
+   */
+  private async findClientsByCategory(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
+    try {
+      const { categoryName, categoryId, includeContracts = true, pageSize = 25 } = args;
+      
+      if (!categoryName && !categoryId) {
+        return {
+          isError: true,
+          content: [{ type: 'text', text: 'Either categoryName or categoryId parameter is required. Use categoryName for easier searching (e.g., "MCS", "Managed Services").' }]
+        };
+      }
+
+      this.logger.info('🏢 Finding clients by category', {
+        categoryName,
+        categoryId,
+        includeContracts,
+        pageSize,
+        tenantId: tenantContext?.tenantId
+      });
+
+      let finalCategoryId = categoryId;
+      let matchedCategory: any = null;
+
+      // If categoryName is provided, find the matching category ID
+      if (categoryName && !categoryId) {
+        this.logger.info(`🔍 Looking up category ID for category name: "${categoryName}"`);
+        
+        const categories = await this.autotaskService.getCompanyCategories(false, tenantContext);
+        
+        // Try to find a matching category by name or nickname (case-insensitive)
+        const searchTerm = categoryName.toLowerCase();
+        matchedCategory = categories.find(cat => 
+          cat.name?.toLowerCase().includes(searchTerm) || 
+          cat.nickname?.toLowerCase().includes(searchTerm) ||
+          searchTerm.includes(cat.name?.toLowerCase() || '') ||
+          searchTerm.includes(cat.nickname?.toLowerCase() || '')
+        );
+
+        if (!matchedCategory) {
+          // Show available categories to help the user
+          const availableCategories = categories.map(cat => ({
+            id: cat.id,
+            name: cat.name,
+            nickname: cat.nickname
+          }));
+
+          return {
+            isError: true,
+            content: [{
+              type: 'text',
+              text: `Category "${categoryName}" not found. Available categories:\n\n` + 
+                    JSON.stringify(availableCategories, null, 2) + 
+                    `\n\nTry using one of these category names or nicknames.`
+            }]
+          };
+        }
+
+        finalCategoryId = matchedCategory.id;
+        this.logger.info(`✅ Found matching category: "${matchedCategory.name}" (ID: ${finalCategoryId})`);
+      }
+
+      // Search for companies with the specified category ID
+      const companies = await this.autotaskService.searchCompanies({
+        filter: [{
+          field: 'companyCategoryID',
+          op: 'eq',
+          value: finalCategoryId
+        }],
+        pageSize: Math.min(pageSize, 50)
+      }, tenantContext);
+
+      const clientAnalysis: {
+        summary: {
+          totalClients: number;
+          categoryId: number;
+          categoryName?: string;
+          searchCriteria: string;
+          includeContracts: boolean;
+        };
+        clients: any[];
+      } = {
+        summary: {
+          totalClients: companies.length,
+          categoryId: finalCategoryId,
+          categoryName: matchedCategory?.name || categoryName,
+          searchCriteria: `Company Category ID = ${finalCategoryId}`,
+          includeContracts: includeContracts
+        },
+        clients: []
+      };
+
+      // Enhance each client with contract information if requested
+      for (const company of companies) {
+        const clientData: any = {
+          id: company.id,
+          companyName: company.companyName,
+          companyCategoryID: company.companyCategoryID,
+          companyType: company.companyType,
+          phone: company.phone,
+          email: company.emailAddress,
+          address1: company.address1,
+          city: company.city,
+          state: company.state,
+          zipCode: company.zipCode,
+          ownerResourceID: company.ownerResourceID,
+          createDate: company.createDate,
+          lastActivityDate: company.lastActivityDate
+        };
+
+        // Add contract information if requested
+        if (includeContracts) {
+          try {
+            const contracts = await this.autotaskService.searchContracts({
+              filter: [{
+                field: 'companyID',
+                op: 'eq',
+                value: company.id
+              }],
+              pageSize: 10 // Limit contracts per client
+            }, tenantContext);
+
+            clientData.contracts = {
+              count: contracts.length,
+              activeContracts: contracts.filter(c => c.status === 1).length,
+              contractTypes: this.groupByField(contracts, 'contractType'),
+              totalContractValue: this.calculateTotalValue(contracts),
+              contracts: contracts.map(contract => ({
+                id: contract.id,
+                contractName: contract.contractName,
+                contractType: contract.contractType,
+                status: contract.status,
+                startDate: contract.startDate,
+                endDate: contract.endDate,
+                contractValue: contract.contractValue,
+                isRecurring: contract.isRecurring
+              }))
+            };
+          } catch (contractError) {
+            this.logger.warn(`Failed to get contracts for company ${company.id}:`, contractError);
+            clientData.contracts = { error: 'Unable to retrieve contract information' };
+          }
+        }
+
+        clientAnalysis.clients.push(clientData);
+      }
+
+      const categoryInfo = matchedCategory ? 
+        `"${matchedCategory.name}" (ID: ${finalCategoryId})` : 
+        `ID: ${finalCategoryId}`;
+
+      const guidance = `\n\n📊 **Client Analysis Summary**: Found ${companies.length} clients in category ${categoryInfo}. ` +
+        `For managed services teams, focus on clients with active contracts and recurring billing. ` +
+        `Use get_company_categories to see all available category names and IDs.`;
+
+      return {
+        isError: false,
+        content: [{
+          type: 'text',
+          text: `# Client Category Analysis${guidance}\n\n` + JSON.stringify(clientAnalysis, null, 2)
+        }]
+      };
+    } catch (error: any) {
+      return {
+        isError: true,
+        content: [{ type: 'text', text: `Failed to find clients by category: ${error.message}` }]
+      };
+    }
+  }
+
+  /**
+   * Helper method to group data by a specific field
+   */
+  private groupByField(data: any[], field: string): Record<string, number> {
+    const groups: Record<string, number> = {};
+    data.forEach(item => {
+      const value = item[field] || 'Unknown';
+      groups[value] = (groups[value] || 0) + 1;
+    });
+    return groups;
+  }
+
+  /**
+   * Helper method to calculate total contract value
+   */
+  private calculateTotalValue(contracts: any[]): number {
+    return contracts.reduce((sum, contract) => sum + (contract.contractValue || 0), 0);
   }
 }
