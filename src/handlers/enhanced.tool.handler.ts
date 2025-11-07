@@ -4074,7 +4074,7 @@ export class EnhancedAutotaskToolHandler {
 
   private async searchTimeEntries(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
     try {
-      const { ticketID, taskID, resourceId, dateFrom, dateTo, pageSize } = args;
+      const { ticketID, taskID, resourceID,resourceId, dateFrom, dateTo, pageSize } = args;
       
       // Build filter for time entries search
       const filter: any[] = [];
@@ -4087,8 +4087,8 @@ export class EnhancedAutotaskToolHandler {
         filter.push({ field: 'taskID', op: 'eq', value: taskID });
       }
       
-      if (resourceId) {
-        filter.push({ field: 'resourceID', op: 'eq', value: resourceId });
+      if (resourceID || resourceId) {
+        filter.push({ field: 'resourceID', op: 'eq', value: resourceID || resourceId });
       }
       
       if (dateFrom) {
