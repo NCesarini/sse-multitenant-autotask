@@ -1,13 +1,50 @@
 /**
  * Enhanced Autotask Tool Handler with ID-to-Name Mapping
  * Extends the base tool handler to include automatic mapping of company and resource IDs to names
+ * Implements "Showing X of Y" pagination pattern for AI agent awareness
  */
 
 import { McpTool, McpToolResult } from '../types/mcp.js';
 import { AutotaskService } from '../services/autotask.service.js';
 import { Logger } from '../utils/logger.js';
 import { MappingService } from '../utils/mapping.service.js';
-import { AutotaskCredentials, TenantContext } from '../types/mcp.js'; 
+import { AutotaskCredentials, TenantContext } from '../types/mcp.js';
+import { PaginatedResponse, PAGINATION_CONFIG } from '../types/autotask.js';
+
+/**
+ * Format a paginated response for AI agent consumption
+ * Includes mandatory "Showing X of Y" pattern
+ */
+function formatPaginatedResult<T>(
+  paginatedResponse: PaginatedResponse<T>,
+  _toolName: string
+): McpToolResult {
+  const { items, _paginationStatus, _nextAction } = paginatedResponse;
+  
+  // Build the response content with mandatory pagination status at the TOP
+  const parts: string[] = [];
+  
+  // CRITICAL: Pagination status MUST be first for AI agent to see immediately
+  parts.push(_paginationStatus);
+  
+  if (_nextAction) {
+    parts.push(`\n${_nextAction}`);
+  }
+  
+  // Add separator
+  parts.push('\n' + '='.repeat(60) + '\n');
+  
+  // Add the actual data
+  parts.push(JSON.stringify(items, null, 2));
+  
+  return {
+    content: [{
+      type: 'text',
+      text: parts.join('\n')
+    }],
+    isError: false
+  };
+} 
 
 export const LARGE_RESPONSE_THRESHOLDS = {
   tickets: 100,        
@@ -606,57 +643,71 @@ export class EnhancedAutotaskToolHandler {
 
   async listTools(tenantContext?: TenantContext): Promise<McpTool[]> {
     const allTools = [
-      // Company tools
+      // Company tools - WITH PROCEDURAL ENFORCEMENT
       EnhancedAutotaskToolHandler.createTool(
         'search_companies',
-        'Search for companies (customers, prospects, vendors) in Autotask with advanced filtering and enhanced name resolution. Companies are the core business entities in Autotask - they represent customers who receive services, prospects for sales, vendors who provide services, or partners. Returns comprehensive company records including ID, name, type, owner assignment, contact information, and address details. Use this to find specific companies for ticket creation, contact management, project assignment, or reporting. Essential for customer relationship management and business operations. Enhanced with automatic owner resource name mapping for better readability.',
+        `Search for companies (customers, prospects, vendors) in Autotask.
+
+⚠️ PAGINATION PROTOCOL (MANDATORY):
+PAGINATION LIMITS:
+- pageSize: Up to 200 items per page (default: 100)
+- API returns max 500 items per call
+- For datasets larger than 500: Use page=1, page=2, etc.
+
+PAGINATION WORKFLOW:
+1. First call: search_companies with pageSize=200
+2. Check response: "PAGINATION STATUS: Showing 200 of 1500"
+3. If incomplete: Call with page=2, then page=3, etc.
+4. Each page=N retrieves the next batch of pageSize items
+5. Continue until "Showing X of X (COMPLETE)"
+
+EXAMPLE for 1500 companies with pageSize=200:
+- page=1: Items 1-200 (Showing 200 of 1500)
+- page=2: Items 201-400 (Showing 400 of 1500)
+- page=3: Items 401-600 (Showing 600 of 1500)
+- ...continue until complete
+
+FAILURE TO RETRIEVE ALL PAGES BEFORE ANALYSIS = TASK FAILURE`,
         'read',
         {
           searchTerm: {
             type: 'string',
-            description: 'Search term to filter companies by name using partial matching (case-insensitive). Searches the companyName field. Use for finding companies when you know part of their name. Examples: "Microsoft" finds "Microsoft Corporation", "Acme" finds "Acme Industries LLC". Essential for user-friendly company lookup when exact names are unknown. Combine with other filters to narrow results further.'
+            description: 'Filter by company name (partial match, case-insensitive).'
           },
           companyType: {
             type: 'number',
-            description: 'Filter by company type classification. Values: 1=Customer (active service recipient), 2=Lead (potential customer, early sales stage), 3=Prospect (qualified potential customer), 4=Dead (disqualified prospect), 5=Suspect (unqualified potential), 6=Vendor (service/product provider). Essential for segmenting companies by business relationship. Example: companyType=1 finds all customers, companyType=6 finds all vendors.'
+            description: 'Filter by type: 1=Customer, 2=Lead, 3=Prospect, 4=Dead, 5=Suspect, 6=Vendor.'
           },
           ownerResourceID: {
             type: 'number',
-            description: 'Filter by owner resource ID - refers to Resources entity (account manager/sales rep). Find all companies managed by a specific person. Essential for territory management, account manager dashboards, workload distribution. Example: ownerResourceID=123 shows all companies owned by employee #123.'
+            description: 'Filter by owner/account manager resource ID.'
           },
           isActive: {
             type: 'boolean',
-            description: 'Filter by active status to control which companies appear in results. TRUE returns only active companies (current customers/prospects), FALSE returns only inactive companies (former customers, closed prospects). Active companies can have tickets, projects, and contracts assigned. Inactive companies are typically kept for historical records. Most operational searches should use TRUE. Use FALSE for cleanup or historical analysis.'
+            description: 'TRUE=active companies only, FALSE=inactive only.'
           },
           city: {
             type: 'string',
-            description: 'Filter by city name (partial match supported). Use for geographical filtering, territory management, or regional reporting. Example: city="New York" finds all companies in New York City. Combine with state/country for more precise location filtering.'
+            description: 'Filter by city name (partial match).'
           },
           state: {
             type: 'string',
-            description: 'Filter by state/province (partial match supported). Use for regional filtering or territory-based searches. Example: state="CA" finds all California companies. Important for regional sales, service territories, and compliance reporting.'
+            description: 'Filter by state/province (partial match).'
           },
           country: {
             type: 'string',
-            description: 'Filter by country name or code (partial match supported). Use for international operations, multi-country reporting, or region-specific analysis. Example: country="United States" or country="US". Essential for global operations.'
-          },
-          pageSize: {
-            type: 'number',
-            description: 'Number of company records to return per page (default: 50, max: 2000). Larger values return more data but may cause slower responses and larger memory usage. Start with 50 for exploration, use 100-500 for operational lists, use 1000+ for comprehensive exports. Consider network speed and processing capacity when choosing size.',
-            minimum: 1,
-            maximum: 2000,
-            default: 50
+            description: 'Filter by country name or code.'
           },
           page: {
             type: 'number',
-            description: 'Page number to retrieve (1-based indexing). Use for pagination when results exceed pageSize. Example: page=2 with pageSize=50 gets companies 51-100. Essential for handling large company databases without overwhelming responses. Check if additional pages exist by comparing returned count to pageSize.',
-            minimum: 1,
-            default: 1
+            description: 'Page number (1-based, default=1). Use to retrieve additional data when "Showing X of Y" shows X < Y. Each page returns up to pageSize items. Example: With pageSize=200, page=1 returns items 1-200, page=2 returns items 201-400, etc.',
+            minimum: 1
           },
-          getAllPages: {
-            type: 'boolean',
-            description: 'Set to TRUE to retrieve ALL matching companies across multiple pages automatically (ignores pageSize limits). WARNING: Can be very slow and memory-intensive for large datasets. Use only when you need complete company exports or comprehensive analysis. FALSE (default) respects pageSize for controlled results. Consider data volume before enabling.',
-            default: false
+          pageSize: {
+            type: 'number',
+            description: 'Items per page (max 200, default 100). Larger values = fewer calls needed. API limit is 500 per call, so pageSize=200 with page=1,2 gets 400 items.',
+            minimum: 1,
+            maximum: 200
           }
         }
       ),
@@ -785,10 +836,15 @@ export class EnhancedAutotaskToolHandler {
                 },
                 pageSize: {
                   type: 'number',
-                  description: 'Number of contact records to return (default: 50, max: 2000). Contact databases can be large, especially for enterprise customers. Start with 50 for browsing, use 100-500 for department listings, use larger values for comprehensive exports. Consider that each contact includes company information, so larger results consume more memory.',
+                  description: 'Items per page (max 200, default 100). Larger values = fewer calls needed.',
                   minimum: 1,
-                  maximum: 2000,
-                  default: 50
+                  maximum: 200,
+                  default: 100
+                },
+                page: {
+                  type: 'number',
+                  description: 'Page number (1-based, default=1). Use to retrieve additional data when "Showing X of Y" shows X < Y.',
+                  minimum: 1
                 }
               }
             ),
@@ -857,61 +913,86 @@ export class EnhancedAutotaskToolHandler {
         ['id']
       ),
 
-      // Ticket tools
-                  EnhancedAutotaskToolHandler.createTool(
-              'search_tickets',
-              'Search for support tickets (service requests, incidents, problems) in Autotask with comprehensive filtering capabilities. Tickets represent customer service requests, technical issues, incidents, or any work that needs to be tracked and resolved. Returns detailed ticket records including status, priority, assignment, descriptions, and associated relationships (company, contact, project, contract). Use this for service desk operations, workload management, reporting, escalation tracking, and customer service analysis. Essential for support operations, SLA monitoring, and customer satisfaction management. Enhanced with automatic name mapping for better readability.',
-              'read',
-              {
-                searchTerm: {
-                  type: 'string',
-                  description: 'Search term to filter tickets by ticket number (exact: T20250914.0008) or title content (partial matching). Ticket numbers are unique identifiers assigned automatically. Title searches look within ticket descriptions and subjects. Examples: "T20250914.0008" finds exact ticket, "email" finds all tickets with email-related issues, "server down" finds server outage tickets. Essential for finding specific tickets or issues by topic.'
-                },
-                status: {
-                  type: 'number',
-                  description: 'Filter by ticket status ID to focus on tickets in specific workflow stages. Values: 1=New (just created, not assigned), 2=In Progress (actively being worked), 3=Customer Reply Needed (waiting for customer response), 4=Waiting Customer (customer action required), 5=Complete (resolved and closed), 8=On Hold (temporarily suspended), 9=Escalate (needs management attention), 29=Waiting Materials (pending parts/resources). Critical for workload management and SLA tracking.'
-                },
-                priority: {
-                  type: 'number',
-                  description: 'Filter by ticket priority level indicating urgency and business impact. Values: 1=Critical (system down, business stopped, immediate attention required), 2=High (significant impact, work hampered), 3=Medium (standard priority, normal workflow), 4=Low (minor issue, convenience item). Priority affects SLA timelines, escalation procedures, and resource allocation. Essential for finding urgent tickets or filtering by severity.'
-                },
-                companyID: {
-                  type: 'number',
-                  description: 'Filter by specific company ID - refers to Companies entity. Shows only tickets submitted by or for a particular customer/company. Essential for: customer-specific support dashboards, account management, billing analysis, company-focused reporting. Use when you need to see all support activity for a specific customer or when troubleshooting company-wide issues.'
-                },
-                projectID: {
-                  type: 'number',
-                  description: 'Filter by specific project ID - refers to Projects entity. Shows tickets that are part of or related to a specific project. Project tickets often represent implementation issues, change requests, or project-specific support. Use for: project management, implementation tracking, project-related issue monitoring. Helps separate project work from general support.'
-                },
-                contractID: {
-                  type: 'number',
-                  description: 'Filter by specific contract ID - refers to Contracts entity. Shows tickets covered under a particular service contract or support agreement. Critical for: contract compliance monitoring, billable vs. non-billable work separation, SLA enforcement, contract utilization analysis. Use when tracking contract performance or billing accuracy.'
-                },
-                assignedResourceID: {
-                  type: 'number',
-                  description: 'Filter by specific assigned resource ID - refers to Resources entity (technician/employee assigned to ticket). Shows tickets assigned to a particular team member. Essential for: individual workload monitoring, performance tracking, capacity planning, escalation management. Use for technician-specific dashboards or workload balancing. Combine with status filters for detailed workload analysis.'
-                },
-                unassigned: {
-                  type: 'boolean',
-                  description: 'Filter for unassigned tickets requiring attention. TRUE returns only tickets with no assigned technician (need assignment), FALSE returns only assigned tickets. Unassigned tickets represent work that needs to be distributed to team members. Critical for: work distribution, ensuring no tickets are overlooked, queue management, workload balancing. Use TRUE to find tickets needing assignment.'
-                },
-                createdDateFrom: {
-                  type: 'string',
-                  description: 'Filter tickets created on or after this date (YYYY-MM-DD format). Use for time-bounded reporting like "tickets created this month" or trend analysis. Example: "2024-01-01" finds tickets created since January 1st. Combine with createdDateTo for specific date ranges. Essential for historical analysis and reporting periods.'
-                },
-                createdDateTo: {
-                  type: 'string',
-                  description: 'Filter tickets created on or before this date (YYYY-MM-DD format). Works with createdDateFrom to create date ranges. Example: "2024-01-31" finds tickets up to end of January. Use for periodic reports, billing cycles, or historical analysis. Inclusive - tickets created ON this date are included.'
-                },
-                pageSize: {
-                  type: 'number',
-                  description: 'Number of ticket records to return (default: 50, max: 2000). Ticket searches can return large datasets, especially for broad searches or popular companies. Start with 50 for dashboard views, use 100-500 for management reports, use larger values for comprehensive analysis. Consider performance impact of large result sets on network and processing.',
-                  minimum: 1,
-                  maximum: 2000,
-                  default: 50
-                }
-              }
-            ),
+      // Ticket tools - WITH PROCEDURAL ENFORCEMENT
+      EnhancedAutotaskToolHandler.createTool(
+        'search_tickets',
+        `Search for support tickets in Autotask. Returns ticket records with status, priority, and assignments.
+
+⚠️ PAGINATION PROTOCOL (MANDATORY):
+PAGINATION LIMITS:
+- pageSize: Up to 200 items per page (default: 100)
+- API returns max 500 items per call
+- For datasets larger than 500: Use page=1, page=2, etc.
+
+PAGINATION WORKFLOW:
+1. First call: search_tickets with pageSize=200
+2. Check response: "PAGINATION STATUS: Showing 200 of 1500"
+3. If incomplete: Call with page=2, then page=3, etc.
+4. Each page=N retrieves the next batch of pageSize items
+5. Continue until "Showing X of X (COMPLETE)"
+
+EXAMPLE for 1500 tickets with pageSize=200:
+- page=1: Items 1-200 (Showing 200 of 1500)
+- page=2: Items 201-400 (Showing 400 of 1500)
+- page=3: Items 401-600 (Showing 600 of 1500)
+- ...continue until complete
+
+FAILURE TO RETRIEVE ALL PAGES BEFORE ANALYSIS = TASK FAILURE`,
+        'read',
+        {
+          searchTerm: {
+            type: 'string',
+            description: 'Search by ticket number (T20250914.0008) or title content (partial match).'
+          },
+          status: {
+            type: 'number',
+            description: 'Filter by status: 1=New, 2=In Progress, 5=Complete, 8=On Hold, 9=Escalate.'
+          },
+          priority: {
+            type: 'number',
+            description: 'Filter by priority: 1=Critical, 2=High, 3=Medium, 4=Low.'
+          },
+          companyID: {
+            type: 'number',
+            description: 'Filter by company ID to see tickets for a specific customer.'
+          },
+          projectID: {
+            type: 'number',
+            description: 'Filter by project ID for project-related tickets.'
+          },
+          contractID: {
+            type: 'number',
+            description: 'Filter by contract ID for tickets under specific service agreements.'
+          },
+          assignedResourceID: {
+            type: 'number',
+            description: 'Filter by assigned technician/employee ID.'
+          },
+          unassigned: {
+            type: 'boolean',
+            description: 'TRUE returns only unassigned tickets, FALSE returns only assigned.'
+          },
+          createdDateFrom: {
+            type: 'string',
+            description: 'Start date filter (YYYY-MM-DD).'
+          },
+          createdDateTo: {
+            type: 'string',
+            description: 'End date filter (YYYY-MM-DD).'
+          },
+          page: {
+            type: 'number',
+            description: 'Page number (1-based, default=1). Use to retrieve additional data when "Showing X of Y" shows X < Y. Each page returns up to pageSize items. Example: With pageSize=200, page=1 returns items 1-200, page=2 returns items 201-400, etc.',
+            minimum: 1
+          },
+          pageSize: {
+            type: 'number',
+            description: 'Items per page (max 200, default 100). Larger values = fewer calls needed. API limit is 500 per call, so pageSize=200 with page=1,2 gets 400 items.',
+            minimum: 1,
+            maximum: 200
+          }
+        }
+      ),
       EnhancedAutotaskToolHandler.createTool(
         'create_ticket',
         'Create a new support ticket (service request, incident, problem) in Autotask system. Tickets are the primary mechanism for tracking customer service requests, technical issues, incidents, or any work requiring resolution. Creating a ticket initiates the service delivery process and establishes accountability, tracking, and communication channels. Returns the newly created ticket ID for immediate reference and follow-up operations. Essential for formalizing customer requests, ensuring proper service delivery, and maintaining service level agreements.',
@@ -1031,41 +1112,60 @@ export class EnhancedAutotaskToolHandler {
         ['resourceID', 'dateWorked', 'hoursWorked']
       ),
 
-      // Project tools
-                  EnhancedAutotaskToolHandler.createTool(
-              'search_projects',
-              'Search for projects in Autotask with advanced filtering. Returns project records with company and project manager information.',
-              'read',
-              {
-                searchTerm: {
-                  type: 'string',
-                  description: 'Search term to filter projects by name (partial match supported). Searches the projectName field. Example: "Migration" finds "Server Migration", "Email Migration Project", etc.'
-                },
-                companyId: {
-                  type: 'number',
-                  description: 'Filter by company ID - refers to Companies entity. Find all projects for a specific customer/company. Essential for account management and customer-specific project tracking.'
-                },
-                status: {
-                  type: 'number',
-                  description: 'Filter by project status. Values: 1=New, 2=In Progress, 3=Complete, 4=Canceled, 5=On Hold. Use to focus on active projects (status=2) or review completed work (status=3). Critical for project portfolio management and resource planning.'
-                },
-                projectType: {
-                  type: 'number',
-                  description: 'Filter by project type (billing model). Values: 1=Fixed Price (set budget, fixed deliverables), 2=Time and Materials (hourly billing, flexible scope), 3=Retainer (pre-paid hours, ongoing support), 4=Internal (company projects, no billing). Essential for financial reporting, billing analysis, and project categorization. Example: projectType=2 finds all T&M projects.'
-                },
-                projectManagerResourceID: {
-                  type: 'number',
-                  description: 'Filter by project manager resource ID - refers to Resources entity (employee managing the project). Find all projects managed by a specific PM. Essential for: PM workload analysis, portfolio management by PM, capacity planning, performance tracking. Example: projectManagerResourceID=123 shows all projects managed by employee #123.'
-                },
-                pageSize: {
-                  type: 'number',
-                  description: 'Number of results to return (default: 50, max: 2000)',
-                  minimum: 1,
-                  maximum: 2000,
-                  default: 50
-                }
-              }
-            ),
+      // Project tools - WITH PROCEDURAL ENFORCEMENT
+      EnhancedAutotaskToolHandler.createTool(
+        'search_projects',
+        `Search for projects in Autotask. Returns project records with company and manager information.
+
+⚠️ PAGINATION PROTOCOL (MANDATORY):
+PAGINATION LIMITS:
+- pageSize: Up to 200 items per page (default: 100)
+- API returns max 500 items per call
+- For datasets larger than 500: Use page=1, page=2, etc.
+
+PAGINATION WORKFLOW:
+1. First call: search_projects with pageSize=200
+2. Check response: "PAGINATION STATUS: Showing 200 of 1500"
+3. If incomplete: Call with page=2, then page=3, etc.
+4. Each page=N retrieves the next batch of pageSize items
+5. Continue until "Showing X of X (COMPLETE)"
+
+FAILURE TO RETRIEVE ALL PAGES BEFORE ANALYSIS = TASK FAILURE`,
+        'read',
+        {
+          searchTerm: {
+            type: 'string',
+            description: 'Filter by project name (partial match).'
+          },
+          companyId: {
+            type: 'number',
+            description: 'Filter by company ID for customer-specific projects.'
+          },
+          status: {
+            type: 'number',
+            description: 'Filter by status: 1=New, 2=In Progress, 3=Complete, 4=Canceled, 5=On Hold.'
+          },
+          projectType: {
+            type: 'number',
+            description: 'Filter by type: 1=Fixed Price, 2=T&M, 3=Retainer, 4=Internal.'
+          },
+          projectManagerResourceID: {
+            type: 'number',
+            description: 'Filter by project manager resource ID.'
+          },
+          page: {
+            type: 'number',
+            description: 'Page number (1-based, default=1). Use to retrieve additional data when "Showing X of Y" shows X < Y. Each page returns up to pageSize items.',
+            minimum: 1
+          },
+          pageSize: {
+            type: 'number',
+            description: 'Items per page (max 200, default 100). Larger values = fewer calls needed.',
+            minimum: 1,
+            maximum: 200
+          }
+        }
+      ),
 
       // Resource tools
                   EnhancedAutotaskToolHandler.createTool(
@@ -1095,10 +1195,15 @@ export class EnhancedAutotaskToolHandler {
                 },
                 pageSize: {
                   type: 'number',
-                  description: 'Number of results to return (default: 50, max: 2000)',
+                  description: 'Items per page (max 200, default 100). Larger values = fewer calls needed.',
                   minimum: 1,
-                  maximum: 2000,
-                  default: 50
+                  maximum: 200,
+                  default: 100
+                },
+                page: {
+                  type: 'number',
+                  description: 'Page number (1-based, default=1). Use to retrieve additional data when "Showing X of Y" shows X < Y.',
+                  minimum: 1
                 }
               }
             ),
@@ -1205,88 +1310,129 @@ export class EnhancedAutotaskToolHandler {
         ['id']
       ),
 
-      // Time Entry Management
+      // Time Entry Management - WITH PROCEDURAL ENFORCEMENT
       EnhancedAutotaskToolHandler.createTool(
         'search_time_entries',
-        'Search for time entries in Autotask with comprehensive filtering options. To find time entries for a project, get tasks or tickets first. Time entries represent work logged by employees/technicians against tickets, tasks, or projects. Returns detailed time entry records including duration, billing information, work descriptions, and associated entity relationships (ticket/task/project/resource). Use this to find logged work hours, track employee productivity, analyze project time allocation, generate billing reports, or audit time tracking. Default behavior returns last 30 days of entries if no filters specified.',
+        `Search for time entries in Autotask. Returns time logged by employees against tickets, tasks, or projects.
+
+⚠️ PAGINATION PROTOCOL (MANDATORY):
+PAGINATION LIMITS:
+- pageSize: Up to 200 items per page (default: 100)
+- API returns max 500 items per call
+- For datasets larger than 500: Use page=1, page=2, etc.
+
+PAGINATION WORKFLOW:
+1. First call: search_time_entries with pageSize=200
+2. Check response: "PAGINATION STATUS: Showing 200 of 1500"
+3. If incomplete: Call with page=2, then page=3, etc.
+4. Sum hours ONLY after ALL pages retrieved
+5. Continue until "Showing X of X (COMPLETE)"
+
+FAILURE TO RETRIEVE ALL PAGES BEFORE ANALYSIS = TASK FAILURE
+
+Default behavior returns last 30 days if no date filters specified.`,
         'read',
         {
           ticketID: {
             type: 'number',
-            description: 'Filter by specific ticket ID - refers to Tickets entity. Use when you want time entries logged against a particular support ticket or service request. Example: Find all hours worked on ticket #12345 to understand total effort spent resolving that issue. Combines well with resourceId to see who worked on the ticket and dateFrom/dateTo to see work over time periods.'
+            description: 'Filter by ticket ID. Find all time logged against a specific support ticket.'
           },
           taskID: {
             type: 'number',
-            description: 'Filter by specific task ID - refers to Tasks entity (project tasks). Use when you want time entries for a particular project task or deliverable. Example: Find hours logged against "Database Migration" task to track progress and resource allocation. Tasks are typically part of projects, so this gives more granular tracking than projectId alone. Often used with projectId context.'
+            description: 'Filter by task ID. Find time entries for a specific project task.'
           },
           resourceID: {
             type: 'number',
-            description: 'Filter by specific resource ID - refers to Resources entity (employee/technician/consultant). Use to find all time entries logged by a particular person. Essential for: employee productivity reports, timesheet verification, billable hours tracking per person, workload analysis. Example: Get all time entries for John Doe (resourceId: 123) to generate his monthly timesheet or analyze his work distribution across projects.'
+            description: 'Filter by resource/employee ID. Find all time logged by a specific person.'
           },
           dateFrom: {
             type: 'string',
-            description: 'Start date filter (YYYY-MM-DD format). Filters time entries by the dateWorked field - the actual date work was performed, not when it was logged. Use to create time-bounded reports like "March 2024 timesheet" or "last quarter billing". Essential for payroll periods, billing cycles, project phase analysis. Example: "2024-03-01" to start from March 1st. Commonly paired with dateTo for ranges.'
+            description: 'Start date (YYYY-MM-DD). Filter entries from this date onwards.'
           },
           dateTo: {
             type: 'string',
-            description: 'End date filter (YYYY-MM-DD format). Works with dateFrom to create date ranges. Without dateFrom, gets all entries up to this date. Essential for: monthly/quarterly reports, billing cutoffs, project phase completions. Example: "2024-03-31" to end at March 31st. Use inclusive date logic (entries ON the dateTo are included).'
+            description: 'End date (YYYY-MM-DD). Filter entries up to and including this date.'
+          },
+          page: {
+            type: 'number',
+            description: 'Page number (1-based, default=1). Use to retrieve additional data when "Showing X of Y" shows X < Y. Each page returns up to pageSize items.',
+            minimum: 1
           },
           pageSize: {
             type: 'number',
-            description: 'Number of results to return (max 200). Time entry searches can return large datasets, especially for date ranges or popular resources/projects. Start with smaller values (25-50) for initial exploration, use larger values (100-200) for comprehensive reports. Larger values may cause slower responses. Consider pagination for very large datasets.',
+            description: 'Items per page (max 200, default 100). Larger values = fewer calls needed.',
             minimum: 1,
             maximum: 200
           }
         }
       ),
 
-      // Task Management
+      // Task Management - WITH PROCEDURAL ENFORCEMENT
       EnhancedAutotaskToolHandler.createTool(
         'search_tasks',
-        'Search for tasks in Autotask with comprehensive filtering. Returns task records with project, resource, and priority information. Essential for task management, deadline tracking, and workload planning.',
+        `Search for tasks in Autotask. Returns task records with project, resource, and priority information.
+
+⚠️ PAGINATION PROTOCOL (MANDATORY):
+PAGINATION LIMITS:
+- pageSize: Up to 200 items per page (default: 100)
+- API returns max 500 items per call
+- For datasets larger than 500: Use page=1, page=2, etc.
+
+PAGINATION WORKFLOW:
+1. First call: search_tasks with pageSize=200
+2. Check response: "PAGINATION STATUS: Showing 200 of 1500"
+3. If incomplete: Call with page=2, then page=3, etc.
+4. Continue until "Showing X of X (COMPLETE)"
+
+FAILURE TO RETRIEVE ALL PAGES BEFORE ANALYSIS = TASK FAILURE`,
         'read',
         {
           projectId: {
             type: 'number',
-            description: 'Filter by project ID - refers to Projects entity. Find all tasks within a specific project. Essential for project-specific task tracking and project management dashboards.'
+            description: 'Filter by project ID.'
           },
           assignedResourceId: {
             type: 'number',
-            description: 'Filter by assigned resource ID - refers to Resources entity (employee assigned to task). Find all tasks assigned to a specific person. Essential for individual workload management, capacity planning, and performance tracking.'
+            description: 'Filter by assigned employee ID.'
           },
           status: {
             type: 'number',
-            description: 'Filter by task status. Values: 1=New (not started), 2=In Progress (actively worked), 3=Complete (finished), 4=Canceled, 5=On Hold. Use to focus on active tasks or review completed work. Critical for task management and progress tracking.'
+            description: 'Filter by status: 1=New, 2=In Progress, 3=Complete, 4=Canceled, 5=On Hold.'
           },
           priorityLabel: {
             type: 'string',
-            description: 'Filter by task priority level. Values: "Critical" (urgent, immediate attention), "High" (important, near-term deadline), "Normal" (standard priority), "Low" (can be delayed). Essential for prioritizing work, finding urgent tasks, or balancing workloads. Example: priorityLabel="Critical" finds all critical-priority tasks.'
+            description: 'Filter by priority: "Critical", "High", "Normal", "Low".'
           },
           searchTerm: {
             type: 'string',
-            description: 'Search term to filter tasks by title (partial match supported). Example: "Setup" finds "Email Setup", "Server Setup Task", etc. Use for finding tasks by keywords or topic.'
+            description: 'Filter by task title (partial match).'
           },
           dueDateFrom: {
             type: 'string',
-            description: 'Filter tasks with due date on or after this date (YYYY-MM-DD format). Use to find upcoming deadlines or overdue tasks. Example: dueDateFrom=today finds tasks due today or later. Essential for deadline tracking and schedule management. Combine with dueDateTo for date ranges.'
+            description: 'Tasks due on or after this date (YYYY-MM-DD).'
           },
           dueDateTo: {
             type: 'string',
-            description: 'Filter tasks with due date on or before this date (YYYY-MM-DD format). Works with dueDateFrom to create date ranges. Example: dueDateTo=today finds overdue tasks and tasks due today. Critical for finding missed deadlines or near-term deliverables. Inclusive - tasks due ON this date are included.'
+            description: 'Tasks due on or before this date (YYYY-MM-DD).'
           },
           createdDateFrom: {
             type: 'string',
-            description: 'Filter tasks created on or after this date (YYYY-MM-DD format). Use for time-bounded task analysis or tracking task creation trends. Example: "2024-01-01" finds tasks created since January 1st. Useful for project phase analysis or historical reporting.'
+            description: 'Tasks created on or after this date (YYYY-MM-DD).'
           },
           createdDateTo: {
             type: 'string',
-            description: 'Filter tasks created on or before this date (YYYY-MM-DD format). Works with createdDateFrom for date ranges. Use for periodic reports or historical analysis. Example: "2024-01-31" finds tasks created through end of January.'
+            description: 'Tasks created on or before this date (YYYY-MM-DD).'
+          },
+          page: {
+            type: 'number',
+            description: 'Page number (1-based, default=1). Use to retrieve additional data when "Showing X of Y" shows X < Y.',
+            minimum: 1
           },
           pageSize: {
             type: 'number',
-            description: 'Number of results to return (max 100)',
+            description: 'Items per page (max 200, default 100). Larger values = fewer calls needed.',
             minimum: 1,
-            maximum: 100
+            maximum: 200
           }
         }
       ),
@@ -1391,9 +1537,14 @@ export class EnhancedAutotaskToolHandler {
           },
           pageSize: {
             type: 'number',
-            description: 'Number of results to return (max 100)',
+            description: 'Items per page (max 200, default 100).',
             minimum: 1,
-            maximum: 100
+            maximum: 200
+          },
+          page: {
+            type: 'number',
+            description: 'Page number (1-based). Use when "Showing X of Y" shows X < Y.',
+            minimum: 1
           }
         },
         ['ticketID']
@@ -1454,9 +1605,14 @@ export class EnhancedAutotaskToolHandler {
           },
           pageSize: {
             type: 'number',
-            description: 'Number of results to return (max 100)',
+            description: 'Items per page (max 200, default 100).',
             minimum: 1,
-            maximum: 100
+            maximum: 200
+          },
+          page: {
+            type: 'number',
+            description: 'Page number (1-based). Use when "Showing X of Y" shows X < Y.',
+            minimum: 1
           }
         },
         ['projectId']
@@ -1517,9 +1673,14 @@ export class EnhancedAutotaskToolHandler {
           },
           pageSize: {
             type: 'number',
-            description: 'Number of results to return (max 100)',
+            description: 'Items per page (max 200, default 100).',
             minimum: 1,
-            maximum: 100
+            maximum: 200
+          },
+          page: {
+            type: 'number',
+            description: 'Page number (1-based). Use when "Showing X of Y" shows X < Y.',
+            minimum: 1
           }
         },
         ['companyId']
@@ -1633,9 +1794,9 @@ export class EnhancedAutotaskToolHandler {
           },
           pageSize: {
             type: 'number',
-            description: 'Number of results to return (max 500)',
+            description: 'Items per page (max 200, default 100).',
             minimum: 1,
-            maximum: 500
+            maximum: 200
           }
         }
       ),
@@ -1663,9 +1824,9 @@ export class EnhancedAutotaskToolHandler {
           },
           pageSize: {
             type: 'number',
-            description: 'Number of results to return (max 500)',
+            description: 'Items per page (max 200, default 100).',
             minimum: 1,
-            maximum: 500
+            maximum: 200
           }
         }
       ),
@@ -1693,9 +1854,9 @@ export class EnhancedAutotaskToolHandler {
           },
           pageSize: {
             type: 'number',
-            description: 'Number of results to return (max 500)',
+            description: 'Items per page (max 200, default 100).',
             minimum: 1,
-            maximum: 500
+            maximum: 200
           }
         }
       ),
@@ -1767,9 +1928,9 @@ export class EnhancedAutotaskToolHandler {
           },
           pageSize: {
             type: 'number',
-            description: 'Number of results to return (max 500)',
+            description: 'Items per page (max 200, default 100).',
             minimum: 1,
-            maximum: 500
+            maximum: 200
           }
         }
       ),
@@ -1878,9 +2039,9 @@ export class EnhancedAutotaskToolHandler {
           },
           pageSize: {
             type: 'number',
-            description: 'Number of results to return (max 500)',
+            description: 'Items per page (max 200, default 100).',
             minimum: 1,
-            maximum: 500
+            maximum: 200
           }
         },
         ['expenseReportId']
@@ -2110,9 +2271,9 @@ export class EnhancedAutotaskToolHandler {
           },
           pageSize: {
             type: 'number',
-            description: 'Number of results to return (max 500)',
+            description: 'Items per page (max 200, default 100).',
             minimum: 1,
-            maximum: 500
+            maximum: 200
           }
         }
       ),
@@ -2231,13 +2392,13 @@ export class EnhancedAutotaskToolHandler {
             minimum: 1,
             default: 1
           },
-                     pageSize: {
-             type: 'number',
-             description: 'Number of companies per page (default: 50, max: 2000)',
-             minimum: 1,
-             maximum: 2000,
-             default: 50
-           },
+          pageSize: {
+            type: 'number',
+            description: 'Items per page (max 200, default 100).',
+            minimum: 1,
+            maximum: 200,
+            default: 100
+          },
           searchTerm: {
             type: 'string',
             description: 'Optional search term to filter companies by name (partial match supported)'
@@ -2267,7 +2428,7 @@ export class EnhancedAutotaskToolHandler {
           },
           pageSize: {
             type: 'number',
-            description: 'Number of results to return (default: 500, max: 500)'
+            description: 'Number of results to return (default: 50, max: 100). Use "page" parameter for more.'
           }
         },
         ['entity', 'search']
@@ -2317,17 +2478,17 @@ export class EnhancedAutotaskToolHandler {
           },
           taskPageSize: {
             type: 'number',
-            description: 'Number of tasks to return (default: 25, max: 100). Controls task data volume. Use smaller values for quick overviews, larger values for comprehensive task lists.',
+            description: 'Number of tasks to return (default: 50, max: 200). Controls task data volume.',
             minimum: 1,
-            maximum: 100,
-            default: 25
+            maximum: 200,
+            default: 50
           },
           timeEntryPageSize: {
             type: 'number',
-            description: 'Number of time entries to return (default: 25, max: 100). Controls time entry data volume. Use smaller values for recent activity overviews, larger values for comprehensive time tracking analysis.',
+            description: 'Number of time entries to return (default: 50, max: 200). Controls time entry data volume.',
             minimum: 1,
-            maximum: 100,
-            default: 25
+            maximum: 200,
+            default: 50
           },
           timeEntryDateFrom: {
             type: 'string',
@@ -2445,12 +2606,9 @@ export class EnhancedAutotaskToolHandler {
       this.logger.info(`🛠️ Tool call started: ${name}`, {
         toolCallId,
         toolName: name,
-        argsProvided: Object.keys(args || {}),
-        argCount: Object.keys(args || {}).length,
+        args:args, 
         timestamp: new Date().toISOString()
       }); 
-
-      this.logger.info('ARGS', args);
       
       // Enhanced debugging for tenant context
       this.logger.info('🔍 DETAILED ARGS ANALYSIS', {
@@ -2835,149 +2993,49 @@ export class EnhancedAutotaskToolHandler {
 
   private async searchCompanies(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
     try {
-      const options: any = {};
-      
       // Build filter array
       const filters: any[] = [];
       
       if (args.searchTerm) {
-        filters.push({
-          field: 'companyName',
-          op: 'contains',
-          value: args.searchTerm
-        });
+        filters.push({ field: 'companyName', op: 'contains', value: args.searchTerm });
       }
       
       if (typeof args.companyType === 'number') {
-        filters.push({
-          field: 'companyType',
-          op: 'eq',
-          value: args.companyType
-        });
+        filters.push({ field: 'companyType', op: 'eq', value: args.companyType });
       }
       
       if (typeof args.ownerResourceID === 'number') {
-        filters.push({
-          field: 'ownerResourceID',
-          op: 'eq',
-          value: args.ownerResourceID
-        });
+        filters.push({ field: 'ownerResourceID', op: 'eq', value: args.ownerResourceID });
       }
       
       if (typeof args.isActive === 'boolean') {
-        filters.push({
-          field: 'isActive',
-          op: 'eq',
-          value: args.isActive
-        });
+        filters.push({ field: 'isActive', op: 'eq', value: args.isActive });
       }
       
       if (args.city) {
-        filters.push({
-          field: 'city',
-          op: 'contains',
-          value: args.city
-        });
+        filters.push({ field: 'city', op: 'contains', value: args.city });
       }
       
       if (args.state) {
-        filters.push({
-          field: 'state',
-          op: 'contains',
-          value: args.state
-        });
+        filters.push({ field: 'state', op: 'contains', value: args.state });
       }
       
       if (args.country) {
-        filters.push({
-          field: 'country',
-          op: 'contains',
-          value: args.country
-        });
-      }
-      
-      if (filters.length > 0) {
-        options.filter = filters;
-      }
-      
-      // Handle pagination parameters
-      if (args.pageSize) {
-        options.pageSize = args.pageSize;
-      }
-      
-      if (args.page) {
-        options.page = args.page;
-      }
-      
-      // Handle getAllPages flag - if true, override pagination limits
-      if (args.getAllPages === true) {
-        // Remove page size limit to get all data (use old behavior)
-        delete options.pageSize;
-        this.logger.info('getAllPages=true: Will fetch all available companies (may be slow)');
+        filters.push({ field: 'country', op: 'contains', value: args.country });
       }
 
-      const companies = await this.autotaskService.searchCompanies(options, tenantContext);
-      
-      // Enhanc 
-
-      // Prepare pagination info
-      const currentPage = args.page || 1;
-      const pageSize = args.pageSize || 50;
-      const isLimitedResults = companies.length === pageSize && !args.getAllPages;
-      
-      let resultsText = '';
-      if (companies.length > 0) {
-        resultsText = `Found ${companies.length} companies`;
-        
-        // Add pagination context
-        if (currentPage > 1) {
-          resultsText += ` (page ${currentPage})`;
-        }
-        if (isLimitedResults) {
-          resultsText += ` - use page=${currentPage + 1} to get more results`;
-        }
-        
-        resultsText += `:\n\n${companies.map(company => 
-          `ID: ${company.id}\nName: ${company.companyName}\nType: ${company.companyType}\nActive: ${company.isActive}\nOwner: ${company._enhanced?.ownerResourceName || 'Unknown'}\n`
-        ).join('\n')}`;
-      } else {
-        resultsText = 'No companies found matching the criteria';
-        if (currentPage > 1) {
-          resultsText += ` on page ${currentPage}. Try page=1 or adjust your search criteria.`;
-        }
-      }
-
-      const content = [{
-        type: 'text',
-        text: resultsText
-      }];
-
-      // Check if we're hitting the threshold limit and show guidance proactively
-      const threshold = LARGE_RESPONSE_THRESHOLDS.companies;
-      const isHittingLimit = args.pageSize !== undefined && args.pageSize >= threshold;
-      const shouldShowGuidance = isHittingLimit || companies.length >= threshold;
-
-      let contentWithGuidance = content;
-      if (shouldShowGuidance) {
-        const guidanceMessage = isHittingLimit 
-          ? `Requested ${args.pageSize} companies (limit: ${threshold}). For more focused results, try:\n` +
-            `  • Use \`searchTerm\` with company name or partial name\n` +
-            `  • Add specific filters in your search criteria\n` +
-            `  • Use smaller \`pageSize\` parameter (current: ${args.pageSize})`
-          : this.generateSearchGuidance('companies', companies.length, Math.round(JSON.stringify(content).length / 1024));
-
-        contentWithGuidance = [
-          ...content,
-          {
-            type: 'text',
-            text: `\n\n🔍 **Search Guidance**: ${guidanceMessage}`
-          }
-        ];
-      }
-
-      return {
-        content: contentWithGuidance
+      const options: any = {
+        filter: filters.length > 0 ? filters : undefined,
+        page: args.page || 1,
+        pageSize: args.pageSize || 100
       };
+
+      // Use the new pagination-aware method
+      const paginatedResult = await this.autotaskService.searchCompaniesWithPagination(options, tenantContext);
+      
+      // Return formatted result with mandatory "Showing X of Y" pattern
+      return formatPaginatedResult(paginatedResult, 'search_companies');
+      
     } catch (error) {
       throw new Error(`Failed to search companies: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
@@ -3165,6 +3223,10 @@ export class EnhancedAutotaskToolHandler {
       
       if (args.pageSize) {
         options.pageSize = args.pageSize;
+      }
+      
+      if (args.page) {
+        options.page = args.page;
       }
 
       let tickets = await this.autotaskService.searchTickets(options, tenantContext);
@@ -3729,7 +3791,7 @@ export class EnhancedAutotaskToolHandler {
         throw new Error('Either projectId or searchTerm must be provided');
       }
 
-      this.logger.info(`Project details: ${JSON.stringify(project)}`);
+      this.logger.info(`Project details retrieved`, { projectId: project?.id || project?.item?.id });
       
       // Handle the case where project data is wrapped in an 'item' object
       const projectData = project.item || project;
@@ -3788,7 +3850,7 @@ export class EnhancedAutotaskToolHandler {
           const taskResourceMap = new Map();
           
           if (uniqueTaskResourceIds.length > 0) {
-            this.logger.info(`Fetching resource information for ${uniqueTaskResourceIds.length} unique task resources ${JSON.stringify(uniqueTaskResourceIds)}`);
+            this.logger.info(`Fetching resource information for ${uniqueTaskResourceIds.length} unique task resources`);
             
             for (const resourceId of uniqueTaskResourceIds) {
               try {
@@ -4074,7 +4136,7 @@ export class EnhancedAutotaskToolHandler {
 
   private async searchTimeEntries(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
     try {
-      const { ticketID, taskID, resourceID,resourceId, dateFrom, dateTo, pageSize } = args;
+      const { ticketID, taskID, resourceID, resourceId, dateFrom, dateTo, pageSize, page } = args;
       
       // Build filter for time entries search
       const filter: any[] = [];
@@ -4108,50 +4170,17 @@ export class EnhancedAutotaskToolHandler {
       }
 
       const queryOptions: any = {
-        filter
+        filter,
+        page: page || 1,
+        pageSize: pageSize || 100
       };
+
+      // Use the new pagination-aware method
+      const paginatedResult = await this.autotaskService.getTimeEntriesWithPagination(queryOptions, tenantContext);
       
-      // Explicitly handle pageSize to ensure it's passed through (including pageSize: 1)
-      if (pageSize !== undefined) {
-        queryOptions.pageSize = pageSize;
-      }
-
-      const timeEntries = await this.autotaskService.getTimeEntries(queryOptions, tenantContext);
+      // Return formatted result with mandatory "Showing X of Y" pattern
+      return formatPaginatedResult(paginatedResult, 'search_time_entries');
       
-      const content = [{
-        type: 'text',
-        text: JSON.stringify(timeEntries, null, 2)
-      }];
-
-      // Check if we're hitting the threshold limit and show guidance proactively
-      const threshold = LARGE_RESPONSE_THRESHOLDS.timeentries;
-      const isHittingLimit = pageSize !== undefined && pageSize >= threshold;
-      const shouldShowGuidance = isHittingLimit || timeEntries.length >= threshold;
-
-      let contentWithGuidance = content;
-      if (shouldShowGuidance) {
-        const guidanceMessage = isHittingLimit 
-          ? `Requested ${pageSize} entries (limit: ${threshold}). For more focused results, try:\n` +
-            `  • Use \`ticketID\` to search time entries for a specific ticket\n` +
-            `  • Use \`taskID\` to search time entries for a specific task\n` + 
-            `  • Use \`resourceId\` to find time entries by a specific person\n` +
-            `  • Add date filters with \`dateFrom\` and \`dateTo\` (YYYY-MM-DD format)\n` +
-            `  • Use smaller \`pageSize\` parameter (current: ${pageSize})`
-          : this.generateSearchGuidance('timeentries', timeEntries.length, Math.round(JSON.stringify(content).length / 1024));
-
-        contentWithGuidance = [
-          ...content,
-          {
-            type: 'text',
-            text: `\n\n🔍 **Search Guidance**: ${guidanceMessage}`
-          }
-        ];
-      }
-      
-      return {
-        content: contentWithGuidance,
-        isError: false
-      };
     } catch (error) {
       throw new Error(`Failed to search time entries: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
@@ -4979,11 +5008,12 @@ export class EnhancedAutotaskToolHandler {
 
   private async getCompaniesPage(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
     try {
-             // This is essentially the same as searchCompanies but optimized for pagination
-       const options: any = {
-         page: args.page || 1,
-         pageSize: Math.min(args.pageSize || 50, 2000) // Respect the new 2000 limit
-       };
+      // This is essentially the same as searchCompanies but optimized for pagination
+      // Enforce page size limits from centralized config
+      const options: any = {
+        page: args.page || 1,
+        pageSize: Math.min(args.pageSize || PAGINATION_CONFIG.DEFAULT_PAGE_SIZE, PAGINATION_CONFIG.MAX_PAGE_SIZE)
+      };
       
       if (args.searchTerm) {
         options.filter = [{

@@ -1,9 +1,14 @@
 // Server-Sent Events Manager for Autotask MCP
 // Provides real-time streaming of Autotask data and events
+// Refactored with proper polling session management
 
 import { Response } from 'express';
 import { McpHttpBridge, HttpToolRequest } from './mcp-bridge.js';
 import { Logger } from '../utils/logger.js';
+
+// ============================================
+// Interfaces and Types
+// ============================================
 
 export interface SseClient {
   id: string;
@@ -11,6 +16,7 @@ export interface SseClient {
   tenantId: string | undefined;
   lastActivity: Date;
   subscriptions: Set<string>;
+  connectedAt: Date;
 }
 
 export interface SseMessage {
@@ -20,11 +26,82 @@ export interface SseMessage {
   retry?: number;
 }
 
+/**
+ * Configuration for a polling session
+ */
+export interface PollingConfig {
+  intervalMs: number;
+  entities: ('tickets' | 'companies' | 'timeEntries')[];
+  pageSize: number;
+  filters?: Record<string, any>;
+}
+
+/**
+ * Active polling session with health tracking
+ */
+export interface PollingSession {
+  pollId: string;
+  tenantId: string;
+  config: PollingConfig;
+  interval: NodeJS.Timeout;
+  startedAt: Date;
+  lastPollAt: Date | null;
+  pollCount: number;
+  errorCount: number;
+  consecutiveErrors: number;
+  lastError?: string;
+  isHealthy: boolean;
+}
+
+/**
+ * SSE Event Types - comprehensive list for real-time feedback
+ */
+export const SSE_EVENT_TYPES = {
+  // Connection events
+  CONNECTED: 'connected',
+  DISCONNECTED: 'disconnected',
+  HEARTBEAT: 'heartbeat',
+  
+  // Data update events
+  TICKETS_UPDATE: 'tickets-update',
+  COMPANIES_UPDATE: 'companies-update',
+  TIME_ENTRIES_UPDATE: 'time-entries-update',
+  
+  // Pagination events
+  PAGINATION_WARNING: 'pagination-warning',
+  DATA_SYNC_COMPLETE: 'data-sync-complete',
+  
+  // Rate limiting events  
+  RATE_LIMIT_WARNING: 'rate-limit-warning',
+  RATE_LIMIT_EXCEEDED: 'rate-limit-exceeded',
+  
+  // Polling events
+  POLLING_STARTED: 'polling-started',
+  POLLING_STOPPED: 'polling-stopped',
+  POLLING_ERROR: 'polling-error',
+  POLLING_HEALTH: 'polling-health',
+  
+  // Operation events
+  OPERATION_COMPLETE: 'operation-complete',
+  SUBSCRIPTION_UPDATED: 'subscription-updated',
+} as const;
+
+// Circuit breaker constants for polling
+const POLLING_CIRCUIT_BREAKER = {
+  maxConsecutiveErrors: 3,
+  cooldownPeriodMs: 60000, // 1 minute cooldown
+  healthCheckIntervalMs: 30000, // 30 second health checks
+};
+
 export class SseManager {
   private clients: Map<string, SseClient> = new Map();
   private bridge: McpHttpBridge;
   private logger: Logger;
   private cleanupInterval: NodeJS.Timeout;
+  
+  // Proper polling session management (not using `this as any`)
+  private pollingSessions: Map<string, PollingSession> = new Map();
+  private pollingHealthCheckInterval: NodeJS.Timeout | null = null;
 
   constructor(bridge: McpHttpBridge, logger: Logger) {
     this.bridge = bridge;
@@ -34,7 +111,14 @@ export class SseManager {
     this.cleanupInterval = setInterval(() => {
       this.cleanupInactiveClients();
     }, 30000);
+    
+    // Start polling health check
+    this.startPollingHealthCheck();
   }
+
+  // ============================================
+  // Client Management
+  // ============================================
 
   /**
    * Add a new SSE client
@@ -49,11 +133,13 @@ export class SseManager {
       'Access-Control-Allow-Headers': 'Cache-Control'
     });
 
+    const now = new Date();
     const client: SseClient = {
       id: clientId,
       response,
       tenantId,
-      lastActivity: new Date(),
+      lastActivity: now,
+      connectedAt: now,
       subscriptions: new Set()
     };
 
@@ -66,12 +152,13 @@ export class SseManager {
 
     // Send initial connection message
     this.sendToClient(clientId, {
-      event: 'connected',
+      event: SSE_EVENT_TYPES.CONNECTED,
       data: {
         clientId,
         tenantId,
-        timestamp: new Date().toISOString(),
-        message: 'Connected to Autotask SSE stream'
+        timestamp: now.toISOString(),
+        message: 'Connected to Autotask SSE stream',
+        availableEvents: Object.values(SSE_EVENT_TYPES)
       }
     });
 
@@ -87,7 +174,7 @@ export class SseManager {
     if (client) {
       try {
         client.response.end();
-      } catch (error) {
+      } catch {
         // Client may already be disconnected
       }
       this.clients.delete(clientId);
@@ -150,7 +237,7 @@ export class SseManager {
     });
 
     this.sendToClient(clientId, {
-      event: 'subscription-updated',
+      event: SSE_EVENT_TYPES.SUBSCRIPTION_UPDATED,
       data: {
         subscriptions: Array.from(client.subscriptions),
         timestamp: new Date().toISOString()
@@ -160,77 +247,310 @@ export class SseManager {
     return true;
   }
 
+  // ============================================
+  // Polling Session Management
+  // ============================================
+
   /**
    * Start polling Autotask data for real-time updates
+   * Returns pollId for session management
    */
-  async startPolling(tenant: HttpToolRequest['tenant'], intervalMs: number = 30000): Promise<string> {
+  async startPolling(
+    tenant: HttpToolRequest['tenant'], 
+    intervalMs: number = 30000,
+    config?: Partial<PollingConfig>
+  ): Promise<string> {
     if (!tenant) {
       throw new Error('Tenant credentials required for polling');
     }
 
-    const pollId = `poll_${tenant.tenantId || 'unknown'}_${Date.now()}`;
+    const tenantId = tenant.tenantId || 'unknown';
+    const pollId = `poll_${tenantId}_${Date.now()}`;
     
+    const pollingConfig: PollingConfig = {
+      intervalMs,
+      entities: config?.entities || ['tickets'],
+      pageSize: config?.pageSize || 10,
+      ...(config?.filters && { filters: config.filters })
+    };
+
+    // Create polling session
+    const session: PollingSession = {
+      pollId,
+      tenantId,
+      config: pollingConfig,
+      interval: null as any, // Will be set below
+      startedAt: new Date(),
+      lastPollAt: null,
+      pollCount: 0,
+      errorCount: 0,
+      consecutiveErrors: 0,
+      isHealthy: true
+    };
+
+    // Create the polling interval
     const pollInterval = setInterval(async () => {
-      try {
-        // Poll for recent tickets
+      await this.executePoll(pollId, tenant);
+    }, intervalMs);
+
+    session.interval = pollInterval;
+    this.pollingSessions.set(pollId, session);
+
+    // Notify clients about polling start
+    this.broadcast({
+      event: SSE_EVENT_TYPES.POLLING_STARTED,
+      data: {
+        pollId,
+        tenantId,
+        intervalMs,
+        entities: pollingConfig.entities,
+        timestamp: new Date().toISOString()
+      }
+    }, tenantId);
+
+    this.logger.info(`Started polling session: ${pollId}`, { 
+      tenantId, 
+      intervalMs,
+      entities: pollingConfig.entities 
+    });
+    
+    return pollId;
+  }
+
+  /**
+   * Execute a single poll cycle
+   */
+  private async executePoll(pollId: string, tenant: HttpToolRequest['tenant']): Promise<void> {
+    const session = this.pollingSessions.get(pollId);
+    if (!session || !tenant) {
+      return;
+    }
+
+    // Check circuit breaker
+    if (!session.isHealthy) {
+      const cooldownElapsed = session.lastPollAt && 
+        (Date.now() - session.lastPollAt.getTime() > POLLING_CIRCUIT_BREAKER.cooldownPeriodMs);
+      
+      if (!cooldownElapsed) {
+        return; // Still in cooldown
+      }
+      
+      // Try to recover
+      session.isHealthy = true;
+      session.consecutiveErrors = 0;
+      this.logger.info(`Polling session ${pollId} attempting recovery from circuit breaker`);
+    }
+
+    try {
+      session.pollCount++;
+      session.lastPollAt = new Date();
+
+      // Poll for tickets
+      if (session.config.entities.includes('tickets')) {
         const ticketResult = await this.bridge.callTool('search_tickets', {
           arguments: {
-            pageSize: 10,
-            // You could add filters for recent tickets here
+            pageSize: session.config.pageSize,
+            ...session.config.filters
           },
           tenant
         });
 
         if (ticketResult.success) {
           this.broadcast({
-            event: 'tickets-update',
+            event: SSE_EVENT_TYPES.TICKETS_UPDATE,
             data: {
               tickets: ticketResult.data,
-              timestamp: new Date().toISOString(),
-              pollId
+              pollId,
+              pollCount: session.pollCount,
+              timestamp: new Date().toISOString()
             }
-          }, tenant.tenantId);
+          }, session.tenantId);
         }
+      }
 
-        // Poll for companies if needed
-        // const companiesResult = await this.bridge.callTool('search_companies', {
-        //   arguments: { pageSize: 5 },
-        //   tenant
-        // });
+      // Poll for time entries if configured
+      if (session.config.entities.includes('timeEntries')) {
+        const timeResult = await this.bridge.callTool('search_time_entries', {
+          arguments: {
+            pageSize: session.config.pageSize,
+            ...session.config.filters
+          },
+          tenant
+        });
 
-      } catch (error) {
-        this.logger.error(`Polling error for ${pollId}:`, error);
+        if (timeResult.success) {
+          this.broadcast({
+            event: SSE_EVENT_TYPES.TIME_ENTRIES_UPDATE,
+            data: {
+              timeEntries: timeResult.data,
+              pollId,
+              pollCount: session.pollCount,
+              timestamp: new Date().toISOString()
+            }
+          }, session.tenantId);
+        }
+      }
+
+      // Reset error counters on success
+      session.consecutiveErrors = 0;
+      session.isHealthy = true;
+
+    } catch (error) {
+      session.errorCount++;
+      session.consecutiveErrors++;
+      session.lastError = error instanceof Error ? error.message : 'Unknown error';
+      
+      this.logger.error(`Polling error for ${pollId}:`, {
+        error: session.lastError,
+        consecutiveErrors: session.consecutiveErrors,
+        totalErrors: session.errorCount
+      });
+
+      // Trip circuit breaker if too many consecutive errors
+      if (session.consecutiveErrors >= POLLING_CIRCUIT_BREAKER.maxConsecutiveErrors) {
+        session.isHealthy = false;
+        this.logger.warn(`Circuit breaker OPEN for polling session ${pollId}`);
         
         this.broadcast({
-          event: 'polling-error',
+          event: SSE_EVENT_TYPES.POLLING_ERROR,
           data: {
-            error: error instanceof Error ? error.message : 'Polling failed',
             pollId,
+            error: session.lastError,
+            consecutiveErrors: session.consecutiveErrors,
+            circuitBreakerOpen: true,
+            cooldownMs: POLLING_CIRCUIT_BREAKER.cooldownPeriodMs,
             timestamp: new Date().toISOString()
           }
-        }, tenant.tenantId);
+        }, session.tenantId);
+      } else {
+        this.broadcast({
+          event: SSE_EVENT_TYPES.POLLING_ERROR,
+          data: {
+            pollId,
+            error: session.lastError,
+            consecutiveErrors: session.consecutiveErrors,
+            timestamp: new Date().toISOString()
+          }
+        }, session.tenantId);
       }
-    }, intervalMs);
-
-    // Store the interval for cleanup (in a real implementation, you'd want a more robust system)
-    (this as any)[`interval_${pollId}`] = pollInterval;
-
-    this.logger.info(`Started polling for tenant: ${tenant.tenantId || 'unknown'}`, { pollId, intervalMs });
-    return pollId;
+    }
   }
 
   /**
-   * Stop polling
+   * Stop polling session
    */
   stopPolling(pollId: string): boolean {
-    const interval = (this as any)[`interval_${pollId}`];
-    if (interval) {
-      clearInterval(interval);
-      delete (this as any)[`interval_${pollId}`];
-      this.logger.info(`Stopped polling: ${pollId}`);
-      return true;
+    const session = this.pollingSessions.get(pollId);
+    if (!session) {
+      return false;
     }
-    return false;
+
+    clearInterval(session.interval);
+    this.pollingSessions.delete(pollId);
+
+    // Notify clients
+    this.broadcast({
+      event: SSE_EVENT_TYPES.POLLING_STOPPED,
+      data: {
+        pollId,
+        totalPolls: session.pollCount,
+        totalErrors: session.errorCount,
+        duration: Date.now() - session.startedAt.getTime(),
+        timestamp: new Date().toISOString()
+      }
+    }, session.tenantId);
+
+    this.logger.info(`Stopped polling session: ${pollId}`, {
+      totalPolls: session.pollCount,
+      totalErrors: session.errorCount
+    });
+    
+    return true;
+  }
+
+  /**
+   * Get polling session info
+   */
+  getPollingSession(pollId: string): PollingSession | undefined {
+    return this.pollingSessions.get(pollId);
+  }
+
+  /**
+   * Get all active polling sessions for a tenant
+   */
+  getPollingSessionsForTenant(tenantId: string): PollingSession[] {
+    const sessions: PollingSession[] = [];
+    for (const session of this.pollingSessions.values()) {
+      if (session.tenantId === tenantId) {
+        sessions.push(session);
+      }
+    }
+    return sessions;
+  }
+
+  /**
+   * Start periodic health check for all polling sessions
+   */
+  private startPollingHealthCheck(): void {
+    this.pollingHealthCheckInterval = setInterval(() => {
+      for (const [pollId, session] of this.pollingSessions) {
+        this.broadcast({
+          event: SSE_EVENT_TYPES.POLLING_HEALTH,
+          data: {
+            pollId,
+            isHealthy: session.isHealthy,
+            pollCount: session.pollCount,
+            errorCount: session.errorCount,
+            consecutiveErrors: session.consecutiveErrors,
+            lastPollAt: session.lastPollAt?.toISOString(),
+            uptime: Date.now() - session.startedAt.getTime(),
+            timestamp: new Date().toISOString()
+          }
+        }, session.tenantId);
+      }
+    }, POLLING_CIRCUIT_BREAKER.healthCheckIntervalMs);
+  }
+
+  // ============================================
+  // Event Helpers
+  // ============================================
+
+  /**
+   * Send pagination warning event
+   */
+  sendPaginationWarning(tenantId: string, details: {
+    entity: string;
+    showing: number;
+    total: number;
+    percentComplete: number;
+  }): void {
+    this.broadcast({
+      event: SSE_EVENT_TYPES.PAGINATION_WARNING,
+      data: {
+        ...details,
+        message: `INCOMPLETE DATA: Showing ${details.showing} of ${details.total} ${details.entity} (${details.percentComplete}%)`,
+        timestamp: new Date().toISOString()
+      }
+    }, tenantId);
+  }
+
+  /**
+   * Send rate limit warning event
+   */
+  sendRateLimitWarning(tenantId: string, currentCount: number, limit: number): void {
+    const percentUsed = Math.round((currentCount / limit) * 100);
+    
+    this.broadcast({
+      event: SSE_EVENT_TYPES.RATE_LIMIT_WARNING,
+      data: {
+        currentCount,
+        limit,
+        percentUsed,
+        remaining: limit - currentCount,
+        message: `API rate limit warning: ${currentCount}/${limit} requests used (${percentUsed}%)`,
+        timestamp: new Date().toISOString()
+      }
+    }, tenantId);
   }
 
   /**
@@ -238,7 +558,7 @@ export class SseManager {
    */
   async notifyOperationComplete(operation: string, result: any, tenantId?: string): Promise<void> {
     this.broadcast({
-      event: 'operation-complete',
+      event: SSE_EVENT_TYPES.OPERATION_COMPLETE,
       data: {
         operation,
         result,
@@ -247,11 +567,27 @@ export class SseManager {
     }, tenantId);
   }
 
+  // ============================================
+  // Statistics and Monitoring
+  // ============================================
+
   /**
-   * Get client statistics
+   * Get comprehensive statistics
    */
   getStats() {
-    const stats = {
+    const pollingSessions: any[] = [];
+    for (const session of this.pollingSessions.values()) {
+      pollingSessions.push({
+        pollId: session.pollId,
+        tenantId: session.tenantId,
+        isHealthy: session.isHealthy,
+        pollCount: session.pollCount,
+        errorCount: session.errorCount,
+        uptime: Date.now() - session.startedAt.getTime()
+      });
+    }
+
+    const clientStats = {
       totalClients: this.clients.size,
       clientsByTenant: {} as Record<string, number>,
       clientsWithSubscriptions: 0
@@ -259,15 +595,24 @@ export class SseManager {
 
     for (const client of this.clients.values()) {
       if (client.tenantId) {
-        stats.clientsByTenant[client.tenantId] = (stats.clientsByTenant[client.tenantId] || 0) + 1;
+        clientStats.clientsByTenant[client.tenantId] = 
+          (clientStats.clientsByTenant[client.tenantId] || 0) + 1;
       }
       if (client.subscriptions.size > 0) {
-        stats.clientsWithSubscriptions++;
+        clientStats.clientsWithSubscriptions++;
       }
     }
 
-    return stats;
+    return {
+      clients: clientStats,
+      pollingSessions,
+      totalPollingSessions: this.pollingSessions.size
+    };
   }
+
+  // ============================================
+  // Internal Helpers
+  // ============================================
 
   /**
    * Format message for SSE protocol
@@ -326,11 +671,22 @@ export class SseManager {
   }
 
   /**
-   * Cleanup manager
+   * Cleanup manager - call on shutdown
    */
   destroy(): void {
+    // Stop cleanup interval
     if (this.cleanupInterval) {
       clearInterval(this.cleanupInterval);
+    }
+    
+    // Stop health check interval
+    if (this.pollingHealthCheckInterval) {
+      clearInterval(this.pollingHealthCheckInterval);
+    }
+    
+    // Stop all polling sessions
+    for (const pollId of this.pollingSessions.keys()) {
+      this.stopPolling(pollId);
     }
     
     // Close all client connections
@@ -338,11 +694,6 @@ export class SseManager {
       this.removeClient(clientId);
     }
     
-    // Stop all polling intervals
-    Object.keys(this).forEach(key => {
-      if (key.startsWith('interval_')) {
-        clearInterval((this as any)[key]);
-      }
-    });
+    this.logger.info('SSE Manager destroyed');
   }
-} 
+}

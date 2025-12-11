@@ -27,6 +27,9 @@ export class AutotaskSseServer {
 
     if (envConfig.multiTenant?.enabled) {
       // Multi-tenant configuration
+      this.logger.info('🏢 Starting in MULTI-TENANT mode');
+      this.logger.info('   Credentials will be required per-request via _tenant argument');
+      
       const configOptions: any = {
         name: envConfig.server.name,
         version: envConfig.server.version
@@ -42,6 +45,26 @@ export class AutotaskSseServer {
       }
       mcpConfig = createMultiTenantConfig(configOptions);
     } else {
+      // Single-tenant mode - validate credentials
+      this.logger.info('🏠 Starting in SINGLE-TENANT mode');
+      
+      const { username, secret, integrationCode } = envConfig.autotask || {};
+      if (!username || !secret || !integrationCode) {
+        const missing = [];
+        if (!username) missing.push('AUTOTASK_USERNAME');
+        if (!secret) missing.push('AUTOTASK_SECRET');
+        if (!integrationCode) missing.push('AUTOTASK_INTEGRATION_CODE');
+        
+        this.logger.warn('⚠️  WARNING: Missing required credentials for single-tenant mode!');
+        this.logger.warn(`   Missing: ${missing.join(', ')}`);
+        this.logger.warn('   Options:');
+        this.logger.warn('   1. Set the missing environment variables, OR');
+        this.logger.warn('   2. Enable multi-tenant mode: MULTI_TENANT_ENABLED=true');
+        this.logger.warn('   Tool calls will fail until credentials are configured.');
+      } else {
+        this.logger.info('   ✅ Autotask credentials configured');
+      }
+      
       mcpConfig = mergeWithMcpConfig(envConfig);
     }
 

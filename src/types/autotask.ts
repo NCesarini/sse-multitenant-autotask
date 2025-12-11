@@ -1,5 +1,111 @@
 // Autotask Entity Type Definitions
-// Based on the autotask-node library types
+// Based on @apigrate/autotask-restapi library types
+
+// ============================================
+// Pagination Configuration - Single Source of Truth
+// ============================================
+
+/**
+ * Centralized pagination configuration
+ * All search methods MUST respect these limits
+ */
+export const PAGINATION_CONFIG = {
+  /** Max items per page - request up to this many at once */
+  MAX_PAGE_SIZE: 200,
+  /** Default page size when not specified */
+  DEFAULT_PAGE_SIZE: 100,
+  /** Autotask API hard limit - cannot exceed this per API call */
+  API_MAX: 500,
+  /** Informational: max pages recommended per conversation turn */
+  MAX_PAGES_PER_CALL: 5,
+  /** Informational: max items per conversation turn (5 pages x 200) */
+  MAX_ITEMS_PER_CALL: 1000
+} as const;
+
+// ============================================
+// Pagination Types for "Showing X of Y" Pattern
+// ============================================
+
+/**
+ * Pagination information included in all search responses
+ * Enables AI agents to detect incomplete data and fetch remaining pages
+ */
+export interface PaginationInfo {
+  /** Number of items in current response */
+  showing: number;
+  /** Total count of matching items (from Autotask count API or pageDetails) */
+  total: number;
+  /** Whether total is exact or estimated */
+  totalKnown: boolean;
+  /** Current page number (1-based) */
+  currentPage: number;
+  /** Number of items per page */
+  pageSize: number;
+  /** Whether more pages are available */
+  hasMore: boolean;
+  /** URL to fetch next page (if available) */
+  nextPageUrl?: string;
+  /** URL to fetch previous page (if available) */
+  prevPageUrl?: string;
+  /** Percentage of total data retrieved */
+  percentComplete: number;
+}
+
+/**
+ * Wrapper for paginated API responses
+ * All search tools return this format for consistency
+ */
+export interface PaginatedResponse<T> {
+  /** The actual data items */
+  items: T[];
+  /** Pagination metadata for AI agent decision making */
+  pagination: PaginationInfo;
+  /** 
+   * Human-readable warning when data is incomplete
+   * Format: "PAGINATION STATUS: Showing X of Y entries. WARNING: INCOMPLETE DATA."
+   */
+  _paginationStatus: string;
+  /**
+   * Procedural instruction for AI agent
+   * Only present when hasMore is true
+   */
+  _nextAction?: string;
+}
+
+/**
+ * Creates a formatted pagination status message with clear next steps
+ */
+export function formatPaginationStatus(pagination: PaginationInfo): string {
+  if (!pagination.hasMore) {
+    return `PAGINATION STATUS: Showing ${pagination.showing} of ${pagination.total} entries (COMPLETE - ALL DATA RETRIEVED)`;
+  }
+  
+  const remaining = pagination.total - pagination.showing;
+  const percentRetrieved = pagination.percentComplete.toFixed(1);
+  const nextPage = pagination.currentPage + 1;
+  const totalPagesNeeded = Math.ceil(pagination.total / pagination.pageSize);
+  
+  // Calculate what range the next page will return
+  const nextPageStart = pagination.showing + 1;
+  const nextPageEnd = Math.min(pagination.showing + pagination.pageSize, pagination.total);
+  
+  return `PAGINATION STATUS: Showing ${pagination.showing} of ${pagination.total} entries\n` +
+    `DATA INCOMPLETE: ${percentRetrieved}% retrieved\n` +
+    `REMAINING: ${remaining} more entries\n` +
+    `NEXT STEP: Call same tool with page=${nextPage} to get items ${nextPageStart}-${nextPageEnd}\n` +
+    `FULL RETRIEVAL: Will require ${totalPagesNeeded} total calls (pages 1-${totalPagesNeeded})`;
+}
+
+/**
+ * Creates the next action instruction for incomplete data
+ */
+export function formatNextAction(pagination: PaginationInfo, toolName: string): string {
+  if (!pagination.hasMore) {
+    return '';
+  }
+  
+  return `REQUIRED ACTION: Call ${toolName} with page=${pagination.currentPage + 1} to retrieve next batch`;
+}
 
 export interface AutotaskCompany {
   id?: number;
@@ -272,27 +378,85 @@ export interface AutotaskUserDefinedField {
   value: string;
 }
 
+// ============================================
 // API Response wrapper types
+// Based on @apigrate/autotask-restapi format
+// ============================================
+
+/**
+ * Raw API response from Autotask REST API
+ * This is what the @apigrate library returns
+ */
 export interface AutotaskApiResponse<T> {
   items: T[];
-  pageDetails?: {
-    count: number;
-    requestCount: number;
-    prevPageUrl?: string;
-    nextPageUrl?: string;
-  };
+  pageDetails?: AutotaskPageDetails;
+}
+
+/**
+ * Page details returned by Autotask API
+ * Critical for implementing "Showing X of Y" pattern
+ */
+export interface AutotaskPageDetails {
+  /** Number of items in current page */
+  count: number;
+  /** Number of items requested (pageSize) */
+  requestCount: number;
+  /** URL to previous page (null if first page) */
+  prevPageUrl: string | null;
+  /** URL to next page (null if last page) */
+  nextPageUrl: string | null;
+}
+
+/**
+ * Response from count API endpoint
+ */
+export interface AutotaskCountResponse {
+  queryCount: number;
 }
 
 export interface AutotaskApiSingleResponse<T> {
   item: T;
+  itemId?: number;
 }
 
-// Filter and query types that match autotask-node structure
+/**
+ * Filter operators supported by Autotask REST API
+ */
+export type AutotaskFilterOperator = 
+  | 'eq'          // equals
+  | 'noteq'       // not equals
+  | 'gt'          // greater than
+  | 'gte'         // greater than or equal
+  | 'lt'          // less than
+  | 'lte'         // less than or equal
+  | 'beginsWith'  // string starts with
+  | 'endsWith'    // string ends with
+  | 'contains'    // string contains
+  | 'exist'       // field has value
+  | 'notExist'    // field is null
+  | 'in'          // value in list
+  | 'notIn';      // value not in list
+
+/**
+ * Single filter condition for Autotask queries
+ */
+export interface AutotaskFilterCondition {
+  field: string;
+  op: AutotaskFilterOperator;
+  value: any;
+  /** Set to true for user-defined fields */
+  udf?: boolean;
+}
+
+/**
+ * Query options matching @apigrate/autotask-restapi format
+ */
 export interface AutotaskQueryOptions {
-  filter?: Record<string, any>;
+  filter?: AutotaskFilterCondition[] | Record<string, any>;
   sort?: string;
   page?: number;
   pageSize?: number;
+  includeFields?: string[];
 }
 
 // Extended query options for more advanced queries

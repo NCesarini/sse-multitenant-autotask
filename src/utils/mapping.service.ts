@@ -161,7 +161,7 @@ export class MappingService {
         pageSize: 0 // Get all companies to find this specific one
       }, tenantContext);
       
-      this.logger.info(`companies ${JSON.stringify(companies)}`);
+      this.logger.info(`Fetched ${companies.length} companies for ID lookup`);
       const company = companies.find((c: any) => c.id === companyId);
       if (company && company.companyName) {
         // Add to cache for future use

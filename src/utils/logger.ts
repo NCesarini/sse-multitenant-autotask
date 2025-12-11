@@ -38,7 +38,8 @@ export class Logger {
       format: format === 'json' 
         ? winston.format.combine(
             winston.format.timestamp(),
-            winston.format.printf(({ timestamp, level, message, ...meta }) => {
+            winston.format.printf((info) => {
+              const { timestamp, level, message, ...meta } = info as { timestamp: string; level: string; message: string; [key: string]: unknown };
               const logObject = {
                 level,
                 message,
@@ -50,7 +51,8 @@ export class Logger {
           )
         : winston.format.combine(
             winston.format.timestamp(),
-            winston.format.printf(({ timestamp, level, message, ...meta }) => {
+            winston.format.printf((info) => {
+              const { timestamp, level, message, ...meta } = info as { timestamp: string; level: string; message: string; [key: string]: unknown };
               const metaStr = Object.keys(meta).length > 0 ? ` ${safeStringify(meta)}` : '';
               return `${timestamp} [${level.toUpperCase()}]: ${message}${metaStr}`;
             })

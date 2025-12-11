@@ -135,11 +135,7 @@ export class AutotaskMcpServer {
             this.logger.info('🏢 MCP tool call includes tenant credentials', {
               requestId,
               toolName: request.params.name,
-              tenantId: tenantInfo.tenantId,
-              username: tenantInfo.username ? `${tenantInfo.username.substring(0, 3)}***` : undefined,
-              hasSecret: !!tenantInfo.secret,
-              hasIntegrationCode: !!tenantInfo.integrationCode,
-              hasApiUrl: !!tenantInfo.apiUrl
+              tenantId: tenantInfo.tenantId, 
             });
           } else {
             this.logger.info('🏠 MCP tool call using single-tenant mode', {
