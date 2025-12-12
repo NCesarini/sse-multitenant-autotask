@@ -3409,45 +3409,73 @@ Common use cases:
         }
       }
       
-      // Enhanced results with mapped names
+      // Enhanced results with mapped names - using sequential lookup to avoid rate limiting
       const mappingService = await this.getMappingService();
-      const enhancedTickets = await Promise.all(
-        tickets.map(async (ticket: any) => {
-          const enhanced: any = { ...ticket };
-          
-          // Add company name if available
-          if (ticket.companyID) {
-            try {
-              enhanced._enhanced = enhanced._enhanced || {};
-              enhanced._enhanced.companyName = await mappingService.getCompanyName(ticket.companyID, tenantContext);
-            } catch (error) {
-              this.logger.info(`Failed to map company ID ${ticket.companyID}:`, error);
-              enhanced._enhanced = enhanced._enhanced || {};
-              enhanced._enhanced.companyName = `Unknown (${ticket.companyID})`;
-            }
+      
+      // Collect unique IDs to minimize API calls
+      const uniqueCompanyIds = new Set<number>();
+      const uniqueResourceIds = new Set<number>();
+      for (const ticket of tickets) {
+        if (ticket.companyID) uniqueCompanyIds.add(ticket.companyID);
+        if (ticket.assignedResourceID) uniqueResourceIds.add(ticket.assignedResourceID);
+      }
+      
+      // Pre-fetch unique names sequentially to avoid rate limiting (max 3 concurrent in Autotask)
+      const companyNameMap = new Map<number, string>();
+      const resourceNameMap = new Map<number, string>();
+      let rateLimitHit = false;
+      
+      // Fetch company names sequentially (stop if rate limited)
+      for (const companyId of uniqueCompanyIds) {
+        if (rateLimitHit) break;
+        try {
+          const name = await mappingService.getCompanyName(companyId, tenantContext);
+          if (name) companyNameMap.set(companyId, name);
+        } catch (error) {
+          const errorMsg = error instanceof Error ? error.message : '';
+          if (errorMsg.includes('429') || errorMsg.includes('Circuit breaker')) {
+            this.logger.warn(`Rate limit hit during company name lookup - skipping remaining enhancements`);
+            rateLimitHit = true;
           }
+        }
+      }
+      
+      // Fetch resource names sequentially (stop if rate limited)
+      for (const resourceId of uniqueResourceIds) {
+        if (rateLimitHit) break;
+        try {
+          const name = await mappingService.getResourceName(resourceId, tenantContext);
+          if (name) resourceNameMap.set(resourceId, name);
+        } catch (error) {
+          const errorMsg = error instanceof Error ? error.message : '';
+          if (errorMsg.includes('429') || errorMsg.includes('Circuit breaker')) {
+            this.logger.warn(`Rate limit hit during resource name lookup - skipping remaining enhancements`);
+            rateLimitHit = true;
+          }
+        }
+      }
+      
+      // Now enhance tickets using the pre-fetched maps (no API calls)
+      const enhancedTickets = tickets.map((ticket: any) => {
+        const enhanced: any = { ...ticket };
+        
+        if (ticket.companyID) {
+          enhanced._enhanced = enhanced._enhanced || {};
+          enhanced._enhanced.companyName = companyNameMap.get(ticket.companyID) || `Company ID: ${ticket.companyID}`;
+        }
 
-          // Add assigned resource name if available
-          if (ticket.assignedResourceID) {
-            try {
-              enhanced._enhanced = enhanced._enhanced || {};
-              enhanced._enhanced.assignedResourceName = await mappingService.getResourceName(ticket.assignedResourceID, tenantContext);
-            } catch (error) {
-              this.logger.info(`Failed to map assigned resource ID ${ticket.assignedResourceID}:`, error);
-              enhanced._enhanced = enhanced._enhanced || {};
-              enhanced._enhanced.assignedResourceName = `Unknown (${ticket.assignedResourceID})`;
-            }
-          }
+        if (ticket.assignedResourceID) {
+          enhanced._enhanced = enhanced._enhanced || {};
+          enhanced._enhanced.assignedResourceName = resourceNameMap.get(ticket.assignedResourceID) || `Resource ID: ${ticket.assignedResourceID}`;
+        }
 
-          // Note: Contact name mapping would require additional implementation
-          if (ticket.contactID) {
-            enhanced._enhanced = enhanced._enhanced || {};
-            enhanced._enhanced.contactName = `Contact ID: ${ticket.contactID}`;
-          }
-          
-          return enhanced;
-        })
-      );
+        if (ticket.contactID) {
+          enhanced._enhanced = enhanced._enhanced || {};
+          enhanced._enhanced.contactName = `Contact ID: ${ticket.contactID}`;
+        }
+        
+        return enhanced;
+      });
 
       const resultsText = enhancedTickets.length > 0 
         ? `Found ${enhancedTickets.length} tickets:\n\n${enhancedTickets.map(ticket => 
@@ -4738,39 +4766,66 @@ Common use cases:
 
       const opportunities = await this.autotaskService.searchOpportunities(queryOptions, tenantContext);
       
-      // Enhanced results with mapped names
+      // Enhanced results with mapped names - using sequential lookup to avoid rate limiting
       const mappingService = await this.getMappingService();
-      const enhancedOpportunities = await Promise.all(
-        opportunities.map(async (opportunity: any) => {
-          const enhanced: any = { ...opportunity };
-          
-          // Add company name if available
-          if (opportunity.companyID) {
-            try {
-              enhanced._enhanced = enhanced._enhanced || {};
-              enhanced._enhanced.companyName = await mappingService.getCompanyName(opportunity.companyID, tenantContext);
-            } catch (error) {
-              this.logger.info(`Failed to map company ID ${opportunity.companyID}:`, error);
-              enhanced._enhanced = enhanced._enhanced || {};
-              enhanced._enhanced.companyName = `Unknown (${opportunity.companyID})`;
-            }
+      
+      // Collect unique IDs to minimize API calls
+      const uniqueCompanyIds = new Set<number>();
+      const uniqueResourceIds = new Set<number>();
+      for (const opportunity of opportunities) {
+        if (opportunity.companyID) uniqueCompanyIds.add(opportunity.companyID);
+        if (opportunity.ownerResourceID) uniqueResourceIds.add(opportunity.ownerResourceID);
+      }
+      
+      // Pre-fetch unique names sequentially to avoid rate limiting
+      const companyNameMap = new Map<number, string>();
+      const resourceNameMap = new Map<number, string>();
+      let rateLimitHit = false;
+      
+      for (const companyId of uniqueCompanyIds) {
+        if (rateLimitHit) break;
+        try {
+          const name = await mappingService.getCompanyName(companyId, tenantContext);
+          if (name) companyNameMap.set(companyId, name);
+        } catch (error) {
+          const errorMsg = error instanceof Error ? error.message : '';
+          if (errorMsg.includes('429') || errorMsg.includes('Circuit breaker')) {
+            this.logger.warn(`Rate limit hit during company name lookup - skipping remaining enhancements`);
+            rateLimitHit = true;
           }
+        }
+      }
+      
+      for (const resourceId of uniqueResourceIds) {
+        if (rateLimitHit) break;
+        try {
+          const name = await mappingService.getResourceName(resourceId, tenantContext);
+          if (name) resourceNameMap.set(resourceId, name);
+        } catch (error) {
+          const errorMsg = error instanceof Error ? error.message : '';
+          if (errorMsg.includes('429') || errorMsg.includes('Circuit breaker')) {
+            this.logger.warn(`Rate limit hit during resource name lookup - skipping remaining enhancements`);
+            rateLimitHit = true;
+          }
+        }
+      }
+      
+      // Now enhance opportunities using the pre-fetched maps (no API calls)
+      const enhancedOpportunities = opportunities.map((opportunity: any) => {
+        const enhanced: any = { ...opportunity };
+        
+        if (opportunity.companyID) {
+          enhanced._enhanced = enhanced._enhanced || {};
+          enhanced._enhanced.companyName = companyNameMap.get(opportunity.companyID) || `Company ID: ${opportunity.companyID}`;
+        }
 
-          // Add owner resource name if available
-          if (opportunity.ownerResourceID) {
-            try {
-              enhanced._enhanced = enhanced._enhanced || {};
-              enhanced._enhanced.ownerResourceName = await mappingService.getResourceName(opportunity.ownerResourceID, tenantContext);
-            } catch (error) {
-              this.logger.info(`Failed to map owner resource ID ${opportunity.ownerResourceID}:`, error);
-              enhanced._enhanced = enhanced._enhanced || {};
-              enhanced._enhanced.ownerResourceName = `Unknown (${opportunity.ownerResourceID})`;
-            }
-          }
-          
-          return enhanced;
-        })
-      );
+        if (opportunity.ownerResourceID) {
+          enhanced._enhanced = enhanced._enhanced || {};
+          enhanced._enhanced.ownerResourceName = resourceNameMap.get(opportunity.ownerResourceID) || `Resource ID: ${opportunity.ownerResourceID}`;
+        }
+        
+        return enhanced;
+      });
       
       return this.createDataResponse(enhancedOpportunities);
     } catch (error) {

@@ -123,46 +123,20 @@ export class MappingService {
   }
 
   /**
-   * Refresh cache if needed (expired)
-   */
-  private async refreshCacheIfNeeded(): Promise<void> {
-    const promises: Promise<void>[] = [];
-    
-    if (!this.isCacheValid('companies')) {
-      promises.push(this.refreshCompanyCache());
-    }
-    
-    if (!this.isCacheValid('resources')) {
-      promises.push(this.refreshResourceCache());
-    }
-    
-    if (promises.length > 0) {
-      await Promise.all(promises);
-    }
-  }
-
-  /**
-   * Get company name by ID with fallback lookup
+   * Get company name by ID with direct lookup (not fetching all companies)
    */
   public async getCompanyName(companyId: number, tenantContext: any): Promise<string | null> {
     try {
-      await this.refreshCacheIfNeeded();
-      
       // Try cache first
       const cachedName = this.cache.companies.get(companyId);
       if (cachedName) {
         return cachedName;
       }
       
-      // Fallback to direct API lookup
-      this.logger.info(`Company ${companyId} not in cache, doing direct lookup`);
-      const companies = await this.autotaskService.searchCompanies({ 
-        // No searchTerm needed - we'll find by ID after getting results
-        pageSize: 0 // Get all companies to find this specific one
-      }, tenantContext);
+      // Direct API lookup by ID (efficient - single API call)
+      this.logger.info(`Company ${companyId} not in cache, doing direct ID lookup`);
+      const company = await this.autotaskService.getCompany(companyId, tenantContext);
       
-      this.logger.info(`Fetched ${companies.length} companies for ID lookup`);
-      const company = companies.find((c: any) => c.id === companyId);
       if (company && company.companyName) {
         // Add to cache for future use
         this.cache.companies.set(companyId, company.companyName);
@@ -178,28 +152,30 @@ export class MappingService {
   }
 
   /**
-   * Get resource name by ID with fallback lookup
+   * Get resource name by ID with direct lookup
    */
   public async getResourceName(resourceId: number, tenantContext: any): Promise<string | null> {
     try {
-    
-      this.logger.info(`Resource ${resourceId} not in cache, attempting direct lookup`);
-      try {
-        // Pass undefined tenant context for single-tenant mode
-        const resource = await this.autotaskService.getResource(resourceId, tenantContext);
-        if (resource && resource.firstName && resource.lastName) {
-          const fullName = `${resource.firstName} ${resource.lastName}`.trim();
-          // Add to cache for future use
-          this.cache.resources.set(resourceId, fullName);
-          return fullName;
-        }
-      } catch (directError) {
-        this.logger.info(`Direct resource lookup failed for ${resourceId}:`, directError);
+      // Try cache first
+      const cachedName = this.cache.resources.get(resourceId);
+      if (cachedName) {
+        return cachedName;
+      }
+      
+      // Direct API lookup by ID
+      this.logger.info(`Resource ${resourceId} not in cache, doing direct ID lookup`);
+      const resource = await this.autotaskService.getResource(resourceId, tenantContext);
+      if (resource && resource.firstName && resource.lastName) {
+        const fullName = `${resource.firstName} ${resource.lastName}`.trim();
+        // Add to cache for future use
+        this.cache.resources.set(resourceId, fullName);
+        return fullName;
       }
       
       return null;
     } catch (error) {
-      this.logger.error(`Failed to get resource name for ${resourceId}:`, error);
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      this.logger.warn(`Failed to get resource name for ID ${resourceId}: ${errorMessage}`);
       return null;
     }
   }
