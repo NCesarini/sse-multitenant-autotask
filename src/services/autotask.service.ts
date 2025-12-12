@@ -23,6 +23,7 @@ import {
   AutotaskExpenseReport,
   AutotaskExpenseItem,
   AutotaskQuote,
+  AutotaskOpportunity,
   AutotaskBillingCode,
   AutotaskDepartment,
   AutotaskQueryOptionsExtended,
@@ -1111,6 +1112,23 @@ export class AutotaskService {
         });
       }
       
+      // Handle completedDate range filters
+      if (options.completedDateFrom) {
+        filters.push({
+          op: 'gte',
+          field: 'completedDate',
+          value: options.completedDateFrom
+        });
+      }
+      
+      if (options.completedDateTo) {
+        filters.push({
+          op: 'lte',
+          field: 'completedDate',
+          value: options.completedDateTo
+        });
+      }
+      
       // @apigrate query format - only filter is valid
       const queryBody = { filter: filters };
       const maxResults = Math.min(options.pageSize || PAGINATION_CONFIG.DEFAULT_PAGE_SIZE, PAGINATION_CONFIG.MAX_PAGE_SIZE);
@@ -1691,7 +1709,63 @@ export class AutotaskService {
     }
   }
 
-  // Opportunity operations (Note: opportunities endpoint may not be available in autotask-node)
+  // Opportunity operations
+  async searchOpportunities(options: AutotaskQueryOptions = {}, tenantContext?: TenantContext): Promise<AutotaskOpportunity[]> {
+    const client = await this.getClientForTenant(tenantContext);
+    
+    try {
+      this.logger.info('Searching opportunities with options:', options);
+      
+      // Build filter array for @apigrate/autotask-restapi
+      let filterArray: any[] = [];
+      
+      if (options.filter) {
+        if (Array.isArray(options.filter)) {
+          filterArray = options.filter.map(filter => {
+            if (typeof filter === 'string') {
+              return { op: "contains", field: "title", value: filter };
+            }
+            return filter;
+          });
+        } else if (typeof options.filter === 'object') {
+          for (const [field, value] of Object.entries(options.filter)) {
+            filterArray.push({ op: 'eq', field, value });
+          }
+        }
+      }
+      
+      // Default filter if none provided
+      if (filterArray.length === 0) {
+        filterArray = [{ op: 'gte', field: 'id', value: 0 }];
+      }
+
+      // @apigrate query format - only filter is valid
+      const queryBody = { filter: filterArray };
+      
+      this.logger.info('Calling Opportunities.query with @apigrate:', { filterCount: queryBody.filter.length });
+      
+      try {
+        const result = await client.Opportunities.query(queryBody);
+        
+        this.logger.info('✅ Opportunities.query successful:', {
+          hasItems: !!(result && result.items),
+          itemsLength: result?.items?.length
+        });
+        
+        return (result?.items || []) as AutotaskOpportunity[];
+      } catch (apiError: any) {
+        this.logger.error('❌ Opportunities.query failed:', {
+          error: apiError?.message,
+          details: apiError?.details
+        });
+        throw apiError;
+      }
+    } catch (error) {
+      this.logger.error('Failed to search opportunities:', error);
+      throw error;
+    }
+  }
+
   // async getOpportunity(id: number): Promise<AutotaskOpportunity | null> {
   //   const client = await this.ensureClient();
   //   

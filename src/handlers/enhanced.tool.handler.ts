@@ -112,6 +112,9 @@ export const TOOL_NAMES = {
   //SEARCH_TICKET_ATTACHMENTS: 'search_ticket_attachments',
   GET_TICKET_ATTACHMENT: 'get_ticket_attachment',
   
+  // Opportunity tools
+  SEARCH_OPPORTUNITIES: 'search_opportunities',
+  
   // Financial Management
   SEARCH_CONTRACTS: 'search_contracts',
   SEARCH_INVOICES: 'search_invoices',
@@ -161,6 +164,7 @@ export const READ_ONLY_TOOLS = [
   //TOOL_NAMES.GET_COMPANY_NOTE,
   //TOOL_NAMES.SEARCH_TICKET_ATTACHMENTS,
   //TOOL_NAMES.GET_TICKET_ATTACHMENT,
+  TOOL_NAMES.SEARCH_OPPORTUNITIES,
   TOOL_NAMES.SEARCH_CONTRACTS,
   TOOL_NAMES.SEARCH_INVOICES,
   TOOL_NAMES.SEARCH_QUOTES,
@@ -974,11 +978,19 @@ FAILURE TO RETRIEVE ALL PAGES BEFORE ANALYSIS = TASK FAILURE`,
           },
           createdDateFrom: {
             type: 'string',
-            description: 'Start date filter (YYYY-MM-DD).'
+            description: 'Filter by creation date - start of range (YYYY-MM-DD).'
           },
           createdDateTo: {
             type: 'string',
-            description: 'End date filter (YYYY-MM-DD).'
+            description: 'Filter by creation date - end of range (YYYY-MM-DD).'
+          },
+          completedDateFrom: {
+            type: 'string',
+            description: 'Filter by completion date - start of range (YYYY-MM-DD). Only returns tickets with a completedDate.'
+          },
+          completedDateTo: {
+            type: 'string',
+            description: 'Filter by completion date - end of range (YYYY-MM-DD). Only returns tickets with a completedDate.'
           },
           page: {
             type: 'number',
@@ -1768,6 +1780,60 @@ FAILURE TO RETRIEVE ALL PAGES BEFORE ANALYSIS = TASK FAILURE`,
           }
         },
         ['ticketID', 'attachmentId']
+      ),
+
+      // Opportunity Management
+      EnhancedAutotaskToolHandler.createTool(
+        'search_opportunities',
+        `Search for opportunities (sales deals) in Autotask. Returns opportunity records with company, stage, and value information.
+
+Common use cases:
+- Track sales pipeline and forecasting
+- Find opportunities by stage or status
+- Analyze win/loss patterns
+- Monitor projected close dates`,
+        'read',
+        {
+          companyId: {
+            type: 'number',
+            description: 'Filter by company ID - refers to Companies entity'
+          },
+          status: {
+            type: 'number',
+            description: 'Filter by status. Common values: 1=Active, 5=Won, 6=Lost, 7=Cancelled'
+          },
+          stage: {
+            type: 'number',
+            description: 'Filter by sales stage ID'
+          },
+          ownerResourceId: {
+            type: 'number',
+            description: 'Filter by opportunity owner (sales rep) resource ID'
+          },
+          searchTerm: {
+            type: 'string',
+            description: 'Search term to filter opportunities by title (partial match supported)'
+          },
+          projectedCloseDateFrom: {
+            type: 'string',
+            description: 'Filter by projected close date - start of range (YYYY-MM-DD)'
+          },
+          projectedCloseDateTo: {
+            type: 'string',
+            description: 'Filter by projected close date - end of range (YYYY-MM-DD)'
+          },
+          page: {
+            type: 'number',
+            description: 'Page number (1-based, default=1).',
+            minimum: 1
+          },
+          pageSize: {
+            type: 'number',
+            description: 'Items per page (max 200, default 100).',
+            minimum: 1,
+            maximum: 200
+          }
+        }
       ),
 
       // Financial Management
@@ -2684,265 +2750,271 @@ FAILURE TO RETRIEVE ALL PAGES BEFORE ANALYSIS = TASK FAILURE`,
       switch (name) {
         // Company tools
         case 'search_companies':
-          this.logger.info(`📊 Executing search_companies`, { toolCallId });
+          this.logger.info(`📊 Executing search_companies`, { toolCallId,args });
           result = await this.searchCompanies(args, tenantContext);
           break;
         
         case 'create_company':
-          this.logger.info(`➕ Executing create_company`, { toolCallId });
+          this.logger.info(`➕ Executing create_company`, { toolCallId,args });
           result = await this.createCompany(args, tenantContext);
           break;
 
         case 'update_company':
-          this.logger.info(`✏️ Executing update_company`, { toolCallId });
+          this.logger.info(`✏️ Executing update_company`, { toolCallId,args });
           result = await this.updateCompany(args, tenantContext);
           break;
 
         // Contact tools
         case 'search_contacts':
-          this.logger.info(`📊 Executing search_contacts`, { toolCallId });
+          this.logger.info(`📊 Executing search_contacts`, { toolCallId,args });
           result = await this.searchContacts(args, tenantContext);
           break;
 
         case 'create_contact':
-          this.logger.info(`➕ Executing create_contact`, { toolCallId });
+          this.logger.info(`➕ Executing create_contact`, { toolCallId,args });
           result = await this.createContact(args, tenantContext);
           break;
 
         case 'update_contact':
-          this.logger.info(`✏️ Executing update_contact`, { toolCallId });
+          this.logger.info(`✏️ Executing update_contact`, { toolCallId,args });
           result = await this.updateContact(args, tenantContext);
           break;
 
         // Ticket tools
         case 'search_tickets':
-          this.logger.info(`📊 Executing search_tickets`, { toolCallId });
+          this.logger.info(`📊 Executing search_tickets`, { toolCallId,args });
           result = await this.searchTickets(args, tenantContext);
           break;
 
         case 'create_ticket':
-          this.logger.info(`➕ Executing create_ticket`, { toolCallId });
+          this.logger.info(`➕ Executing create_ticket`, { toolCallId,args });
           result = await this.createTicket(args, tenantContext);
           break;
 
         case 'update_ticket':
-          this.logger.info(`✏️ Executing update_ticket`, { toolCallId });
+          this.logger.info(`✏️ Executing update_ticket`, { toolCallId,args });
           result = await this.updateTicket(args, tenantContext);
           break;
 
         // Time Entry tools
         case 'create_time_entry':
-          this.logger.info(`⏰ Executing create_time_entry`, { toolCallId });
+          this.logger.info(`⏰ Executing create_time_entry`, { toolCallId,args });
           result = await this.createTimeEntry(args, tenantContext);
           break;
 
         // Project tools
         case 'search_projects':
-          this.logger.info(`📊 Executing search_projects`, { toolCallId });
+          this.logger.info(`📊 Executing search_projects`, { toolCallId,args });
           result = await this.searchProjects(args, tenantContext);
           break;
 
         // Resource tools
         case 'search_resources':
-          this.logger.info(`📊 Executing search_resources`, { toolCallId });
+          this.logger.info(`📊 Executing search_resources`, { toolCallId,args });
           result = await this.searchResources(args, tenantContext);
           break;
         // Get ticket by number (special case - not by ID)
         case 'get_ticket_by_number':
-          this.logger.info(`🎫 Executing get_ticket_by_number`, { toolCallId });
+          this.logger.info(`🎫 Executing get_ticket_by_number`, { toolCallId,args });
           result = await this.getTicketByNumber(args, tenantContext);
           break;
 
         case 'create_project':
-          this.logger.info(`➕ Executing create_project`, { toolCallId });
+          this.logger.info(`➕ Executing create_project`, { toolCallId,args });
           result = await this.createProject(args, tenantContext);
           break;
 
         case 'update_project':
-          this.logger.info(`✏️ Executing update_project`, { toolCallId });
+          this.logger.info(`✏️ Executing update_project`, { toolCallId,args });
           result = await this.updateProject(args, tenantContext);
           break;
 
         case 'get_project_details':
-          this.logger.info(`📋 Executing get_project_details`, { toolCallId });
+          this.logger.info(`📋 Executing get_project_details`, { toolCallId,args });
           result = await this.getProjectDetails(args, tenantContext);
           break;
 
         // Time Entry Management
         case 'search_time_entries':
-          this.logger.info(`⏰ Executing search_time_entries`, { toolCallId });
+          this.logger.info(`⏰ Executing search_time_entries`, { toolCallId,args });
           result = await this.searchTimeEntries(args, tenantContext);
           break;
 
         // Task Management
         case 'search_tasks':
-          this.logger.info(`📝 Executing search_tasks`, { toolCallId });
+          this.logger.info(`📝 Executing search_tasks`, { toolCallId,args });
           result = await this.searchTasks(args, tenantContext);
           break;
 
         case 'create_task':
-          this.logger.info(`➕ Executing create_task`, { toolCallId });
+          this.logger.info(`➕ Executing create_task`, { toolCallId,args });
           result = await this.createTask(args, tenantContext);
           break;
 
         case 'update_task':
-          this.logger.info(`✏️ Executing update_task`, { toolCallId });
+          this.logger.info(`✏️ Executing update_task`, { toolCallId,args });
           result = await this.updateTask(args, tenantContext);
           break;
 
         // Notes Management
         case 'search_ticket_notes':
-          this.logger.info(`📝 Executing search_ticket_notes`, { toolCallId });
+          this.logger.info(`📝 Executing search_ticket_notes`, { toolCallId,args });
           result = await this.searchTicketNotes(args, tenantContext);
           break;
 
         case 'get_ticket_note':
-          this.logger.info(`📝 Executing get_ticket_note`, { toolCallId });
+          this.logger.info(`📝 Executing get_ticket_note`, { toolCallId,args });
           result = await this.getTicketNote(args, tenantContext);
           break;
 
         case 'create_ticket_note':
-          this.logger.info(`➕ Executing create_ticket_note`, { toolCallId });
+          this.logger.info(`➕ Executing create_ticket_note`, { toolCallId,args });
           result = await this.createTicketNote(args, tenantContext);
           break;
 
         case 'search_project_notes':
-          this.logger.info(`📝 Executing search_project_notes`, { toolCallId });
+          this.logger.info(`📝 Executing search_project_notes`, { toolCallId,args });
           result = await this.searchProjectNotes(args, tenantContext);
           break;
 
         case 'get_project_note':
-          this.logger.info(`📝 Executing get_project_note`, { toolCallId });
+          this.logger.info(`📝 Executing get_project_note`, { toolCallId,args });
           result = await this.getProjectNote(args, tenantContext);
           break;
 
         case 'create_project_note':
-          this.logger.info(`➕ Executing create_project_note`, { toolCallId });
+          this.logger.info(`➕ Executing create_project_note`, { toolCallId,args });
           result = await this.createProjectNote(args, tenantContext);
           break;
 
         case 'search_company_notes':
-          this.logger.info(`📝 Executing search_company_notes`, { toolCallId });
+          this.logger.info(`📝 Executing search_company_notes`, { toolCallId,args });
           result = await this.searchCompanyNotes(args, tenantContext);
           break;
 
         case 'get_company_note':
-          this.logger.info(`📝 Executing get_company_note`, { toolCallId });
+          this.logger.info(`📝 Executing get_company_note`, { toolCallId,args });
           result = await this.getCompanyNote(args, tenantContext);
           break;
 
         case 'create_company_note':
-          this.logger.info(`➕ Executing create_company_note`, { toolCallId });
+          this.logger.info(`➕ Executing create_company_note`, { toolCallId,args });
           result = await this.createCompanyNote(args, tenantContext);
           break;
 
         case 'search_ticket_attachments':
-          this.logger.info(`📎 Executing search_ticket_attachments`, { toolCallId });
+          this.logger.info(`📎 Executing search_ticket_attachments`, { toolCallId,args });
           result = await this.searchTicketAttachments(args, tenantContext);
           break;
 
         case 'get_ticket_attachment':
-          this.logger.info(`📎 Executing get_ticket_attachment`, { toolCallId });
+          this.logger.info(`📎 Executing get_ticket_attachment`, { toolCallId,args });
           result = await this.getTicketAttachment(args, tenantContext);
+          break;
+
+        // Opportunity Management
+        case 'search_opportunities':
+          this.logger.info(`💼 Executing search_opportunities`, { toolCallId,args });
+          result = await this.searchOpportunities(args, tenantContext);
           break;
 
         // Financial Management
         case 'search_contracts':
-          this.logger.info(`📄 Executing search_contracts`, { toolCallId });
+          this.logger.info(`📄 Executing search_contracts`, { toolCallId,args });
           result = await this.searchContracts(args, tenantContext);
           break;
 
         case 'search_invoices':
-          this.logger.info(`🧾 Executing search_invoices`, { toolCallId });
+          this.logger.info(`🧾 Executing search_invoices`, { toolCallId,args });
           result = await this.searchInvoices(args, tenantContext);
           break;
 
         case 'search_quotes':
-          this.logger.info(`💰 Executing search_quotes`, { toolCallId });
+          this.logger.info(`💰 Executing search_quotes`, { toolCallId,args });
           result = await this.searchQuotes(args, tenantContext);
           break;
 
         case 'create_quote':
-          this.logger.info(`➕ Executing create_quote`, { toolCallId });
+          this.logger.info(`➕ Executing create_quote`, { toolCallId,args });
           result = await this.createQuote(args, tenantContext);
           break;
 
         case 'search_expense_reports':
-          this.logger.info(`💳 Executing search_expense_reports`, { toolCallId });
+          this.logger.info(`💳 Executing search_expense_reports`, { toolCallId,args });
           result = await this.searchExpenseReports(args, tenantContext);
           break;
 
         case 'create_expense_report':
-          this.logger.info(`➕ Executing create_expense_report`, { toolCallId });
+          this.logger.info(`➕ Executing create_expense_report`, { toolCallId,args });
           result = await this.createExpenseReport(args, tenantContext);
           break;
 
         case 'update_expense_report':
-          this.logger.info(`✏️ Executing update_expense_report`, { toolCallId });
+          this.logger.info(`✏️ Executing update_expense_report`, { toolCallId,args });
           result = await this.updateExpenseReport(args, tenantContext);
           break;
 
         // Expense Items Management
         case 'search_expense_items':
-          this.logger.info(`💳 Executing search_expense_items`, { toolCallId });
+          this.logger.info(`💳 Executing search_expense_items`, { toolCallId,args });
           result = await this.searchExpenseItems(args, tenantContext);
           break;
 
         case 'get_expense_item':
-          this.logger.info(`💳 Executing get_expense_item`, { toolCallId });
+          this.logger.info(`💳 Executing get_expense_item`, { toolCallId,args });
           result = await this.getExpenseItem(args, tenantContext);
           break;
 
         case 'create_expense_item':
-          this.logger.info(`➕ Executing create_expense_item`, { toolCallId });
+          this.logger.info(`➕ Executing create_expense_item`, { toolCallId,args });
           result = await this.createExpenseItem(args, tenantContext);
           break;
 
         case 'update_expense_item':
-          this.logger.info(`✏️ Executing update_expense_item`, { toolCallId });
+          this.logger.info(`✏️ Executing update_expense_item`, { toolCallId,args });
           result = await this.updateExpenseItem(args, tenantContext);
           break;
 
         // Configuration Items Management
         case 'search_configuration_items':
-          this.logger.info(`🖥️ Executing search_configuration_items`, { toolCallId });
+          this.logger.info(`🖥️ Executing search_configuration_items`, { toolCallId,args });
           result = await this.searchConfigurationItems(args, tenantContext);
           break;
 
         case 'create_configuration_item':
-          this.logger.info(`➕ Executing create_configuration_item`, { toolCallId });
+          this.logger.info(`➕ Executing create_configuration_item`, { toolCallId,args });
           result = await this.createConfigurationItem(args, tenantContext);
           break;
 
         case 'update_configuration_item':
-          this.logger.info(`✏️ Executing update_configuration_item`, { toolCallId });
+          this.logger.info(`✏️ Executing update_configuration_item`, { toolCallId,args });
           result = await this.updateConfigurationItem(args, tenantContext);
           break;
 
         // Pagination Helper Tools
         case 'get_companies_page':
-          this.logger.info(`📄 Executing get_companies_page`, { toolCallId });
+          this.logger.info(`📄 Executing get_companies_page`, { toolCallId,args });
           result = await this.getCompaniesPage(args, tenantContext);
           break;
 
         case 'query_entity':
-          this.logger.info(`🔍 Executing query_entity`, { toolCallId });
+          this.logger.info(`🔍 Executing query_entity`, { toolCallId,args });
           result = await this.queryEntity(args, tenantContext);
           break;
 
         case 'get_entity':
-          this.logger.info(`🏢 Executing get_entity`, { toolCallId });
+          this.logger.info(`🏢 Executing get_entity`, { toolCallId,args });
           result = await this.getEntityById(args, tenantContext);
           break;
 
         // Managed Services Tools
         case 'get_company_categories':
-          this.logger.info(`📋 Executing get_company_categories`, { toolCallId });
+          this.logger.info(`📋 Executing get_company_categories`, { toolCallId,args });
           result = await this.getCompanyCategories(args, tenantContext);
           break;
 
         case 'find_clients_by_category':
-          this.logger.info(`🏢 Executing find_clients_by_category`, { toolCallId });
+          this.logger.info(`🏢 Executing find_clients_by_category`, { toolCallId,args });
           result = await this.findClientsByCategory(args, tenantContext);
           break;
 
@@ -3219,6 +3291,14 @@ FAILURE TO RETRIEVE ALL PAGES BEFORE ANALYSIS = TASK FAILURE`,
       
       if (args.createdDateTo) {
         options.createdDateTo = args.createdDateTo;
+      }
+      
+      if (args.completedDateFrom) {
+        options.completedDateFrom = args.completedDateFrom;
+      }
+      
+      if (args.completedDateTo) {
+        options.completedDateTo = args.completedDateTo;
       }
       
       if (args.pageSize) {
@@ -4609,6 +4689,94 @@ FAILURE TO RETRIEVE ALL PAGES BEFORE ANALYSIS = TASK FAILURE`,
   // ===================================
   // Phase 3: Financial Management
   // ===================================
+
+  private async searchOpportunities(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
+    try {
+      const { companyId, status, stage, ownerResourceId, searchTerm, projectedCloseDateFrom, projectedCloseDateTo, page, pageSize } = args;
+      
+      // Build filter for opportunities search
+      const filter: any[] = [];
+      
+      if (companyId) {
+        filter.push({ field: 'companyID', op: 'eq', value: companyId });
+      }
+      
+      if (status !== undefined) {
+        filter.push({ field: 'status', op: 'eq', value: status });
+      }
+      
+      if (stage !== undefined) {
+        filter.push({ field: 'stage', op: 'eq', value: stage });
+      }
+      
+      if (ownerResourceId) {
+        filter.push({ field: 'ownerResourceID', op: 'eq', value: ownerResourceId });
+      }
+      
+      if (searchTerm) {
+        filter.push({ field: 'title', op: 'contains', value: searchTerm });
+      }
+      
+      if (projectedCloseDateFrom) {
+        filter.push({ field: 'projectedCloseDate', op: 'gte', value: projectedCloseDateFrom });
+      }
+      
+      if (projectedCloseDateTo) {
+        filter.push({ field: 'projectedCloseDate', op: 'lte', value: projectedCloseDateTo });
+      }
+      
+      // If no specific filters, get all opportunities
+      if (filter.length === 0) {
+        filter.push({ field: 'id', op: 'gte', value: 0 });
+      }
+
+      const queryOptions = {
+        filter,
+        ...(page && { page }),
+        ...(pageSize && { pageSize })
+      };
+
+      const opportunities = await this.autotaskService.searchOpportunities(queryOptions, tenantContext);
+      
+      // Enhanced results with mapped names
+      const mappingService = await this.getMappingService();
+      const enhancedOpportunities = await Promise.all(
+        opportunities.map(async (opportunity: any) => {
+          const enhanced: any = { ...opportunity };
+          
+          // Add company name if available
+          if (opportunity.companyID) {
+            try {
+              enhanced._enhanced = enhanced._enhanced || {};
+              enhanced._enhanced.companyName = await mappingService.getCompanyName(opportunity.companyID, tenantContext);
+            } catch (error) {
+              this.logger.info(`Failed to map company ID ${opportunity.companyID}:`, error);
+              enhanced._enhanced = enhanced._enhanced || {};
+              enhanced._enhanced.companyName = `Unknown (${opportunity.companyID})`;
+            }
+          }
+
+          // Add owner resource name if available
+          if (opportunity.ownerResourceID) {
+            try {
+              enhanced._enhanced = enhanced._enhanced || {};
+              enhanced._enhanced.ownerResourceName = await mappingService.getResourceName(opportunity.ownerResourceID, tenantContext);
+            } catch (error) {
+              this.logger.info(`Failed to map owner resource ID ${opportunity.ownerResourceID}:`, error);
+              enhanced._enhanced = enhanced._enhanced || {};
+              enhanced._enhanced.ownerResourceName = `Unknown (${opportunity.ownerResourceID})`;
+            }
+          }
+          
+          return enhanced;
+        })
+      );
+      
+      return this.createDataResponse(enhancedOpportunities);
+    } catch (error) {
+      throw new Error(`Failed to search opportunities: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
 
   private async searchContracts(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
     try {

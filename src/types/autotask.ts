@@ -343,6 +343,28 @@ export interface AutotaskExpenseItem {
   [key: string]: any;
 }
 
+export interface AutotaskOpportunity {
+  id?: number;
+  companyID?: number;
+  title?: string;
+  description?: string;
+  status?: number;
+  stage?: number;
+  amount?: number;
+  probability?: number;
+  projectedCloseDate?: string;
+  createDate?: string;
+  ownerResourceID?: number;
+  primarySalesPersonID?: number;
+  contactID?: number;
+  winReason?: number;
+  lossReason?: number;
+  winReasonDetail?: string;
+  lossReasonDetail?: string;
+  closedDate?: string;
+  userDefinedFields?: AutotaskUserDefinedField[];
+}
+
 export interface AutotaskQuote {
   id?: number;
   companyID?: number;
@@ -477,6 +499,8 @@ export interface AutotaskQueryOptionsExtended extends AutotaskQueryOptions {
   contractId?: number;
   createdDateFrom?: string;
   createdDateTo?: string;
+  completedDateFrom?: string;
+  completedDateTo?: string;
   // Note: Pagination is now enabled by default. Only specify pageSize to limit results.
 }
 
