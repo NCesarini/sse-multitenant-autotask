@@ -313,6 +313,10 @@ export interface AutotaskQueryOptionsExtended extends AutotaskQueryOptions {
   contractId?: number;
   createdDateFrom?: string;
   createdDateTo?: string;
+  completedDateFrom?: string;
+  completedDateTo?: string;
+  lastActivityDateFrom?: string;
+  lastActivityDateTo?: string;
   // Note: Pagination is now enabled by default. Only specify pageSize to limit results.
 }
 

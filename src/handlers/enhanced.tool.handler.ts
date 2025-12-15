@@ -8,6 +8,7 @@ import { AutotaskService } from '../services/autotask.service.js';
 import { Logger } from '../utils/logger.js';
 import { MappingService } from '../utils/mapping.service.js';
 import { AutotaskCredentials, TenantContext } from '../types/mcp.js'; 
+import { PaginationEnforcer, buildPaginatedToolDescription } from '../core/pagination.js'; 
 
 export const LARGE_RESPONSE_THRESHOLDS = {
   tickets: 100,        
@@ -84,6 +85,9 @@ export const TOOL_NAMES = {
   CREATE_EXPENSE_REPORT: 'create_expense_report',
   UPDATE_EXPENSE_REPORT: 'update_expense_report',
   
+  // Sales Management
+  SEARCH_OPPORTUNITIES: 'search_opportunities',
+  
   // Expense Items Management
   SEARCH_EXPENSE_ITEMS: 'search_expense_items',
   GET_EXPENSE_ITEM: 'get_expense_item',
@@ -127,6 +131,7 @@ export const READ_ONLY_TOOLS = [
   TOOL_NAMES.SEARCH_CONTRACTS,
   TOOL_NAMES.SEARCH_INVOICES,
   TOOL_NAMES.SEARCH_QUOTES,
+  TOOL_NAMES.SEARCH_OPPORTUNITIES,
   //TOOL_NAMES.SEARCH_EXPENSE_REPORTS,
   //TOOL_NAMES.SEARCH_EXPENSE_ITEMS,
   //TOOL_NAMES.GET_EXPENSE_ITEM,
@@ -421,7 +426,7 @@ export class EnhancedAutotaskToolHandler {
         ...content,
         {
           type: 'text',
-          text: `\n\n🔍 **Search Guidance**: ${guidanceMessage}`
+          text: `\n\nSearch Guidance: ${guidanceMessage}`
         }
       ];
     }
@@ -609,7 +614,10 @@ export class EnhancedAutotaskToolHandler {
       // Company tools
       EnhancedAutotaskToolHandler.createTool(
         'search_companies',
+        buildPaginatedToolDescription(
         'Search for companies (customers, prospects, vendors) in Autotask with advanced filtering and enhanced name resolution. Companies are the core business entities in Autotask - they represent customers who receive services, prospects for sales, vendors who provide services, or partners. Returns comprehensive company records including ID, name, type, owner assignment, contact information, and address details. Use this to find specific companies for ticket creation, contact management, project assignment, or reporting. Essential for customer relationship management and business operations. Enhanced with automatic owner resource name mapping for better readability.',
+          'companies'
+        ),
         'read',
         {
           searchTerm: {
@@ -642,21 +650,10 @@ export class EnhancedAutotaskToolHandler {
           },
           pageSize: {
             type: 'number',
-            description: 'Number of company records to return per page (default: 50, max: 2000). Larger values return more data but may cause slower responses and larger memory usage. Start with 50 for exploration, use 100-500 for operational lists, use 1000+ for comprehensive exports. Consider network speed and processing capacity when choosing size.',
+            description: 'LIMIT results returned (default: 100, max: 500). This does NOT support pagination to specific pages - Autotask uses cursor-based pagination. To find specific companies: 1) Use get_entity with company ID for direct lookup, 2) Use searchTerm to filter by name, 3) Add filters (ownerResourceID, companyType, isActive, etc.) to narrow results. DO NOT request large pageSizes - instead use specific filters to reduce the dataset.',
             minimum: 1,
-            maximum: 2000,
-            default: 50
-          },
-          page: {
-            type: 'number',
-            description: 'Page number to retrieve (1-based indexing). Use for pagination when results exceed pageSize. Example: page=2 with pageSize=50 gets companies 51-100. Essential for handling large company databases without overwhelming responses. Check if additional pages exist by comparing returned count to pageSize.',
-            minimum: 1,
-            default: 1
-          },
-          getAllPages: {
-            type: 'boolean',
-            description: 'Set to TRUE to retrieve ALL matching companies across multiple pages automatically (ignores pageSize limits). WARNING: Can be very slow and memory-intensive for large datasets. Use only when you need complete company exports or comprehensive analysis. FALSE (default) respects pageSize for controlled results. Consider data volume before enabling.',
-            default: false
+            maximum: 500,
+            default: 100
           }
         }
       ),
@@ -768,7 +765,10 @@ export class EnhancedAutotaskToolHandler {
       // Contact tools
                   EnhancedAutotaskToolHandler.createTool(
               'search_contacts',
+              buildPaginatedToolDescription(
               'Search for individual contacts (people) within companies in Autotask with comprehensive filtering. Contacts represent real people who work for or are associated with companies - they are the human touchpoints for business relationships. Returns detailed contact records including personal information, role details, communication preferences, and their company associations. Use this to find specific people for ticket assignment, communication, project coordination, or relationship management. Essential for customer service, support escalation, and business communications. Enhanced with automatic company name mapping for better context.',
+                'contacts'
+              ),
               'read',
               {
                 searchTerm: {
@@ -783,12 +783,18 @@ export class EnhancedAutotaskToolHandler {
                   type: 'boolean',
                   description: 'Filter by active status to control contact availability. TRUE returns only active contacts (current employees, available for communication), FALSE returns inactive contacts (former employees, disabled accounts). Active contacts can receive tickets, notifications, and communications. Inactive contacts are kept for historical records. Most operational searches should use TRUE unless doing cleanup or historical analysis.'
                 },
+                page: {
+                  type: 'number',
+                  description: 'Page number (1-indexed) for pagination. CRITICAL: Check _paginationProtocol.status in the response. If status is INCOMPLETE, you MUST call again with the next page number. Continue until status is COMPLETE before performing any analysis.',
+                  minimum: 1,
+                  default: 1
+                },
                 pageSize: {
                   type: 'number',
-                  description: 'Number of contact records to return (default: 50, max: 2000). Contact databases can be large, especially for enterprise customers. Start with 50 for browsing, use 100-500 for department listings, use larger values for comprehensive exports. Consider that each contact includes company information, so larger results consume more memory.',
+                  description: 'Number of contact records per page (max 500). Default 500 for comprehensive results. Use with page parameter for pagination.',
                   minimum: 1,
-                  maximum: 2000,
-                  default: 50
+                  maximum: 500,
+                  default: 500
                 }
               }
             ),
@@ -860,7 +866,10 @@ export class EnhancedAutotaskToolHandler {
       // Ticket tools
                   EnhancedAutotaskToolHandler.createTool(
               'search_tickets',
+              buildPaginatedToolDescription(
               'Search for support tickets (service requests, incidents, problems) in Autotask with comprehensive filtering capabilities. Tickets represent customer service requests, technical issues, incidents, or any work that needs to be tracked and resolved. Returns detailed ticket records including status, priority, assignment, descriptions, and associated relationships (company, contact, project, contract). Use this for service desk operations, workload management, reporting, escalation tracking, and customer service analysis. Essential for support operations, SLA monitoring, and customer satisfaction management. Enhanced with automatic name mapping for better readability.',
+                'tickets'
+              ),
               'read',
               {
                 searchTerm: {
@@ -903,12 +912,34 @@ export class EnhancedAutotaskToolHandler {
                   type: 'string',
                   description: 'Filter tickets created on or before this date (YYYY-MM-DD format). Works with createdDateFrom to create date ranges. Example: "2024-01-31" finds tickets up to end of January. Use for periodic reports, billing cycles, or historical analysis. Inclusive - tickets created ON this date are included.'
                 },
+                completedDateFrom: {
+                  type: 'string',
+                  description: 'Filter tickets completed (closed) on or after this date (YYYY-MM-DD format). Use for reporting on resolved tickets, calculating resolution metrics, or analyzing completed work. Example: "2024-01-01" finds tickets completed since January 1st. Combine with completedDateTo for specific completion date ranges. Essential for performance analysis, billing periods, and SLA compliance reporting.'
+                },
+                completedDateTo: {
+                  type: 'string',
+                  description: 'Filter tickets completed (closed) on or before this date (YYYY-MM-DD format). Works with completedDateFrom to create completion date ranges. Example: "2024-01-31" finds tickets completed by end of January. Use for periodic completion reports, analyzing past performance, or billing cycle analysis. Inclusive - tickets completed ON this date are included.'
+                },
+                lastActivityDateFrom: {
+                  type: 'string',
+                  description: 'Filter tickets with last activity (update, note, status change) on or after this date (YYYY-MM-DD format). Use to find recently active tickets, identify stale tickets, or track ticket aging. Example: "2024-01-01" finds tickets with activity since January 1st. Helpful for finding tickets that need attention or haven\'t been updated recently.'
+                },
+                lastActivityDateTo: {
+                  type: 'string',
+                  description: 'Filter tickets with last activity on or before this date (YYYY-MM-DD format). Use to find tickets that haven\'t been updated recently (potentially stale), or for historical activity analysis. Example: "2024-01-01" finds tickets with no activity after January 1st. Combine with lastActivityDateFrom to find tickets inactive during specific periods.'
+                },
+                page: {
+                  type: 'number',
+                  description: 'Page number (1-indexed) for pagination. CRITICAL: Check _paginationProtocol.status in the response. If status is INCOMPLETE, you MUST call again with the next page number. Continue until status is COMPLETE before performing any analysis.',
+                  minimum: 1,
+                  default: 1
+                },
                 pageSize: {
                   type: 'number',
-                  description: 'Number of ticket records to return (default: 50, max: 2000). Ticket searches can return large datasets, especially for broad searches or popular companies. Start with 50 for dashboard views, use 100-500 for management reports, use larger values for comprehensive analysis. Consider performance impact of large result sets on network and processing.',
+                  description: 'Number of ticket records per page (max 500). Default 500 for comprehensive results. Use with page parameter for pagination.',
                   minimum: 1,
-                  maximum: 2000,
-                  default: 50
+                  maximum: 500,
+                  default: 500
                 }
               }
             ),
@@ -1034,7 +1065,10 @@ export class EnhancedAutotaskToolHandler {
       // Project tools
                   EnhancedAutotaskToolHandler.createTool(
               'search_projects',
+              buildPaginatedToolDescription(
               'Search for projects in Autotask with advanced filtering. Returns project records with company and project manager information.',
+                'projects'
+              ),
               'read',
               {
                 searchTerm: {
@@ -1057,12 +1091,18 @@ export class EnhancedAutotaskToolHandler {
                   type: 'number',
                   description: 'Filter by project manager resource ID - refers to Resources entity (employee managing the project). Find all projects managed by a specific PM. Essential for: PM workload analysis, portfolio management by PM, capacity planning, performance tracking. Example: projectManagerResourceID=123 shows all projects managed by employee #123.'
                 },
+                page: {
+                  type: 'number',
+                  description: 'Page number (1-indexed) for pagination. CRITICAL: Check _paginationProtocol.status in the response. If status is INCOMPLETE, you MUST call again with the next page number.',
+                  minimum: 1,
+                  default: 1
+                },
                 pageSize: {
                   type: 'number',
-                  description: 'Number of results to return (default: 50, max: 2000)',
+                  description: 'Number of results per page (max 500). Default 500 for comprehensive results.',
                   minimum: 1,
-                  maximum: 2000,
-                  default: 50
+                  maximum: 500,
+                  default: 500
                 }
               }
             ),
@@ -1070,7 +1110,10 @@ export class EnhancedAutotaskToolHandler {
       // Resource tools
                   EnhancedAutotaskToolHandler.createTool(
               'search_resources',
+              buildPaginatedToolDescription(
               'Search for resources (employees) in Autotask. Returns employee/user records.',
+                'resources'
+              ),
               'read',
               {
                 firstName: {
@@ -1093,12 +1136,18 @@ export class EnhancedAutotaskToolHandler {
                   type: 'boolean',
                   description: 'Filter by active status (true for active employees, false for inactive)'
                 },
+                page: {
+                  type: 'number',
+                  description: 'Page number (1-indexed) for pagination. CRITICAL: Check _paginationProtocol.status in the response. If status is INCOMPLETE, you MUST call again with the next page number.',
+                  minimum: 1,
+                  default: 1
+                },
                 pageSize: {
                   type: 'number',
-                  description: 'Number of results to return (default: 50, max: 2000)',
+                  description: 'Number of results per page (max 500). Default 500 for comprehensive results.',
                   minimum: 1,
-                  maximum: 2000,
-                  default: 50
+                  maximum: 500,
+                  default: 500
                 }
               }
             ),
@@ -1208,7 +1257,10 @@ export class EnhancedAutotaskToolHandler {
       // Time Entry Management
       EnhancedAutotaskToolHandler.createTool(
         'search_time_entries',
+        buildPaginatedToolDescription(
         'Search for time entries in Autotask with comprehensive filtering options. To find time entries for a project, get tasks or tickets first. Time entries represent work logged by employees/technicians against tickets, tasks, or projects. Returns detailed time entry records including duration, billing information, work descriptions, and associated entity relationships (ticket/task/project/resource). Use this to find logged work hours, track employee productivity, analyze project time allocation, generate billing reports, or audit time tracking. Default behavior returns last 30 days of entries if no filters specified.',
+          'time entries'
+        ),
         'read',
         {
           ticketID: {
@@ -1231,11 +1283,18 @@ export class EnhancedAutotaskToolHandler {
             type: 'string',
             description: 'End date filter (YYYY-MM-DD format). Works with dateFrom to create date ranges. Without dateFrom, gets all entries up to this date. Essential for: monthly/quarterly reports, billing cutoffs, project phase completions. Example: "2024-03-31" to end at March 31st. Use inclusive date logic (entries ON the dateTo are included).'
           },
+          page: {
+            type: 'number',
+            description: 'Page number (1-indexed) for pagination. CRITICAL: Check _paginationProtocol.status in the response. If status is INCOMPLETE, you MUST call again with the next page number. Continue until status is COMPLETE before performing any analysis.',
+            minimum: 1,
+            default: 1
+          },
           pageSize: {
             type: 'number',
-            description: 'Number of results to return (max 200). Time entry searches can return large datasets, especially for date ranges or popular resources/projects. Start with smaller values (25-50) for initial exploration, use larger values (100-200) for comprehensive reports. Larger values may cause slower responses. Consider pagination for very large datasets.',
+            description: 'Number of results per page (max 500). Default 500 for comprehensive results. Time entry searches can return large datasets. Use with page parameter for pagination.',
             minimum: 1,
-            maximum: 200
+            maximum: 500,
+            default: 500
           }
         }
       ),
@@ -1243,7 +1302,10 @@ export class EnhancedAutotaskToolHandler {
       // Task Management
       EnhancedAutotaskToolHandler.createTool(
         'search_tasks',
+        buildPaginatedToolDescription(
         'Search for tasks in Autotask with comprehensive filtering. Returns task records with project, resource, and priority information. Essential for task management, deadline tracking, and workload planning.',
+          'tasks'
+        ),
         'read',
         {
           projectId: {
@@ -1282,11 +1344,17 @@ export class EnhancedAutotaskToolHandler {
             type: 'string',
             description: 'Filter tasks created on or before this date (YYYY-MM-DD format). Works with createdDateFrom for date ranges. Use for periodic reports or historical analysis. Example: "2024-01-31" finds tasks created through end of January.'
           },
+          page: {
+            type: 'number',
+            description: 'Page number (1-indexed) for pagination. CRITICAL: Check _paginationProtocol.status in the response. If status is INCOMPLETE, you MUST call again with the next page number.',
+            minimum: 1,
+            default: 1
+          },
           pageSize: {
             type: 'number',
-            description: 'Number of results to return (max 100)',
+            description: 'Number of results per page (max 500). Default 500 for comprehensive results.',
             minimum: 1,
-            maximum: 100
+            maximum: 500
           }
         }
       ),
@@ -1742,6 +1810,75 @@ export class EnhancedAutotaskToolHandler {
           }
         },
         ['accountId', 'contactId', 'title']
+      ),
+
+      // Sales Management Tools
+      EnhancedAutotaskToolHandler.createTool(
+        'search_opportunities',
+        buildPaginatedToolDescription(
+          'Search for sales opportunities in Autotask with advanced filtering. Opportunities represent potential sales, deals in the pipeline, or business development initiatives. Returns comprehensive opportunity records including title, status, stage, amount, probability, owner, and associated company/contact information. Use this for sales pipeline management, forecasting, deal tracking, and revenue analysis. Essential for sales operations, business development, and revenue planning.',
+          'opportunities'
+        ),
+        'read',
+        {
+          searchTerm: {
+            type: 'string',
+            description: 'Search term to filter opportunities by title (partial match supported). Searches the title field. Example: "Migration" finds "Server Migration Deal", "Cloud Migration Opportunity", etc. Use for finding opportunities when you know part of the deal name.'
+          },
+          companyId: {
+            type: 'number',
+            description: 'Filter by company ID - refers to Companies entity. Find all sales opportunities for a specific customer or prospect. Essential for account-level sales tracking and customer relationship management.'
+          },
+          status: {
+            type: 'number',
+            description: 'Filter by opportunity status. Common values: 0=Inactive, 1=Open (active pursuit), 2=Won (successfully closed), 3=Lost (unsuccessful). Use to focus on active deals (status=1) or analyze win/loss rates. Critical for pipeline management and sales forecasting.'
+          },
+          stage: {
+            type: 'string',
+            description: 'Filter by sales stage (pipeline stage name). Examples: "Qualification", "Proposal", "Negotiation", "Closed Won", "Closed Lost". Use to analyze opportunities at specific points in the sales cycle. Essential for pipeline velocity and stage-specific conversion analysis.'
+          },
+          ownerResourceID: {
+            type: 'number',
+            description: 'Filter by opportunity owner resource ID - refers to Resources entity (sales rep/account exec managing the opportunity). Find all opportunities owned by a specific salesperson. Essential for: sales rep performance tracking, quota management, territory analysis, individual pipeline reviews.'
+          },
+          leadReferralSourceID: {
+            type: 'number',
+            description: 'Filter by lead source ID - tracks where the opportunity originated. Common sources: referrals, marketing campaigns, partnerships, cold outreach. Essential for marketing ROI analysis and lead source effectiveness tracking.'
+          },
+          minAmount: {
+            type: 'number',
+            description: 'Filter opportunities with amount greater than or equal to this value. Use for focusing on large deals or enterprise opportunities. Example: minAmount=50000 finds opportunities worth $50k or more. Essential for strategic deal tracking.'
+          },
+          maxAmount: {
+            type: 'number',
+            description: 'Filter opportunities with amount less than or equal to this value. Use for segmenting deals by size or focusing on specific deal tiers. Combine with minAmount for precise deal value ranges.'
+          },
+          createdDateFrom: {
+            type: 'string',
+            description: 'Filter opportunities created on or after this date (YYYY-MM-DD format). Use for time-bounded analysis like "opportunities created this quarter". Essential for trending and period-over-period comparisons.'
+          },
+          createdDateTo: {
+            type: 'string',
+            description: 'Filter opportunities created on or before this date (YYYY-MM-DD format). Combine with createdDateFrom for specific date ranges. Useful for quarterly reviews and historical analysis.'
+          },
+          projectedCloseDate: {
+            type: 'string',
+            description: 'Filter by projected close date (YYYY-MM-DD format). Find opportunities expected to close by a specific date. Critical for sales forecasting, quota planning, and revenue projections.'
+          },
+          page: {
+            type: 'number',
+            description: 'Page number (1-indexed) for pagination. CRITICAL: Check _paginationProtocol.status in the response. If status is INCOMPLETE, you MUST call again with the next page number. Continue until status is COMPLETE before performing any analysis.',
+            minimum: 1,
+            default: 1
+          },
+          pageSize: {
+            type: 'number',
+            description: 'Number of opportunity records per page (max 500). Default 500 for comprehensive results. Use with page parameter for pagination.',
+            minimum: 1,
+            maximum: 500,
+            default: 500
+          }
+        }
       ),
 
       EnhancedAutotaskToolHandler.createTool(
@@ -2222,29 +2359,23 @@ export class EnhancedAutotaskToolHandler {
       // Pagination helper tools
       EnhancedAutotaskToolHandler.createTool(
         'get_companies_page',
-        'Get a specific page of companies (optimized for pagination). Returns company records with enhanced information.',
+        'WARNING: Autotask API does NOT support jumping to specific pages - it uses cursor-based pagination. DO NOT try to paginate through many pages. Instead: 1) Use get_entity to retrieve a specific company by ID, 2) Use search_companies with specific filters (name, id, owner, etc.) to narrow results, 3) If you need to browse many companies, use searchTerm or isActive filters to reduce the dataset. This tool returns the FIRST page only - there is no reliable way to get subsequent pages. Pagination is STRONGLY DISCOURAGED - always prefer filtering to reduce results.',
         'read',
         {
-          page: {
+          pageSize: {
             type: 'number',
-            description: 'Page number to retrieve (1-based)',
+            description: 'Number of companies to return (default: 50, max: 100 recommended). DO NOT use large page sizes - instead use filters to narrow results. If you need a specific company, use get_entity with the company ID.',
             minimum: 1,
-            default: 1
+            maximum: 100,
+            default: 50
           },
-                     pageSize: {
-             type: 'number',
-             description: 'Number of companies per page (default: 50, max: 2000)',
-             minimum: 1,
-             maximum: 2000,
-             default: 50
-           },
           searchTerm: {
             type: 'string',
-            description: 'Optional search term to filter companies by name (partial match supported)'
+            description: 'RECOMMENDED: Filter companies by name (partial match). Example: "Microsoft" will find "Microsoft Corporation". Use this instead of pagination.'
           },
           isActive: {
             type: 'boolean',
-            description: 'Optional filter by active status (true for active companies, false for inactive)'
+            description: 'RECOMMENDED: Filter by active status (true for active companies, false for inactive). Use this instead of pagination.'
           }
         }
       ),
@@ -2709,6 +2840,11 @@ export class EnhancedAutotaskToolHandler {
           result = await this.createQuote(args, tenantContext);
           break;
 
+        case 'search_opportunities':
+          this.logger.info(`💼 Executing search_opportunities`, { toolCallId });
+          result = await this.searchOpportunities(args, tenantContext);
+          break;
+
         case 'search_expense_reports':
           this.logger.info(`💳 Executing search_expense_reports`, { toolCallId });
           result = await this.searchExpenseReports(args, tenantContext);
@@ -2835,6 +2971,7 @@ export class EnhancedAutotaskToolHandler {
 
   private async searchCompanies(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
     try {
+      const { page = 1, pageSize = 500 } = args;
       const options: any = {};
       
       // Build filter array
@@ -2900,83 +3037,53 @@ export class EnhancedAutotaskToolHandler {
         options.filter = filters;
       }
       
-      // Handle pagination parameters
-      if (args.pageSize) {
-        options.pageSize = args.pageSize;
-      }
-      
-      if (args.page) {
-        options.page = args.page;
-      }
-      
-      // Handle getAllPages flag - if true, override pagination limits
-      if (args.getAllPages === true) {
-        // Remove page size limit to get all data (use old behavior)
-        delete options.pageSize;
-        this.logger.info('getAllPages=true: Will fetch all available companies (may be slow)');
-      }
+      options.pageSize = Math.min(pageSize, 500);
 
       const companies = await this.autotaskService.searchCompanies(options, tenantContext);
       
-      // Enhanc 
-
-      // Prepare pagination info
-      const currentPage = args.page || 1;
-      const pageSize = args.pageSize || 50;
-      const isLimitedResults = companies.length === pageSize && !args.getAllPages;
-      
-      let resultsText = '';
-      if (companies.length > 0) {
-        resultsText = `Found ${companies.length} companies`;
-        
-        // Add pagination context
-        if (currentPage > 1) {
-          resultsText += ` (page ${currentPage})`;
-        }
-        if (isLimitedResults) {
-          resultsText += ` - use page=${currentPage + 1} to get more results`;
-        }
-        
-        resultsText += `:\n\n${companies.map(company => 
-          `ID: ${company.id}\nName: ${company.companyName}\nType: ${company.companyType}\nActive: ${company.isActive}\nOwner: ${company._enhanced?.ownerResourceName || 'Unknown'}\n`
-        ).join('\n')}`;
-      } else {
-        resultsText = 'No companies found matching the criteria';
-        if (currentPage > 1) {
-          resultsText += ` on page ${currentPage}. Try page=1 or adjust your search criteria.`;
-        }
+      // Get total count for pagination
+      let totalCount = companies.length;
+      try {
+        const countResult = await this.autotaskService.countCompanies(options, tenantContext);
+        totalCount = countResult ?? companies.length;
+      } catch (countError) {
+        this.logger.warn('Could not get total count for companies, using returned count');
       }
+
+      // Determine which filters are available but not used (for performance suggestions)
+      const unusedFilters: string[] = [];
+      if (!args.searchTerm) unusedFilters.push('searchTerm (company name)');
+      if (args.companyType === undefined) unusedFilters.push('companyType (1=Customer, 3=Prospect, etc)');
+      if (!args.ownerResourceID) unusedFilters.push('ownerResourceID (filter by account manager)');
+      if (args.isActive === undefined) unusedFilters.push('isActive (true for active companies only)');
+      if (!args.city) unusedFilters.push('city (geographical filter)');
+      if (!args.state) unusedFilters.push('state (geographical filter)');
+
+      // Apply pagination protocol
+      const paginationResult = PaginationEnforcer.enforce({
+        items: companies,
+        totalCount,
+        currentPage: page,
+        pageSize: Math.min(pageSize, 500),
+        entityName: 'companies',
+        availableFilters: unusedFilters,
+        largeResultThreshold: 500
+      });
+
+      // Build response with pagination protocol
+      const response = {
+        companies: paginationResult.items,
+        _paginationProtocol: paginationResult.protocol
+      };
 
       const content = [{
         type: 'text',
-        text: resultsText
+        text: JSON.stringify(response, null, 2)
       }];
 
-      // Check if we're hitting the threshold limit and show guidance proactively
-      const threshold = LARGE_RESPONSE_THRESHOLDS.companies;
-      const isHittingLimit = args.pageSize !== undefined && args.pageSize >= threshold;
-      const shouldShowGuidance = isHittingLimit || companies.length >= threshold;
-
-      let contentWithGuidance = content;
-      if (shouldShowGuidance) {
-        const guidanceMessage = isHittingLimit 
-          ? `Requested ${args.pageSize} companies (limit: ${threshold}). For more focused results, try:\n` +
-            `  • Use \`searchTerm\` with company name or partial name\n` +
-            `  • Add specific filters in your search criteria\n` +
-            `  • Use smaller \`pageSize\` parameter (current: ${args.pageSize})`
-          : this.generateSearchGuidance('companies', companies.length, Math.round(JSON.stringify(content).length / 1024));
-
-        contentWithGuidance = [
-          ...content,
-          {
-            type: 'text',
-            text: `\n\n🔍 **Search Guidance**: ${guidanceMessage}`
-          }
-        ];
-      }
-
       return {
-        content: contentWithGuidance
+        content,
+        isError: false
       };
     } catch (error) {
       throw new Error(`Failed to search companies: ${error instanceof Error ? error.message : 'Unknown error'}`);
@@ -3007,6 +3114,7 @@ export class EnhancedAutotaskToolHandler {
 
   private async searchContacts(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
     try {
+      const { page = 1, pageSize = 500 } = args;
       const options: any = {};
       
       if (args.searchTerm) {
@@ -3043,15 +3151,23 @@ export class EnhancedAutotaskToolHandler {
         });
       }
       
-      if (args.pageSize) {
-        options.pageSize = args.pageSize;
-      }
+      options.pageSize = Math.min(pageSize, 500);
 
       const contacts = await this.autotaskService.searchContacts(options, tenantContext);
       this.logger.info(`🏢 Found ${contacts.length} contacts`, {
         tenant: tenantContext,
         sessionId: tenantContext?.sessionId
       });
+      
+      // Get total count for pagination
+      let totalCount = contacts.length;
+      try {
+        const countResult = await this.autotaskService.countContacts(options, tenantContext);
+        totalCount = countResult ?? contacts.length;
+      } catch (countError) {
+        this.logger.warn('Could not get total count for contacts, using returned count');
+      }
+      
       // Enhanced results with mapped names
       const mappingService = await this.getMappingService();
       const enhancedContacts = await Promise.all(
@@ -3074,22 +3190,29 @@ export class EnhancedAutotaskToolHandler {
         })
       );
 
-      const resultsText = enhancedContacts.length > 0 
-        ? `Found ${enhancedContacts.length} contacts:\n\n${enhancedContacts.map(contact => 
-            `ID: ${contact.id}\nName: ${contact.firstName} ${contact.lastName}\nEmail: ${contact.emailAddress}\nCompany: ${contact._enhanced?.companyName || 'Unknown'}\n`
-          ).join('\n')}`
-        : 'No contacts found matching the criteria';
+      // Apply pagination protocol
+      const paginationResult = PaginationEnforcer.enforce({
+        items: enhancedContacts,
+        totalCount,
+        currentPage: page,
+        pageSize: Math.min(pageSize, 500),
+        entityName: 'contacts'
+      });
+
+      // Build response with pagination protocol
+      const response = {
+        contacts: paginationResult.items,
+        _paginationProtocol: paginationResult.protocol
+      };
 
       const content = [{
         type: 'text',
-        text: resultsText
+        text: JSON.stringify(response, null, 2)
       }];
 
-      // Add guidance for large responses
-      const contentWithGuidance = this.addLargeResponseGuidance(content, enhancedContacts.length, 'contacts');
-
       return {
-        content: contentWithGuidance
+        content,
+        isError: false
       };
     } catch (error) {
       throw new Error(`Failed to search contacts: ${error instanceof Error ? error.message : 'Unknown error'}`);
@@ -3120,6 +3243,7 @@ export class EnhancedAutotaskToolHandler {
 
   private async searchTickets(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
     try {
+      const { page = 1, pageSize = 500 } = args;
       const options: any = {};
       
       // Use the proper searchTerm parameter instead of custom filter
@@ -3163,9 +3287,7 @@ export class EnhancedAutotaskToolHandler {
         options.createdDateTo = args.createdDateTo;
       }
       
-      if (args.pageSize) {
-        options.pageSize = args.pageSize;
-      }
+      options.pageSize = Math.min(pageSize, 500);
 
       let tickets = await this.autotaskService.searchTickets(options, tenantContext);
       
@@ -3196,67 +3318,6 @@ export class EnhancedAutotaskToolHandler {
           }];
         }
         
-        // Add back other filters if they existed
-        if (fallbackOptions.status !== undefined) {
-          if (!fallbackOptions.filter) fallbackOptions.filter = [];
-          fallbackOptions.filter.push({
-            op: 'eq',
-            field: 'status',
-            value: fallbackOptions.status
-          });
-          delete fallbackOptions.status;
-        }
-        
-        if (fallbackOptions.companyId !== undefined) {
-          if (!fallbackOptions.filter) fallbackOptions.filter = [];
-          fallbackOptions.filter.push({
-            op: 'eq',
-            field: 'companyID',
-            value: fallbackOptions.companyId
-          });
-          delete fallbackOptions.companyId;
-        }
-        
-        if (fallbackOptions.projectId !== undefined) {
-          if (!fallbackOptions.filter) fallbackOptions.filter = [];
-          fallbackOptions.filter.push({
-            op: 'eq',
-            field: 'projectID',
-            value: fallbackOptions.projectId
-          });
-          delete fallbackOptions.projectId;
-        }
-        
-        if (fallbackOptions.contractId !== undefined) {
-          if (!fallbackOptions.filter) fallbackOptions.filter = [];
-          fallbackOptions.filter.push({
-            op: 'eq',
-            field: 'contractID',
-            value: fallbackOptions.contractId
-          });
-          delete fallbackOptions.contractId;
-        }
-        
-        if (fallbackOptions.assignedResourceID !== undefined) {
-          if (!fallbackOptions.filter) fallbackOptions.filter = [];
-          fallbackOptions.filter.push({
-            op: 'eq',
-            field: 'assignedResourceID',
-            value: fallbackOptions.assignedResourceID
-          });
-          delete fallbackOptions.assignedResourceID;
-        }
-        
-        if (fallbackOptions.unassigned !== undefined) {
-          if (!fallbackOptions.filter) fallbackOptions.filter = [];
-          fallbackOptions.filter.push({
-            op: 'eq',
-            field: 'assignedResourceID',
-            value: null
-          });
-          delete fallbackOptions.unassigned;
-        }
-        
         try {
           tickets = await this.autotaskService.searchTickets(fallbackOptions, tenantContext);
           if (tickets.length > 0) {
@@ -3266,6 +3327,24 @@ export class EnhancedAutotaskToolHandler {
           this.logger.warn(`Fallback search failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
         }
       }
+      
+      // Get total count for pagination
+      let totalCount = tickets.length;
+      try {
+        const countResult = await this.autotaskService.countTickets(options, tenantContext);
+        totalCount = countResult ?? tickets.length;
+      } catch (countError) {
+        this.logger.warn('Could not get total count for tickets, using returned count');
+      }
+      
+      // Determine which filters are available but not used (for performance suggestions)
+      const unusedFilters: string[] = [];
+      if (!args.searchTerm) unusedFilters.push('searchTerm (ticket number or title)');
+      if (args.status === undefined) unusedFilters.push('status (1=New, 2=In Progress, 5=Complete, etc)');
+      if (args.priority === undefined) unusedFilters.push('priority (1=Critical, 2=High, 3=Medium, 4=Low)');
+      if (!args.companyID) unusedFilters.push('companyID (filter by specific customer)');
+      if (!args.assignedResourceID) unusedFilters.push('assignedResourceID (filter by technician)');
+      if (!args.createdDateFrom) unusedFilters.push('createdDateFrom (filter by date range)');
       
       // Enhanced results with mapped names
       const mappingService = await this.getMappingService();
@@ -3307,46 +3386,31 @@ export class EnhancedAutotaskToolHandler {
         })
       );
 
-      const resultsText = enhancedTickets.length > 0 
-        ? `Found ${enhancedTickets.length} tickets:\n\n${enhancedTickets.map(ticket => 
-            `ID: ${ticket.id}\nNumber: ${ticket.ticketNumber}\nTitle: ${ticket.title}\nStatus: ${ticket.status}\nCompany: ${ticket._enhanced?.companyName || 'Unknown'}\nAssigned: ${ticket._enhanced?.assignedResourceName || 'Unassigned'}\nContact: ${ticket._enhanced?.contactName || 'Unknown'}\n`
-          ).join('\n')}`
-        : 'No tickets found matching the criteria';
+      // Apply pagination protocol
+      const paginationResult = PaginationEnforcer.enforce({
+        items: enhancedTickets,
+        totalCount,
+        currentPage: page,
+        pageSize: Math.min(pageSize, 500),
+        entityName: 'tickets',
+        availableFilters: unusedFilters,
+        largeResultThreshold: 500
+      });
+
+      // Build response with pagination protocol
+      const response = {
+        tickets: paginationResult.items,
+        _paginationProtocol: paginationResult.protocol
+      };
 
       const content = [{
         type: 'text',
-        text: resultsText
+        text: JSON.stringify(response, null, 2)
       }];
 
-      // Check if we're hitting the threshold limit and show guidance proactively
-      const threshold = LARGE_RESPONSE_THRESHOLDS.tickets;
-      const isHittingLimit = args.pageSize !== undefined && args.pageSize >= threshold;
-      const shouldShowGuidance = isHittingLimit || enhancedTickets.length >= threshold;
-
-      let contentWithGuidance = content;
-      if (shouldShowGuidance) {
-        const guidanceMessage = isHittingLimit 
-          ? `Requested ${args.pageSize} tickets (limit: ${threshold}). For more focused results, try:\n` +
-            `  • Use \`status\` parameter to filter by ticket status (e.g., status: 1 for New, 5 for Complete)\n` +
-            `  • Add \`companyID\` to search tickets for a specific company\n` +
-            `  • Add \`projectID\` to search tickets for a specific project\n` +
-            `  • Add \`contractID\` to search tickets for a specific contract\n` +
-            `  • Use \`assignedResourceID\` to find tickets assigned to specific person\n` +
-            `  • Try \`searchTerm\` with specific keywords from ticket title or number\n` +
-            `  • Use smaller \`pageSize\` parameter (current: ${args.pageSize})`
-          : this.generateSearchGuidance('tickets', enhancedTickets.length, Math.round(JSON.stringify(content).length / 1024));
-
-        contentWithGuidance = [
-          ...content,
-          {
-            type: 'text',
-            text: `\n\n🔍 **Search Guidance**: ${guidanceMessage}`
-          }
-        ];
-      }
-
       return {
-        content: contentWithGuidance
+        content,
+        isError: false
       };
     } catch (error) {
       throw new Error(`Failed to search tickets: ${error instanceof Error ? error.message : 'Unknown error'}`);
@@ -4074,7 +4138,7 @@ export class EnhancedAutotaskToolHandler {
 
   private async searchTimeEntries(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
     try {
-      const { ticketID, taskID, resourceID,resourceId, dateFrom, dateTo, pageSize } = args;
+      const { ticketID, taskID, resourceID, resourceId, dateFrom, dateTo, page = 1, pageSize = 500 } = args;
       
       // Build filter for time entries search
       const filter: any[] = [];
@@ -4108,48 +4172,44 @@ export class EnhancedAutotaskToolHandler {
       }
 
       const queryOptions: any = {
-        filter
+        filter,
+        pageSize: Math.min(pageSize, 500)
       };
-      
-      // Explicitly handle pageSize to ensure it's passed through (including pageSize: 1)
-      if (pageSize !== undefined) {
-        queryOptions.pageSize = pageSize;
-      }
 
       const timeEntries = await this.autotaskService.getTimeEntries(queryOptions, tenantContext);
       
+      // Get total count for pagination
+      let totalCount = timeEntries.length;
+      try {
+        const countResult = await this.autotaskService.countTimeEntries({ filter }, tenantContext);
+        totalCount = countResult ?? timeEntries.length;
+      } catch (countError) {
+        this.logger.warn('Could not get total count for time entries, using returned count');
+      }
+
+      // Apply pagination protocol
+      const paginationResult = PaginationEnforcer.enforce({
+        items: timeEntries,
+        totalCount,
+        currentPage: page,
+        pageSize: Math.min(pageSize, 500),
+        entityName: 'time entries',
+        sumField: 'hoursWorked'
+      });
+
+      // Build response with pagination protocol
+      const response = {
+        timeEntries: paginationResult.items,
+        _paginationProtocol: paginationResult.protocol
+      };
+      
       const content = [{
         type: 'text',
-        text: JSON.stringify(timeEntries, null, 2)
+        text: JSON.stringify(response, null, 2)
       }];
-
-      // Check if we're hitting the threshold limit and show guidance proactively
-      const threshold = LARGE_RESPONSE_THRESHOLDS.timeentries;
-      const isHittingLimit = pageSize !== undefined && pageSize >= threshold;
-      const shouldShowGuidance = isHittingLimit || timeEntries.length >= threshold;
-
-      let contentWithGuidance = content;
-      if (shouldShowGuidance) {
-        const guidanceMessage = isHittingLimit 
-          ? `Requested ${pageSize} entries (limit: ${threshold}). For more focused results, try:\n` +
-            `  • Use \`ticketID\` to search time entries for a specific ticket\n` +
-            `  • Use \`taskID\` to search time entries for a specific task\n` + 
-            `  • Use \`resourceId\` to find time entries by a specific person\n` +
-            `  • Add date filters with \`dateFrom\` and \`dateTo\` (YYYY-MM-DD format)\n` +
-            `  • Use smaller \`pageSize\` parameter (current: ${pageSize})`
-          : this.generateSearchGuidance('timeentries', timeEntries.length, Math.round(JSON.stringify(content).length / 1024));
-
-        contentWithGuidance = [
-          ...content,
-          {
-            type: 'text',
-            text: `\n\n🔍 **Search Guidance**: ${guidanceMessage}`
-          }
-        ];
-      }
       
       return {
-        content: contentWithGuidance,
+        content,
         isError: false
       };
     } catch (error) {
@@ -4740,6 +4800,161 @@ export class EnhancedAutotaskToolHandler {
     }
   }
 
+  private async searchOpportunities(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
+    try {
+      const { page = 1, pageSize = 500 } = args;
+      const options: any = {};
+      
+      // Build filter array
+      const filters: any[] = [];
+      
+      if (args.searchTerm) {
+        filters.push({
+          field: 'title',
+          op: 'contains',
+          value: args.searchTerm
+        });
+      }
+      
+      if (typeof args.companyId === 'number') {
+        filters.push({
+          field: 'accountID',
+          op: 'eq',
+          value: args.companyId
+        });
+      }
+      
+      if (typeof args.status === 'number') {
+        filters.push({
+          field: 'status',
+          op: 'eq',
+          value: args.status
+        });
+      }
+      
+      if (args.stage) {
+        filters.push({
+          field: 'stage',
+          op: 'eq',
+          value: args.stage
+        });
+      }
+      
+      if (typeof args.ownerResourceID === 'number') {
+        filters.push({
+          field: 'ownerResourceID',
+          op: 'eq',
+          value: args.ownerResourceID
+        });
+      }
+      
+      if (typeof args.leadReferralSourceID === 'number') {
+        filters.push({
+          field: 'leadReferralSourceID',
+          op: 'eq',
+          value: args.leadReferralSourceID
+        });
+      }
+      
+      if (typeof args.minAmount === 'number') {
+        filters.push({
+          field: 'amount',
+          op: 'gte',
+          value: args.minAmount
+        });
+      }
+      
+      if (typeof args.maxAmount === 'number') {
+        filters.push({
+          field: 'amount',
+          op: 'lte',
+          value: args.maxAmount
+        });
+      }
+      
+      if (args.createdDateFrom) {
+        filters.push({
+          field: 'createDate',
+          op: 'gte',
+          value: args.createdDateFrom
+        });
+      }
+      
+      if (args.createdDateTo) {
+        filters.push({
+          field: 'createDate',
+          op: 'lte',
+          value: args.createdDateTo
+        });
+      }
+      
+      if (args.projectedCloseDate) {
+        filters.push({
+          field: 'projectedCloseDate',
+          op: 'eq',
+          value: args.projectedCloseDate
+        });
+      }
+      
+      if (filters.length > 0) {
+        options.filter = filters;
+      }
+      
+      options.pageSize = Math.min(pageSize, 500);
+
+      const opportunities = await this.autotaskService.searchOpportunities(options, tenantContext);
+      
+      // Get total count for pagination
+      let totalCount = opportunities.length;
+      try {
+        const countResult = await this.autotaskService.countOpportunities(options, tenantContext);
+        totalCount = countResult ?? opportunities.length;
+      } catch (countError) {
+        this.logger.warn('Could not get total count for opportunities, using returned count');
+      }
+
+      // Determine which filters are available but not used (for performance suggestions)
+      const unusedFilters: string[] = [];
+      if (!args.searchTerm) unusedFilters.push('searchTerm (opportunity title)');
+      if (args.status === undefined) unusedFilters.push('status (0=Inactive, 1=Open, 2=Won, 3=Lost)');
+      if (!args.stage) unusedFilters.push('stage (pipeline stage)');
+      if (!args.companyId) unusedFilters.push('companyId (filter by customer)');
+      if (!args.ownerResourceID) unusedFilters.push('ownerResourceID (filter by sales rep)');
+      if (!args.minAmount && !args.maxAmount) unusedFilters.push('minAmount/maxAmount (filter by deal value)');
+      if (!args.createdDateFrom) unusedFilters.push('createdDateFrom (filter by date range)');
+      if (!args.projectedCloseDate) unusedFilters.push('projectedCloseDate (filter by close date)');
+
+      // Apply pagination protocol
+      const paginationResult = PaginationEnforcer.enforce({
+        items: opportunities,
+        totalCount,
+        currentPage: page,
+        pageSize: Math.min(pageSize, 500),
+        entityName: 'opportunities',
+        availableFilters: unusedFilters,
+        largeResultThreshold: 500
+      });
+
+      // Build response with pagination protocol
+      const response = {
+        opportunities: paginationResult.items,
+        _paginationProtocol: paginationResult.protocol
+      };
+
+      const content = [{
+        type: 'text',
+        text: JSON.stringify(response, null, 2)
+      }];
+
+      return {
+        content,
+        isError: false
+      };
+    } catch (error) {
+      throw new Error(`Failed to search opportunities: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
   private async searchExpenseReports(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
     try {
       const { submitterId, status, fromDate, toDate, pageSize } = args;
@@ -4979,11 +5194,39 @@ export class EnhancedAutotaskToolHandler {
 
   private async getCompaniesPage(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
     try {
-             // This is essentially the same as searchCompanies but optimized for pagination
-       const options: any = {
-         page: args.page || 1,
-         pageSize: Math.min(args.pageSize || 50, 2000) // Respect the new 2000 limit
-       };
+      // ⚠️ IMPORTANT: Autotask API uses cursor-based pagination with nextPageUrl/prevPageUrl
+      // It does NOT support jumping to specific pages - only sequential traversal via URLs
+      // This method only returns the FIRST page of results
+      
+      // Explicitly reject if page parameter is provided (it doesn't work)
+      if (args.page && args.page !== 1) {
+        return {
+          isError: true,
+          content: [{
+            type: 'text',
+            text: `ERROR: Cannot jump to page ${args.page}\n\n` +
+                  `Autotask API uses CURSOR-BASED pagination (nextPageUrl/prevPageUrl), NOT page numbers.\n` +
+                  `You cannot directly access page 2, 3, etc.\n\n` +
+                  `CORRECT APPROACHES:\n` +
+                  `1. Use get_entity with entity="companies" and id=<company_id> to get a specific company directly\n` +
+                  `2. Use search_companies with filter=[{field:"id",op:"eq",value:<id>}] to find by ID\n` +
+                  `3. Use searchTerm parameter to filter by company name (e.g., searchTerm="Microsoft")\n` +
+                  `4. Use isActive=true to filter active companies only\n` +
+                  `5. Use search_companies with owner, type, or location filters\n\n` +
+                  `DO NOT try to paginate through all companies - use filters to reduce the dataset instead.`
+          }]
+        };
+      }
+      
+      const options: any = {
+        pageSize: Math.min(args.pageSize || 50, 100) // Cap at 100 for performance
+      };
+      
+      // Warn if filters are not being used
+      const hasFilters = args.searchTerm || typeof args.isActive === 'boolean';
+      if (!hasFilters) {
+        this.logger.warn('⚠️ get_companies_page called without filters - returns arbitrary first page. Recommend using searchTerm or isActive filter, or use get_entity for specific company lookup.');
+      }
       
       if (args.searchTerm) {
         options.filter = [{
@@ -5026,25 +5269,37 @@ export class EnhancedAutotaskToolHandler {
         })
       );
 
-      // Prepare pagination-aware response
-      const currentPage = args.page || 1;
+      // Prepare response with filter guidance
       const pageSize = args.pageSize || 50;
-      const hasMore = enhancedCompanies.length === pageSize;
+      const mayHaveMore = enhancedCompanies.length === pageSize;
       
-      let resultsText = `Companies (Page ${currentPage}, ${enhancedCompanies.length} results)`;
+      let resultsText = `Found ${enhancedCompanies.length} companies`;
       
-      if (hasMore) {
-        resultsText += `\n📄 More results available - use get_companies_page with page=${currentPage + 1}`;
+      if (args.searchTerm) {
+        resultsText += ` matching "${args.searchTerm}"`;
+      }
+      if (typeof args.isActive === 'boolean') {
+        resultsText += ` (${args.isActive ? 'active' : 'inactive'} only)`;
+      }
+      
+      if (mayHaveMore) {
+        resultsText += `\n\nWARNING: Results may be incomplete (showing first ${enhancedCompanies.length} only).`;
+        resultsText += `\nTO FIND A SPECIFIC COMPANY:`;
+        resultsText += `\n  - Use get_entity with entity="companies" and id=<company_id> for direct lookup`;
+        resultsText += `\n  - Add searchTerm parameter to filter by name`;
+        resultsText += `\n  - Add isActive=true/false to filter by status`;
+        resultsText += `\n  - Use search_companies with specific filters (companyName, ownerResourceID, etc.)`;
+        resultsText += `\n\nWARNING: DO NOT attempt pagination - Autotask API uses cursor-based pagination which is not supported by this tool.`;
       }
       
       if (enhancedCompanies.length > 0) {
-        resultsText += `:\n\n${enhancedCompanies.map(company => 
+        resultsText += `\n\nCompanies:\n\n${enhancedCompanies.map(company => 
           `ID: ${company.id}\nName: ${company.companyName}\nType: ${company.companyType}\nActive: ${company.isActive}\nOwner: ${company._enhanced?.ownerResourceName || 'Unknown'}\n`
         ).join('\n')}`;
       } else {
-        resultsText += '\n\nNo companies found on this page.';
-        if (currentPage > 1) {
-          resultsText += ` Try page=1 or adjust search criteria.`;
+        resultsText += '\n\nNo companies found with current filters.';
+        if (hasFilters) {
+          resultsText += ` Try different search criteria or removing filters.`;
         }
       }
 
@@ -5300,9 +5555,17 @@ export class EnhancedAutotaskToolHandler {
         };
       }
 
-      // Some entities support fullDetails parameter
-      const getOptions = fullDetails !== undefined ? { id, fullDetails } : id;
-      const result = await serviceMethod.call(this.autotaskService, getOptions, tenantContext);
+      // Only tickets support fullDetails parameter (as second argument)
+      const supportsFullDetails = ['getTicket', 'getTicketByNumber'].includes(methodName);
+      
+      let result;
+      if (supportsFullDetails && fullDetails !== undefined) {
+        // Pass id, fullDetails, tenantContext as separate parameters
+        result = await serviceMethod.call(this.autotaskService, id, fullDetails, tenantContext);
+      } else {
+        // Pass id, tenantContext as separate parameters
+        result = await serviceMethod.call(this.autotaskService, id, tenantContext);
+      }
       
       if (!result) {
         return this.createNotFoundResponse(entity, id);

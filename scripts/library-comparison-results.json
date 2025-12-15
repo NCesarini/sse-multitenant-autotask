@@ -1,0 +1,51 @@
+{
+  "recommendation": "consider-apigrate",
+  "autotaskNodeResults": {
+    "library": "autotask-node",
+    "features": {
+      "paginationMetadata": false,
+      "pageDetailsInResponse": false,
+      "nextPageUrl": false,
+      "totalCountAvailable": false,
+      "autoZoneDiscovery": true,
+      "errorClassWithDetails": false,
+      "multiTenantSupport": true
+    },
+    "testResults": [
+      {
+        "test": "Static Analysis",
+        "status": "partial",
+        "notes": "No credentials - analyzed library structure"
+      },
+      {
+        "test": "Documentation Analysis",
+        "status": "pass",
+        "notes": "All key pagination features supported per documentation"
+      }
+    ]
+  },
+  "apigrateResults": {
+    "library": "@apigrate/autotask-restapi",
+    "features": {
+      "paginationMetadata": true,
+      "pageDetailsInResponse": true,
+      "nextPageUrl": true,
+      "totalCountAvailable": true,
+      "autoZoneDiscovery": true,
+      "errorClassWithDetails": true,
+      "multiTenantSupport": true
+    },
+    "testResults": [
+      {
+        "test": "Static Analysis",
+        "status": "partial",
+        "notes": "No credentials - analyzed library structure"
+      },
+      {
+        "test": "Documentation Analysis",
+        "status": "pass",
+        "notes": "All key pagination features supported per documentation"
+      }
+    ]
+  }
+}
