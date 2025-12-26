@@ -26,7 +26,8 @@ import {
   AutotaskQueryOptionsExtended
 } from '../types/autotask';
 import { McpServerConfig, AutotaskCredentials, TenantContext } from '../types/mcp';
-import { Logger } from '../utils/logger'; 
+import { Logger } from '../utils/logger';
+import { ApiCallTracker } from '../utils/api-call-tracker'; 
 
 
 export const LARGE_RESPONSE_THRESHOLDS = {
@@ -395,7 +396,7 @@ export class AutotaskService {
   }
 
   // Company operations (updated to support multi-tenant)
-  async getCompany(id: number, tenantContext?: TenantContext): Promise<AutotaskCompany | null> {
+  async getCompany(id: number, tenantContext?: TenantContext, tracker?: ApiCallTracker): Promise<AutotaskCompany | null> {
     const startTime = Date.now();
     
     this.logger.info('🏢 Getting company by ID', {
@@ -409,21 +410,25 @@ export class AutotaskService {
     
     try {
       this.logger.info(`Getting company with ID: ${id}`, { tenant: tenantContext?.tenantId });
-      const result = await client.accounts.get(id);
+      const result = await client.Companies.get(id);
       
       const executionTime = Date.now() - startTime;
+      
+      // Record API call
+      tracker?.recordApiCall('Companies', 'get', executionTime, { id });
+      
       this.logger.info('✅ Company retrieved successfully', {
         companyId: id,
-        found: !!result.data,
+        found: !!result?.item,
         tenantId: tenantContext?.tenantId,
         executionTimeMs: executionTime
       });
       
-      // Handle the case where company data is wrapped in an 'item' object
-      const companyData = result.data?.item || result.data;
-      return companyData as AutotaskCompany || null;
+      // @apigrate library returns { item: companyData } or { item: null } if not found
+      return result?.item as AutotaskCompany || null;
     } catch (error) {
       const executionTime = Date.now() - startTime;
+      tracker?.recordApiCall('Companies', 'get', executionTime, { id, error: true });
       this.logger.error(`❌ Failed to get company ${id}:`, {
         companyId: id,
         tenantId: tenantContext?.tenantId,
@@ -434,7 +439,7 @@ export class AutotaskService {
     }
   }
 
-  async searchCompanies(options: AutotaskQueryOptions = {}, tenantContext?: TenantContext): Promise<AutotaskCompany[]> {
+  async searchCompanies(options: AutotaskQueryOptions = {}, tenantContext?: TenantContext, tracker?: ApiCallTracker): Promise<AutotaskCompany[]> {
     
     const startTime = Date.now();
     this.logger.info('🔍 Searching companies', {
@@ -549,6 +554,13 @@ export class AutotaskService {
         }
         
         const executionTime = Date.now() - startTime;
+        
+        // Record API call
+        tracker?.recordApiCall('Companies', 'query', executionTime, { 
+          filterCount: searchBody.filter?.length, 
+          resultCount: companies.length 
+        });
+        
         this.logger.info(`✅ Retrieved ${companies.length} companies using direct POST API call`, {
           tenantId: tenantContext?.tenantId,
           resultCount: companies.length,
@@ -559,6 +571,8 @@ export class AutotaskService {
         return companies;
         
       } catch (directApiError: any) {
+        const executionTime = Date.now() - startTime;
+        tracker?.recordApiCall('Companies', 'query', executionTime, { error: true });
         this.logger.error('❌ Direct POST /Companies/query failed:', {
           error: directApiError.message,
           name: directApiError.name,
@@ -573,6 +587,7 @@ export class AutotaskService {
       
     } catch (error) {
       const executionTime = Date.now() - startTime;
+      tracker?.recordApiCall('Companies', 'query', executionTime, { error: true });
       this.logger.error('❌ Failed to search companies:', {
         tenantId: tenantContext?.tenantId,
         error: error instanceof Error ? error.message : 'Unknown error',
@@ -587,7 +602,8 @@ export class AutotaskService {
    * Count companies matching filter criteria.
    * Used for pagination to determine total number of pages.
    */
-  async countCompanies(options: AutotaskQueryOptions = {}, tenantContext?: TenantContext): Promise<number> {
+  async countCompanies(options: AutotaskQueryOptions = {}, tenantContext?: TenantContext, tracker?: ApiCallTracker): Promise<number> {
+    const startTime = Date.now();
     const client = await this.getClientForTenant(tenantContext);
     
     try {
@@ -611,16 +627,22 @@ export class AutotaskService {
 
       const response = await client.Companies.count({ filter });
       
+      const executionTime = Date.now() - startTime;
+      tracker?.recordApiCall('Companies', 'count', executionTime, { filterCount: filter.length });
+      
       const count = response.queryCount ?? 0;
       this.logger.info(`Companies count: ${count}`);
       return count;
     } catch (error) {
+      const executionTime = Date.now() - startTime;
+      tracker?.recordApiCall('Companies', 'count', executionTime, { error: true });
       this.logger.error('Failed to count companies:', error);
       throw error;
     }
   }
 
-  async createCompany(company: Partial<AutotaskCompany>, tenantContext?: TenantContext): Promise<number> {
+  async createCompany(company: Partial<AutotaskCompany>, tenantContext?: TenantContext, tracker?: ApiCallTracker): Promise<number> {
+    const startTime = Date.now();
     const client = await this.getClientForTenant(tenantContext);
     
     try {
@@ -642,48 +664,65 @@ export class AutotaskService {
           hasAddress: !!(company.address1 || company.address2),
           fieldCount: Object.keys(company).length
         },
-        apiEndpoint: 'client.accounts.create'
+        apiEndpoint: 'client.Companies.create'
       });
 
-      const result = await client.accounts.create(company as any);
-      const companyId = (result.data as any)?.id;
+      const result = await client.Companies.create(company as any);
+      const executionTime = Date.now() - startTime;
+      tracker?.recordApiCall('Companies', 'create', executionTime, { companyName: company.companyName });
+      
+      // @apigrate library returns { itemId: number }
+      const companyId = result?.itemId;
       this.logger.info(`Company created with ID: ${companyId}`);
       return companyId;
     } catch (error) {
+      const executionTime = Date.now() - startTime;
+      tracker?.recordApiCall('Companies', 'create', executionTime, { error: true });
       this.logger.error('Failed to create company:', error);
       throw error;
     }
   }
 
-  async updateCompany(id: number, updates: Partial<AutotaskCompany>, tenantContext?: TenantContext): Promise<void> {
+  async updateCompany(id: number, updates: Partial<AutotaskCompany>, tenantContext?: TenantContext, tracker?: ApiCallTracker): Promise<void> {
+    const startTime = Date.now();
     const client = await this.getClientForTenant(tenantContext);
     
     try {
       this.logger.info(`Updating company ${id}:`, updates);
-      await client.accounts.update(id, updates as any);
+      await client.Companies.update({ id, ...updates } as any);
+      const executionTime = Date.now() - startTime;
+      tracker?.recordApiCall('Companies', 'update', executionTime, { id });
       this.logger.info(`Company ${id} updated successfully`);
     } catch (error) {
+      const executionTime = Date.now() - startTime;
+      tracker?.recordApiCall('Companies', 'update', executionTime, { id, error: true });
       this.logger.error(`Failed to update company ${id}:`, error);
       throw error;
     }
   }
 
   // Contact operations
-  async getContact(id: number, tenantContext?: TenantContext): Promise<AutotaskContact | null> {
+  async getContact(id: number, tenantContext?: TenantContext, tracker?: ApiCallTracker): Promise<AutotaskContact | null> {
+    const startTime = Date.now();
     const client = await this.getClientForTenant(tenantContext);
     
     try {
       this.logger.info(`Getting contact with ID: ${id}`);
       const result = await client.Contacts.get(id);
+      const executionTime = Date.now() - startTime;
+      tracker?.recordApiCall('Contacts', 'get', executionTime, { id });
       // @apigrate library returns { item: contactData } or null
       return result?.item as AutotaskContact || null;
     } catch (error) {
+      const executionTime = Date.now() - startTime;
+      tracker?.recordApiCall('Contacts', 'get', executionTime, { id, error: true });
       this.logger.error(`Failed to get contact ${id}:`, error);
       throw error;
     }
   }
 
-  async searchContacts(options: AutotaskQueryOptions = {}, tenantContext?: TenantContext): Promise<AutotaskContact[]> {
+  async searchContacts(options: AutotaskQueryOptions = {}, tenantContext?: TenantContext, tracker?: ApiCallTracker): Promise<AutotaskContact[]> {
+    const startTime = Date.now();
     const client = await this.getClientForTenant(tenantContext);
     
     try {
@@ -712,8 +751,11 @@ export class AutotaskService {
 
         this.logger.info('Single page request with limited results:', queryOptions);
         
+        const pageStartTime = Date.now();
         const result = await client.contacts.list(queryOptions as any);
         const contacts = (result.data as AutotaskContact[]) || [];
+        const executionTime = Date.now() - pageStartTime;
+        tracker?.recordApiCall('Contacts', 'list', executionTime, { page: 1, resultCount: contacts.length });
         
         this.logger.info(`Retrieved ${contacts.length} contacts (single page)`);
         return contacts;
@@ -734,8 +776,11 @@ export class AutotaskService {
 
           this.logger.info(`Fetching contacts page ${currentPage}...`);
           
+          const pageStartTime = Date.now();
           const result = await client.contacts.list(queryOptions as any);
           const contacts = (result.data as AutotaskContact[]) || [];
+          const executionTime = Date.now() - pageStartTime;
+          tracker?.recordApiCall('Contacts', 'list', executionTime, { page: currentPage, resultCount: contacts.length });
           
           if (contacts.length === 0) {
             hasMorePages = false;
@@ -767,6 +812,8 @@ export class AutotaskService {
         return allContacts;
       }
     } catch (error) {
+      const executionTime = Date.now() - startTime;
+      tracker?.recordApiCall('Contacts', 'list', executionTime, { error: true });
       this.logger.error('Failed to search contacts:', error);
       throw error;
     }
@@ -776,7 +823,8 @@ export class AutotaskService {
    * Count contacts matching filter criteria.
    * Used for pagination to determine total number of pages.
    */
-  async countContacts(options: AutotaskQueryOptions = {}, tenantContext?: TenantContext): Promise<number> {
+  async countContacts(options: AutotaskQueryOptions = {}, tenantContext?: TenantContext, tracker?: ApiCallTracker): Promise<number> {
+    const startTime = Date.now();
     const client = await this.getClientForTenant(tenantContext);
     
     try {
@@ -793,52 +841,69 @@ export class AutotaskService {
       }
 
       const response = await client.Contacts.count({ filter });
+      const executionTime = Date.now() - startTime;
+      tracker?.recordApiCall('Contacts', 'count', executionTime, { filterCount: filter.length });
       
       const count = response.queryCount ?? 0;
       this.logger.info(`Contacts count: ${count}`);
       return count;
     } catch (error) {
+      const executionTime = Date.now() - startTime;
+      tracker?.recordApiCall('Contacts', 'count', executionTime, { error: true });
       this.logger.error('Failed to count contacts:', error);
       throw error;
     }
   }
 
-  async createContact(contact: Partial<AutotaskContact>, tenantContext?: TenantContext): Promise<number> {
+  async createContact(contact: Partial<AutotaskContact>, tenantContext?: TenantContext, tracker?: ApiCallTracker): Promise<number> {
+    const startTime = Date.now();
     const client = await this.getClientForTenant(tenantContext);
     
     try {
       this.logger.info('Creating contact:', contact);
       const result = await client.contacts.create(contact as any);
+      const executionTime = Date.now() - startTime;
+      tracker?.recordApiCall('Contacts', 'create', executionTime);
       const contactId = (result.data as any)?.id;
       this.logger.info(`Contact created with ID: ${contactId}`);
       return contactId;
     } catch (error) {
+      const executionTime = Date.now() - startTime;
+      tracker?.recordApiCall('Contacts', 'create', executionTime, { error: true });
       this.logger.error('Failed to create contact:', error);
       throw error;
     }
   }
 
-  async updateContact(id: number, updates: Partial<AutotaskContact>, tenantContext?: TenantContext): Promise<void> {
+  async updateContact(id: number, updates: Partial<AutotaskContact>, tenantContext?: TenantContext, tracker?: ApiCallTracker): Promise<void> {
+    const startTime = Date.now();
     const client = await this.getClientForTenant(tenantContext);
     
     try {
       this.logger.info(`Updating contact ${id}:`, updates);
       await client.contacts.update(id, updates as any);
+      const executionTime = Date.now() - startTime;
+      tracker?.recordApiCall('Contacts', 'update', executionTime, { id });
       this.logger.info(`Contact ${id} updated successfully`);
     } catch (error) {
+      const executionTime = Date.now() - startTime;
+      tracker?.recordApiCall('Contacts', 'update', executionTime, { id, error: true });
       this.logger.error(`Failed to update contact ${id}:`, error);
       throw error;
     }
   }
 
   // Ticket operations
-  async getTicket(id: number, fullDetails: boolean = false, tenantContext?: TenantContext): Promise<AutotaskTicket | null> {
+  async getTicket(id: number, fullDetails: boolean = false, tenantContext?: TenantContext, tracker?: ApiCallTracker): Promise<AutotaskTicket | null> {
+    const startTime = Date.now();
     const client = await this.getClientForTenant(tenantContext);
     
     try {
       this.logger.info(`Getting ticket with ID: ${id}, fullDetails: ${fullDetails}`);
       
       const result = await client.Tickets.get(id);
+      const executionTime = Date.now() - startTime;
+      tracker?.recordApiCall('Tickets', 'get', executionTime, { id });
       // @apigrate library returns { item: ticketData } or null
       const ticket = result?.item as AutotaskTicket;
       
@@ -849,12 +914,15 @@ export class AutotaskService {
       // Apply optimization unless full details requested
       return fullDetails ? ticket : this.optimizeTicketData(ticket);
     } catch (error) {
+      const executionTime = Date.now() - startTime;
+      tracker?.recordApiCall('Tickets', 'get', executionTime, { id, error: true });
       this.logger.error(`Failed to get ticket ${id}:`, error);
       throw error;
     }
   }
 
-  async getTicketByNumber(ticketNumber: string, fullDetails: boolean = false, tenantContext?: TenantContext): Promise<AutotaskTicket | null> {
+  async getTicketByNumber(ticketNumber: string, fullDetails: boolean = false, tenantContext?: TenantContext, tracker?: ApiCallTracker): Promise<AutotaskTicket | null> {
+    const startTime = Date.now();
     const client = await this.getClientForTenant(tenantContext);
     
     try {
@@ -875,6 +943,9 @@ export class AutotaskService {
       this.logger.info('Querying Tickets via native library method:', searchBody);
       
       const response = await client.Tickets.query(searchBody);
+      const executionTime = Date.now() - startTime;
+      tracker?.recordApiCall('Tickets', 'query', executionTime, { ticketNumber });
+      
       const tickets = (response.items || []) as AutotaskTicket[];
       
       if (tickets.length === 0) {
@@ -888,6 +959,8 @@ export class AutotaskService {
       // Apply optimization unless full details requested
       return fullDetails ? ticket : this.optimizeTicketData(ticket);
     } catch (error) {
+      const executionTime = Date.now() - startTime;
+      tracker?.recordApiCall('Tickets', 'query', executionTime, { ticketNumber, error: true });
       this.logger.error(`Failed to get ticket by number ${ticketNumber}:`, error);
       throw error;
     }
@@ -895,7 +968,8 @@ export class AutotaskService {
 
 
 
-  async searchTickets(options: AutotaskQueryOptionsExtended = {}, tenantContext?: TenantContext): Promise<AutotaskTicket[]> {
+  async searchTickets(options: AutotaskQueryOptionsExtended = {}, tenantContext?: TenantContext, tracker?: ApiCallTracker): Promise<AutotaskTicket[]> {
+    const startTime = Date.now();
     const client = await this.getClientForTenant(tenantContext);
     
     try {
@@ -1104,6 +1178,9 @@ export class AutotaskService {
       
       // Use native library method
       const response = await client.Tickets.query(queryOptions);
+      const executionTime = Date.now() - startTime;
+      tracker?.recordApiCall('Tickets', 'query', executionTime, { filterCount: filters.length, resultCount: response.items?.length || 0 });
+      
       const tickets = (response.items || []) as AutotaskTicket[];
       
               // Log API call result
@@ -1128,6 +1205,8 @@ export class AutotaskService {
       });
       return optimizedTickets;
     } catch (error) {
+      const executionTime = Date.now() - startTime;
+      tracker?.recordApiCall('Tickets', 'query', executionTime, { error: true });
       this.logger.error('Failed to search tickets:', error);
       throw error;
     }
@@ -1137,7 +1216,7 @@ export class AutotaskService {
    * Count tickets matching filter criteria.
    * Used for pagination to determine total number of pages.
    */
-  async countTickets(options: AutotaskQueryOptionsExtended = {}, tenantContext?: TenantContext): Promise<number> {
+  async countTickets(options: AutotaskQueryOptionsExtended = {}, tenantContext?: TenantContext, tracker?: ApiCallTracker): Promise<number> {
     const client = await this.getClientForTenant(tenantContext);
     
     try {
@@ -1193,7 +1272,10 @@ export class AutotaskService {
         filters.push({ op: 'lte', field: 'createDate', value: options.createdDateTo });
       }
 
+      const startTime = Date.now();
       const response = await client.Tickets.count({ filter: filters });
+      const executionTime = Date.now() - startTime;
+      tracker?.recordApiCall('Tickets', 'count', executionTime, { filterCount: filters.length });
       
       const count = response.queryCount ?? 0;
       this.logger.info(`Tickets count: ${count}`);
@@ -1280,52 +1362,68 @@ export class AutotaskService {
     };
   }
 
-  async createTicket(ticket: Partial<AutotaskTicket>, tenantContext?: TenantContext): Promise<number> {
+  async createTicket(ticket: Partial<AutotaskTicket>, tenantContext?: TenantContext, tracker?: ApiCallTracker): Promise<number> {
+    const startTime = Date.now();
     const client = await this.getClientForTenant(tenantContext);
     
     try {
       this.logger.info('Creating ticket:', ticket);
       const result = await client.tickets.create(ticket as any);
+      const executionTime = Date.now() - startTime;
+      tracker?.recordApiCall('Tickets', 'create', executionTime);
       const ticketId = (result.data as any)?.id;
       this.logger.info(`Ticket created with ID: ${ticketId}`);
       return ticketId;
     } catch (error) {
+      const executionTime = Date.now() - startTime;
+      tracker?.recordApiCall('Tickets', 'create', executionTime, { error: true });
       this.logger.error('Failed to create ticket:', error);
       throw error;
     }
   }
 
-  async updateTicket(id: number, updates: Partial<AutotaskTicket>, tenantContext?: TenantContext): Promise<void> {
+  async updateTicket(id: number, updates: Partial<AutotaskTicket>, tenantContext?: TenantContext, tracker?: ApiCallTracker): Promise<void> {
+    const startTime = Date.now();
     const client = await this.getClientForTenant(tenantContext);
     
     try {
       this.logger.info(`Updating ticket ${id}:`, updates);
       await client.tickets.update(id, updates as any);
+      const executionTime = Date.now() - startTime;
+      tracker?.recordApiCall('Tickets', 'update', executionTime, { id });
       this.logger.info(`Ticket ${id} updated successfully`);
     } catch (error) {
+      const executionTime = Date.now() - startTime;
+      tracker?.recordApiCall('Tickets', 'update', executionTime, { id, error: true });
       this.logger.error(`Failed to update ticket ${id}:`, error);
       throw error;
     }
   }
 
   // Time entry operations
-  async createTimeEntry(timeEntry: Partial<AutotaskTimeEntry>, tenantContext?: TenantContext): Promise<number> {
+  async createTimeEntry(timeEntry: Partial<AutotaskTimeEntry>, tenantContext?: TenantContext, tracker?: ApiCallTracker): Promise<number> {
+    const startTime = Date.now();
     const client = await this.getClientForTenant(tenantContext);
     
     try {
       this.logger.info('Creating time entry:', timeEntry);
       const result = await client.TimeEntries.create(timeEntry as any);
+      const executionTime = Date.now() - startTime;
+      tracker?.recordApiCall('TimeEntries', 'create', executionTime);
       // @apigrate library returns { itemId: id }
       const timeEntryId = result?.itemId;
       this.logger.info(`Time entry created with ID: ${timeEntryId}`);
       return timeEntryId;
     } catch (error) {
+      const executionTime = Date.now() - startTime;
+      tracker?.recordApiCall('TimeEntries', 'create', executionTime, { error: true });
       this.logger.error('Failed to create time entry:', error);
       throw error;
     }
   }
 
-  async getTimeEntries(options: AutotaskQueryOptions = {}, tenantContext?: TenantContext): Promise<AutotaskTimeEntry[]> {
+  async getTimeEntries(options: AutotaskQueryOptions = {}, tenantContext?: TenantContext, tracker?: ApiCallTracker): Promise<AutotaskTimeEntry[]> {
+    const startTime = Date.now();
     const client = await this.getClientForTenant(tenantContext);
     
     try {
@@ -1393,6 +1491,8 @@ export class AutotaskService {
 
       // Use native library method
       const response = await client.TimeEntries.query(searchBody);
+      const executionTime = Date.now() - startTime;
+      tracker?.recordApiCall('TimeEntries', 'query', executionTime, { resultCount: response.items?.length || 0 });
       
       // Extract time entries from response
       // @apigrate library returns items directly (not in response.data)
@@ -1401,6 +1501,8 @@ export class AutotaskService {
       this.logger.info(`Retrieved ${timeEntries.length} time entries`);
       return timeEntries;
     } catch (error) {
+      const executionTime = Date.now() - startTime;
+      tracker?.recordApiCall('TimeEntries', 'query', executionTime, { error: true });
       this.logger.error('Failed to get time entries:', error);
       throw error;
     }
@@ -1410,7 +1512,8 @@ export class AutotaskService {
    * Count time entries matching filter criteria.
    * Used for pagination to determine total number of pages.
    */
-  async countTimeEntries(options: AutotaskQueryOptions = {}, tenantContext?: TenantContext): Promise<number> {
+  async countTimeEntries(options: AutotaskQueryOptions = {}, tenantContext?: TenantContext, tracker?: ApiCallTracker): Promise<number> {
+    const startTime = Date.now();
     const client = await this.getClientForTenant(tenantContext);
     
     try {
@@ -1446,17 +1549,22 @@ export class AutotaskService {
       }
 
       const response = await client.TimeEntries.count(countBody);
+      const executionTime = Date.now() - startTime;
+      tracker?.recordApiCall('TimeEntries', 'count', executionTime);
       
       const count = response.queryCount ?? 0;
       this.logger.info(`Time entries count: ${count}`);
       return count;
     } catch (error) {
+      const executionTime = Date.now() - startTime;
+      tracker?.recordApiCall('TimeEntries', 'count', executionTime, { error: true });
       this.logger.error('Failed to count time entries:', error);
       throw error;
     }
   }
 
-  async getTimeEntry(id: number, tenantContext?: TenantContext): Promise<AutotaskTimeEntry | null> {
+  async getTimeEntry(id: number, tenantContext?: TenantContext, tracker?: ApiCallTracker): Promise<AutotaskTimeEntry | null> {
+    const startTime = Date.now();
     const client = await this.getClientForTenant(tenantContext);
     
     try {
@@ -1472,6 +1580,8 @@ export class AutotaskService {
 
       // Use native library method
       const response = await client.TimeEntries.query(searchBody);
+      const executionTime = Date.now() - startTime;
+      tracker?.recordApiCall('TimeEntries', 'query', executionTime, { id });
       
       // Extract time entry from response
       // @apigrate library returns items directly (not in response.data)
@@ -1485,29 +1595,37 @@ export class AutotaskService {
       this.logger.info(`Time entry ${id} not found`);
       return null;
     } catch (error) {
+      const executionTime = Date.now() - startTime;
+      tracker?.recordApiCall('TimeEntries', 'query', executionTime, { id, error: true });
       this.logger.error(`Failed to get time entry ${id}:`, error);
       throw error;
     }
   }
 
   // Project operations
-  async getProject(id: number, tenantContext?: TenantContext): Promise<AutotaskProject | null> {
+  async getProject(id: number, tenantContext?: TenantContext, tracker?: ApiCallTracker): Promise<AutotaskProject | null> {
+    const startTime = Date.now();
     const client = await this.getClientForTenant(tenantContext);
     
     try {
       this.logger.info(`Getting project with ID: ${id}`);
       const result = await client.Projects.get(id);
+      const executionTime = Date.now() - startTime;
+      tracker?.recordApiCall('Projects', 'get', executionTime, { id });
       
       // @apigrate library returns { item: projectData } or null
       const projectData = result?.item;
       return projectData as unknown as AutotaskProject || null;
     } catch (error) {
+      const executionTime = Date.now() - startTime;
+      tracker?.recordApiCall('Projects', 'get', executionTime, { id, error: true });
       this.logger.error(`Failed to get project ${id}:`, error);
       throw error;
     }
   }
 
-  async searchProjects(options: AutotaskQueryOptions = {}, tenantContext?: TenantContext): Promise<AutotaskProject[]> {
+  async searchProjects(options: AutotaskQueryOptions = {}, tenantContext?: TenantContext, tracker?: ApiCallTracker): Promise<AutotaskProject[]> {
+    const startTime = Date.now();
     const client = await this.getClientForTenant(tenantContext);
     
     try {
@@ -1583,6 +1701,8 @@ export class AutotaskService {
 
       // Use native library method
       const response = await client.Projects.query(searchBody);
+      const executionTime = Date.now() - startTime;
+      tracker?.recordApiCall('Projects', 'query', executionTime, { resultCount: response.items?.length || 0 });
       
       // Extract projects from response
       // @apigrate library returns items directly (not in response.data)
@@ -1598,6 +1718,8 @@ export class AutotaskService {
       
       return optimizedProjects;
     } catch (error: any) {
+      const executionTime = Date.now() - startTime;
+      tracker?.recordApiCall('Projects', 'query', executionTime, { error: true });
       // Check if it's the same 405 error pattern
       if (error.response && error.response.status === 405) {
         this.logger.warn('Projects endpoint may not support listing via API (405 Method Not Allowed). This is common with some Autotask configurations.');
@@ -1632,7 +1754,8 @@ export class AutotaskService {
    * Count projects matching filter criteria.
    * Used for pagination to determine total number of pages.
    */
-  async countProjects(options: AutotaskQueryOptions = {}, tenantContext?: TenantContext): Promise<number> {
+  async countProjects(options: AutotaskQueryOptions = {}, tenantContext?: TenantContext, tracker?: ApiCallTracker): Promise<number> {
+    const startTime = Date.now();
     const client = await this.getClientForTenant(tenantContext);
     
     try {
@@ -1648,61 +1771,81 @@ export class AutotaskService {
       }
 
       const response = await client.Projects.count({ filter });
+      const executionTime = Date.now() - startTime;
+      tracker?.recordApiCall('Projects', 'count', executionTime);
       
       const count = response.queryCount ?? 0;
       this.logger.info(`Projects count: ${count}`);
       return count;
     } catch (error) {
+      const executionTime = Date.now() - startTime;
+      tracker?.recordApiCall('Projects', 'count', executionTime, { error: true });
       this.logger.error('Failed to count projects:', error);
       throw error;
     }
   }
 
-  async createProject(project: Partial<AutotaskProject>, tenantContext?: TenantContext): Promise<number> {
+  async createProject(project: Partial<AutotaskProject>, tenantContext?: TenantContext, tracker?: ApiCallTracker): Promise<number> {
+    const startTime = Date.now();
     const client = await this.getClientForTenant(tenantContext);
     
     try {
       this.logger.info('Creating project:', project);
       const result = await client.projects.create(project as any);
+      const executionTime = Date.now() - startTime;
+      tracker?.recordApiCall('Projects', 'create', executionTime);
       const projectId = (result.data as any)?.id;
       this.logger.info(`Project created with ID: ${projectId}`);
       return projectId;
     } catch (error) {
+      const executionTime = Date.now() - startTime;
+      tracker?.recordApiCall('Projects', 'create', executionTime, { error: true });
       this.logger.error('Failed to create project:', error);
       throw error;
     }
   }
 
-  async updateProject(id: number, updates: Partial<AutotaskProject>, tenantContext?: TenantContext): Promise<void> {
+  async updateProject(id: number, updates: Partial<AutotaskProject>, tenantContext?: TenantContext, tracker?: ApiCallTracker): Promise<void> {
+    const startTime = Date.now();
     const client = await this.getClientForTenant(tenantContext);
     
     try {
       this.logger.info(`Updating project ${id}:`, updates);
       await client.projects.update(id, updates as any);
+      const executionTime = Date.now() - startTime;
+      tracker?.recordApiCall('Projects', 'update', executionTime, { id });
       this.logger.info(`Project ${id} updated successfully`);
     } catch (error) {
+      const executionTime = Date.now() - startTime;
+      tracker?.recordApiCall('Projects', 'update', executionTime, { id, error: true });
       this.logger.error(`Failed to update project ${id}:`, error);
       throw error;
     }
   }
 
   // Resource operations
-  async getResource(id: number, tenantContext?: TenantContext): Promise<AutotaskResource | null> {
+  async getResource(id: number, tenantContext?: TenantContext, tracker?: ApiCallTracker): Promise<AutotaskResource | null> {
+    const startTime = Date.now();
     const client = await this.getClientForTenant(tenantContext);
     
     try {
       this.logger.info(`Getting resource with ID: ${id}`);
       const result = await client.Resources.get(id);
+      const executionTime = Date.now() - startTime;
+      tracker?.recordApiCall('Resources', 'get', executionTime, { id });
       
       // @apigrate library returns { item: resourceData } or null
       return result?.item as AutotaskResource || null;
     } catch (error) {
+      const executionTime = Date.now() - startTime;
+      tracker?.recordApiCall('Resources', 'get', executionTime, { id, error: true });
       this.logger.error(`Failed to get resource ${id}:`, error);
       throw error;
     }
   }
 
-  async searchResources(options: AutotaskQueryOptions = {}, tenantContext?: TenantContext): Promise<AutotaskResource[]> {
+  async searchResources(options: AutotaskQueryOptions = {}, tenantContext?: TenantContext, tracker?: ApiCallTracker): Promise<AutotaskResource[]> {
+    const startTime = Date.now();
     const client = await this.getClientForTenant(tenantContext);
     
     try {
@@ -1777,6 +1920,8 @@ export class AutotaskService {
 
       // Use native library method
       const response = await client.Resources.query(searchBody);
+      const executionTime = Date.now() - startTime;
+      tracker?.recordApiCall('Resources', 'query', executionTime, { resultCount: response.items?.length || 0 });
         
       this.logger.info('✅ Resources.query() successful:', {
         itemsCount: response.items?.length ?? 0,
@@ -1789,6 +1934,8 @@ export class AutotaskService {
       this.logger.info(`Retrieved ${resources.length} resources (optimized for size)`);
       return resources;
     } catch (error: any) {
+      const executionTime = Date.now() - startTime;
+      tracker?.recordApiCall('Resources', 'query', executionTime, { error: true });
       // Check if it's the same 405 error pattern
       if (error.response && error.response.status === 405) {
         this.logger.warn('Resources endpoint may not support listing via API (405 Method Not Allowed). This is common with some Autotask configurations.');
@@ -1803,7 +1950,8 @@ export class AutotaskService {
    * Count resources matching filter criteria.
    * Used for pagination to determine total number of pages.
    */
-  async countResources(options: AutotaskQueryOptions = {}, tenantContext?: TenantContext): Promise<number> {
+  async countResources(options: AutotaskQueryOptions = {}, tenantContext?: TenantContext, tracker?: ApiCallTracker): Promise<number> {
+    const startTime = Date.now();
     const client = await this.getClientForTenant(tenantContext);
     
     try {
@@ -1819,11 +1967,15 @@ export class AutotaskService {
       }
 
       const response = await client.Resources.count({ filter });
+      const executionTime = Date.now() - startTime;
+      tracker?.recordApiCall('Resources', 'count', executionTime);
       
       const count = response.queryCount ?? 0;
       this.logger.info(`Resources count: ${count}`);
       return count;
     } catch (error) {
+      const executionTime = Date.now() - startTime;
+      tracker?.recordApiCall('Resources', 'count', executionTime, { error: true });
       this.logger.error('Failed to count resources:', error);
       throw error;
     }
@@ -1989,7 +2141,8 @@ export class AutotaskService {
     }
   }
 
-  async searchContracts(options: AutotaskQueryOptions = {}, tenantContext?: TenantContext): Promise<AutotaskContract[]> {
+  async searchContracts(options: AutotaskQueryOptions = {}, tenantContext?: TenantContext, tracker?: ApiCallTracker): Promise<AutotaskContract[]> {
+    const startTime = Date.now();
     const client = await this.getClientForTenant(tenantContext);
     
     try {
@@ -2064,6 +2217,8 @@ export class AutotaskService {
       
       // Use native library method
       const response = await client.Contracts.query(searchBody);
+      const executionTime = Date.now() - startTime;
+      tracker?.recordApiCall('Contracts', 'query', executionTime, { resultCount: response.items?.length || 0 });
       
       this.logger.info('✅ Contracts.query() successful:', {
         itemsCount: response.items?.length ?? 0,
@@ -2078,6 +2233,8 @@ export class AutotaskService {
       
       return contracts;
     } catch (error) {
+      const executionTime = Date.now() - startTime;
+      tracker?.recordApiCall('Contracts', 'query', executionTime, { error: true });
       this.logger.error('Failed to search contracts:', error);
       throw error;
     }
@@ -2202,7 +2359,8 @@ export class AutotaskService {
   }
 
   // Task operations
-  async getTask(id: number, tenantContext?: TenantContext): Promise<AutotaskTask | null> {
+  async getTask(id: number, tenantContext?: TenantContext, tracker?: ApiCallTracker): Promise<AutotaskTask | null> {
+    const startTime = Date.now();
     const client = await this.getClientForTenant(tenantContext);
     
     try {
@@ -2218,6 +2376,8 @@ export class AutotaskService {
 
       // Use native library method
       const response = await client.Tasks.query(searchBody);
+      const executionTime = Date.now() - startTime;
+      tracker?.recordApiCall('Tasks', 'query', executionTime, { id });
       
       // Extract task from response
       // @apigrate library returns items directly (not in response.data)
@@ -2231,12 +2391,15 @@ export class AutotaskService {
       this.logger.info(`Task ${id} not found`);
       return null;
     } catch (error) {
+      const executionTime = Date.now() - startTime;
+      tracker?.recordApiCall('Tasks', 'query', executionTime, { id, error: true });
       this.logger.error(`Failed to get task ${id}:`, error);
       throw error;
     }
   }
 
-  async searchTasks(options: AutotaskQueryOptions = {}, tenantContext?: TenantContext): Promise<AutotaskTask[]> {
+  async searchTasks(options: AutotaskQueryOptions = {}, tenantContext?: TenantContext, tracker?: ApiCallTracker): Promise<AutotaskTask[]> {
+    const startTime = Date.now();
     const client = await this.getClientForTenant(tenantContext);
     
     try {
@@ -2305,6 +2468,8 @@ export class AutotaskService {
 
       // Use the correct Tasks/query endpoint
       const response = await client.Tasks.query(searchBody);
+      const executionTime = Date.now() - startTime;
+      tracker?.recordApiCall('Tasks', 'query', executionTime, { resultCount: response.items?.length || 0 });
       
       // Extract tasks from response
       // @apigrate library returns items directly (not in response.data)
@@ -2320,6 +2485,8 @@ export class AutotaskService {
       
       return optimizedTasks;
     } catch (error) {
+      const executionTime = Date.now() - startTime;
+      tracker?.recordApiCall('Tasks', 'query', executionTime, { error: true });
       this.logger.error('Failed to search tasks:', error);
       throw error;
     }
@@ -2345,23 +2512,29 @@ export class AutotaskService {
     };
   }
 
-  async createTask(task: Partial<AutotaskTask>, tenantContext?: TenantContext): Promise<number> {
+  async createTask(task: Partial<AutotaskTask>, tenantContext?: TenantContext, tracker?: ApiCallTracker): Promise<number> {
+    const startTime = Date.now();
     const client = await this.getClientForTenant(tenantContext);
     
     try {
       this.logger.info('Creating task:', task);
       const result = await client.Tasks.create(task as any);
+      const executionTime = Date.now() - startTime;
+      tracker?.recordApiCall('Tasks', 'create', executionTime);
       // @apigrate library returns { itemId: id }
       const taskID = result?.itemId;
       this.logger.info(`Task created with ID: ${taskID}`);
       return taskID;
     } catch (error) {
+      const executionTime = Date.now() - startTime;
+      tracker?.recordApiCall('Tasks', 'create', executionTime, { error: true });
       this.logger.error('Failed to create task:', error);
       throw error;
     }
   }
 
-  async updateTask(id: number, updates: Partial<AutotaskTask>, tenantContext?: TenantContext): Promise<void> {
+  async updateTask(id: number, updates: Partial<AutotaskTask>, tenantContext?: TenantContext, tracker?: ApiCallTracker): Promise<void> {
+    const startTime = Date.now();
     const client = await this.getClientForTenant(tenantContext);
     
     try {
@@ -2369,8 +2542,12 @@ export class AutotaskService {
       // Add id to updates object for patch operation
       const updateData = { ...updates, id };
       await client.Tasks.update(updateData as any);
+      const executionTime = Date.now() - startTime;
+      tracker?.recordApiCall('Tasks', 'update', executionTime, { id });
       this.logger.info(`Task ${id} updated successfully`);
     } catch (error) {
+      const executionTime = Date.now() - startTime;
+      tracker?.recordApiCall('Tasks', 'update', executionTime, { id, error: true });
       this.logger.error(`Failed to update task ${id}:`, error);
       throw error;
     }
@@ -3066,7 +3243,8 @@ export class AutotaskService {
   }
 
   // Opportunities
-  async searchOpportunities(options: AutotaskQueryOptionsExtended = {}, tenantContext?: TenantContext): Promise<any[]> {
+  async searchOpportunities(options: AutotaskQueryOptionsExtended = {}, tenantContext?: TenantContext, tracker?: ApiCallTracker): Promise<any[]> {
+    const startTime = Date.now();
     const client = await this.getClientForTenant(tenantContext);
     
     try {
@@ -3078,17 +3256,23 @@ export class AutotaskService {
       };
 
       const result = await client.Opportunities.query(queryOptions);
+      const executionTime = Date.now() - startTime;
+      tracker?.recordApiCall('Opportunities', 'query', executionTime, { resultCount: result.items?.length || 0 });
+      
       const opportunities = result.items || [];
       
       this.logger.info(`Retrieved ${opportunities.length} opportunities`);
       return opportunities;
     } catch (error) {
+      const executionTime = Date.now() - startTime;
+      tracker?.recordApiCall('Opportunities', 'query', executionTime, { error: true });
       this.logger.error('Failed to search opportunities:', error);
       throw error;
     }
   }
 
-  async countOpportunities(options: AutotaskQueryOptionsExtended = {}, tenantContext?: TenantContext): Promise<number> {
+  async countOpportunities(options: AutotaskQueryOptionsExtended = {}, tenantContext?: TenantContext, tracker?: ApiCallTracker): Promise<number> {
+    const startTime = Date.now();
     const client = await this.getClientForTenant(tenantContext);
     
     try {
@@ -3099,11 +3283,16 @@ export class AutotaskService {
       };
 
       const result = await client.Opportunities.count(countOptions);
+      const executionTime = Date.now() - startTime;
+      tracker?.recordApiCall('Opportunities', 'count', executionTime);
+      
       const count = result.queryCount || 0;
       
       this.logger.info(`Total opportunities count: ${count}`);
       return count;
     } catch (error) {
+      const executionTime = Date.now() - startTime;
+      tracker?.recordApiCall('Opportunities', 'count', executionTime, { error: true });
       this.logger.error('Failed to count opportunities:', error);
       throw error;
     }

@@ -8,7 +8,8 @@ import { AutotaskService } from '../services/autotask.service.js';
 import { Logger } from '../utils/logger.js';
 import { MappingService } from '../utils/mapping.service.js';
 import { AutotaskCredentials, TenantContext } from '../types/mcp.js'; 
-import { PaginationEnforcer, buildPaginatedToolDescription } from '../core/pagination.js'; 
+import { PaginationEnforcer, buildPaginatedToolDescription } from '../core/pagination.js';
+import { ApiCallTracker, ApiCallSummary } from '../utils/api-call-tracker.js'; 
 
 export const LARGE_RESPONSE_THRESHOLDS = {
   tickets: 100,        
@@ -293,6 +294,61 @@ export class EnhancedAutotaskToolHandler {
     return id;
   }
 
+  /**
+   * Pre-fetch and cache unique IDs to avoid cache stampede.
+   * This must be called BEFORE parallel enhancement loops to ensure
+   * all IDs are cached, preventing N parallel API calls for the same ID.
+   * 
+   * @param items - Array of items to extract IDs from
+   * @param companyFields - Field names containing company IDs
+   * @param resourceFields - Field names containing resource IDs
+   * @param tenantContext - Tenant context for multi-tenant mode
+   */
+  private async prefetchMappingIds(
+    items: any[],
+    companyFields: string[],
+    resourceFields: string[],
+    tenantContext?: TenantContext
+  ): Promise<void> {
+    const mappingService = await this.getMappingService();
+    
+    // Collect unique company IDs
+    const companyIds = new Set<number>();
+    for (const item of items) {
+      for (const field of companyFields) {
+        if (item[field] && typeof item[field] === 'number') {
+          companyIds.add(item[field]);
+        }
+      }
+    }
+    
+    // Collect unique resource IDs
+    const resourceIds = new Set<number>();
+    for (const item of items) {
+      for (const field of resourceFields) {
+        if (item[field] && typeof item[field] === 'number') {
+          resourceIds.add(item[field]);
+        }
+      }
+    }
+    
+    // Pre-fetch unique IDs (this populates the cache BEFORE the parallel loop)
+    // Fetch sequentially to avoid rate limiting - cache will make subsequent lookups instant
+    if (companyIds.size > 0) {
+      this.logger.debug(`Pre-fetching ${companyIds.size} unique company IDs for enhancement`);
+      for (const id of companyIds) {
+        await mappingService.getCompanyName(id, tenantContext);
+      }
+    }
+    
+    if (resourceIds.size > 0) {
+      this.logger.debug(`Pre-fetching ${resourceIds.size} unique resource IDs for enhancement`);
+      for (const id of resourceIds) {
+        await mappingService.getResourceName(id, tenantContext);
+      }
+    }
+  }
+
 
 
   /**
@@ -534,23 +590,6 @@ export class EnhancedAutotaskToolHandler {
           impersonationResourceId: tenantData.impersonationResourceId,
           mode: tenantData.mode || 'write' // Default to write mode if not specified
         };
-
-        this.logger.info('✅ Successfully extracted tenant context', {
-          tenantId: tenantContext.tenantId,
-          username: credentials.username ? `${credentials.username.substring(0, 3)}***` : undefined,
-          hasApiUrl: !!credentials.apiUrl,
-          sessionId: tenantContext.sessionId,
-          impersonationResourceId: tenantContext.impersonationResourceId,
-          mode: tenantContext.mode
-        });
-
-        // NOTE: We intentionally DO NOT delete tenant data from args
-        // This preserves the original args for debugging and potential future use
-        // The tenant fields are harmless to pass to individual tool methods
-        this.logger.info('🔄 Keeping tenant data in arguments for debugging/tracing', {
-          argKeys: Object.keys(args),
-          preservedTenantField: args._tenant ? '_tenant' : args.tenant ? 'tenant' : 'credentials'
-        });
 
         return tenantContext;
       } else {
@@ -2556,6 +2595,9 @@ export class EnhancedAutotaskToolHandler {
     const startTime = Date.now();
     const toolCallId = `${name}_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     
+    // Create API call tracker for this tool execution
+    const tracker = new ApiCallTracker(name, toolCallId, this.logger);
+    
     try {
       // Validate tool name
       if (!EnhancedAutotaskToolHandler.isValidToolName(name)) {
@@ -2580,37 +2622,6 @@ export class EnhancedAutotaskToolHandler {
         argCount: Object.keys(args || {}).length,
         timestamp: new Date().toISOString()
       }); 
-
-      this.logger.info('ARGS', args);
-      
-      // Enhanced debugging for tenant context
-      this.logger.info('🔍 DETAILED ARGS ANALYSIS', {
-        toolCallId,
-        argsType: typeof args,
-        argsKeys: args ? Object.keys(args) : 'null/undefined',
-        hasUnderscore_tenant: args ? '_tenant' in args : false,
-        hasTenant: args ? 'tenant' in args : false,
-        hasCredentials: args ? 'credentials' in args : false,
-        argValues: {
-          _tenant: args?._tenant ? 'present' : 'missing',
-          tenant: args?.tenant ? 'present' : 'missing', 
-          credentials: args?.credentials ? 'present' : 'missing'
-        }
-      });
-      
-      // Log each top-level property in args for debugging
-      if (args && typeof args === 'object') {
-        for (const [key, value] of Object.entries(args)) {
-          this.logger.info(`🔍 ARG[${key}]`, {
-            type: typeof value,
-            isObject: typeof value === 'object' && value !== null,
-            hasSubKeys: typeof value === 'object' && value !== null ? Object.keys(value) : 'n/a',
-            preview: key.includes('secret') || key.includes('password') ? '[REDACTED]' : 
-                    typeof value === 'string' ? value.substring(0, 50) : 
-                    typeof value === 'object' ? '[object]' : value
-          });
-        }
-      }
 
       // Extract tenant context from arguments
       const tenantContext = this.extractTenantContext(args);
@@ -2658,270 +2669,270 @@ export class EnhancedAutotaskToolHandler {
         // Company tools
         case 'search_companies':
           this.logger.info(`📊 Executing search_companies`, { toolCallId });
-          result = await this.searchCompanies(args, tenantContext);
+          result = await this.searchCompanies(args, tenantContext, tracker);
           break;
         
         case 'create_company':
           this.logger.info(`➕ Executing create_company`, { toolCallId });
-          result = await this.createCompany(args, tenantContext);
+          result = await this.createCompany(args, tenantContext, tracker);
           break;
 
         case 'update_company':
           this.logger.info(`✏️ Executing update_company`, { toolCallId });
-          result = await this.updateCompany(args, tenantContext);
+          result = await this.updateCompany(args, tenantContext, tracker);
           break;
 
         // Contact tools
         case 'search_contacts':
           this.logger.info(`📊 Executing search_contacts`, { toolCallId });
-          result = await this.searchContacts(args, tenantContext);
+          result = await this.searchContacts(args, tenantContext, tracker);
           break;
 
         case 'create_contact':
           this.logger.info(`➕ Executing create_contact`, { toolCallId });
-          result = await this.createContact(args, tenantContext);
+          result = await this.createContact(args, tenantContext, tracker);
           break;
 
         case 'update_contact':
           this.logger.info(`✏️ Executing update_contact`, { toolCallId });
-          result = await this.updateContact(args, tenantContext);
+          result = await this.updateContact(args, tenantContext, tracker);
           break;
 
         // Ticket tools
         case 'search_tickets':
           this.logger.info(`📊 Executing search_tickets`, { toolCallId });
-          result = await this.searchTickets(args, tenantContext);
+          result = await this.searchTickets(args, tenantContext, tracker);
           break;
 
         case 'create_ticket':
           this.logger.info(`➕ Executing create_ticket`, { toolCallId });
-          result = await this.createTicket(args, tenantContext);
+          result = await this.createTicket(args, tenantContext, tracker);
           break;
 
         case 'update_ticket':
           this.logger.info(`✏️ Executing update_ticket`, { toolCallId });
-          result = await this.updateTicket(args, tenantContext);
+          result = await this.updateTicket(args, tenantContext, tracker);
           break;
 
         // Time Entry tools
         case 'create_time_entry':
           this.logger.info(`⏰ Executing create_time_entry`, { toolCallId });
-          result = await this.createTimeEntry(args, tenantContext);
+          result = await this.createTimeEntry(args, tenantContext, tracker);
           break;
 
         // Project tools
         case 'search_projects':
           this.logger.info(`📊 Executing search_projects`, { toolCallId });
-          result = await this.searchProjects(args, tenantContext);
+          result = await this.searchProjects(args, tenantContext, tracker);
           break;
 
         // Resource tools
         case 'search_resources':
           this.logger.info(`📊 Executing search_resources`, { toolCallId });
-          result = await this.searchResources(args, tenantContext);
+          result = await this.searchResources(args, tenantContext, tracker);
           break;
         // Get ticket by number (special case - not by ID)
         case 'get_ticket_by_number':
           this.logger.info(`🎫 Executing get_ticket_by_number`, { toolCallId });
-          result = await this.getTicketByNumber(args, tenantContext);
+          result = await this.getTicketByNumber(args, tenantContext, tracker);
           break;
 
         case 'create_project':
           this.logger.info(`➕ Executing create_project`, { toolCallId });
-          result = await this.createProject(args, tenantContext);
+          result = await this.createProject(args, tenantContext, tracker);
           break;
 
         case 'update_project':
           this.logger.info(`✏️ Executing update_project`, { toolCallId });
-          result = await this.updateProject(args, tenantContext);
+          result = await this.updateProject(args, tenantContext, tracker);
           break;
 
         case 'get_project_details':
           this.logger.info(`📋 Executing get_project_details`, { toolCallId });
-          result = await this.getProjectDetails(args, tenantContext);
+          result = await this.getProjectDetails(args, tenantContext, tracker);
           break;
 
         // Time Entry Management
         case 'search_time_entries':
           this.logger.info(`⏰ Executing search_time_entries`, { toolCallId });
-          result = await this.searchTimeEntries(args, tenantContext);
+          result = await this.searchTimeEntries(args, tenantContext, tracker);
           break;
 
         // Task Management
         case 'search_tasks':
           this.logger.info(`📝 Executing search_tasks`, { toolCallId });
-          result = await this.searchTasks(args, tenantContext);
+          result = await this.searchTasks(args, tenantContext, tracker);
           break;
 
         case 'create_task':
           this.logger.info(`➕ Executing create_task`, { toolCallId });
-          result = await this.createTask(args, tenantContext);
+          result = await this.createTask(args, tenantContext, tracker);
           break;
 
         case 'update_task':
           this.logger.info(`✏️ Executing update_task`, { toolCallId });
-          result = await this.updateTask(args, tenantContext);
+          result = await this.updateTask(args, tenantContext, tracker);
           break;
 
         // Notes Management
         case 'search_ticket_notes':
           this.logger.info(`📝 Executing search_ticket_notes`, { toolCallId });
-          result = await this.searchTicketNotes(args, tenantContext);
+          result = await this.searchTicketNotes(args, tenantContext, tracker);
           break;
 
         case 'get_ticket_note':
           this.logger.info(`📝 Executing get_ticket_note`, { toolCallId });
-          result = await this.getTicketNote(args, tenantContext);
+          result = await this.getTicketNote(args, tenantContext, tracker);
           break;
 
         case 'create_ticket_note':
           this.logger.info(`➕ Executing create_ticket_note`, { toolCallId });
-          result = await this.createTicketNote(args, tenantContext);
+          result = await this.createTicketNote(args, tenantContext, tracker);
           break;
 
         case 'search_project_notes':
           this.logger.info(`📝 Executing search_project_notes`, { toolCallId });
-          result = await this.searchProjectNotes(args, tenantContext);
+          result = await this.searchProjectNotes(args, tenantContext, tracker);
           break;
 
         case 'get_project_note':
           this.logger.info(`📝 Executing get_project_note`, { toolCallId });
-          result = await this.getProjectNote(args, tenantContext);
+          result = await this.getProjectNote(args, tenantContext, tracker);
           break;
 
         case 'create_project_note':
           this.logger.info(`➕ Executing create_project_note`, { toolCallId });
-          result = await this.createProjectNote(args, tenantContext);
+          result = await this.createProjectNote(args, tenantContext, tracker);
           break;
 
         case 'search_company_notes':
           this.logger.info(`📝 Executing search_company_notes`, { toolCallId });
-          result = await this.searchCompanyNotes(args, tenantContext);
+          result = await this.searchCompanyNotes(args, tenantContext, tracker);
           break;
 
         case 'get_company_note':
           this.logger.info(`📝 Executing get_company_note`, { toolCallId });
-          result = await this.getCompanyNote(args, tenantContext);
+          result = await this.getCompanyNote(args, tenantContext, tracker);
           break;
 
         case 'create_company_note':
           this.logger.info(`➕ Executing create_company_note`, { toolCallId });
-          result = await this.createCompanyNote(args, tenantContext);
+          result = await this.createCompanyNote(args, tenantContext, tracker);
           break;
 
         case 'search_ticket_attachments':
           this.logger.info(`📎 Executing search_ticket_attachments`, { toolCallId });
-          result = await this.searchTicketAttachments(args, tenantContext);
+          result = await this.searchTicketAttachments(args, tenantContext, tracker);
           break;
 
         case 'get_ticket_attachment':
           this.logger.info(`📎 Executing get_ticket_attachment`, { toolCallId });
-          result = await this.getTicketAttachment(args, tenantContext);
+          result = await this.getTicketAttachment(args, tenantContext, tracker);
           break;
 
         // Financial Management
         case 'search_contracts':
           this.logger.info(`📄 Executing search_contracts`, { toolCallId });
-          result = await this.searchContracts(args, tenantContext);
+          result = await this.searchContracts(args, tenantContext, tracker);
           break;
 
         case 'search_invoices':
           this.logger.info(`🧾 Executing search_invoices`, { toolCallId });
-          result = await this.searchInvoices(args, tenantContext);
+          result = await this.searchInvoices(args, tenantContext, tracker);
           break;
 
         case 'search_quotes':
           this.logger.info(`💰 Executing search_quotes`, { toolCallId });
-          result = await this.searchQuotes(args, tenantContext);
+          result = await this.searchQuotes(args, tenantContext, tracker);
           break;
 
         case 'create_quote':
           this.logger.info(`➕ Executing create_quote`, { toolCallId });
-          result = await this.createQuote(args, tenantContext);
+          result = await this.createQuote(args, tenantContext, tracker);
           break;
 
         case 'search_opportunities':
           this.logger.info(`💼 Executing search_opportunities`, { toolCallId });
-          result = await this.searchOpportunities(args, tenantContext);
+          result = await this.searchOpportunities(args, tenantContext, tracker);
           break;
 
         case 'search_expense_reports':
           this.logger.info(`💳 Executing search_expense_reports`, { toolCallId });
-          result = await this.searchExpenseReports(args, tenantContext);
+          result = await this.searchExpenseReports(args, tenantContext, tracker);
           break;
 
         case 'create_expense_report':
           this.logger.info(`➕ Executing create_expense_report`, { toolCallId });
-          result = await this.createExpenseReport(args, tenantContext);
+          result = await this.createExpenseReport(args, tenantContext, tracker);
           break;
 
         case 'update_expense_report':
           this.logger.info(`✏️ Executing update_expense_report`, { toolCallId });
-          result = await this.updateExpenseReport(args, tenantContext);
+          result = await this.updateExpenseReport(args, tenantContext, tracker);
           break;
 
         // Expense Items Management
         case 'search_expense_items':
           this.logger.info(`💳 Executing search_expense_items`, { toolCallId });
-          result = await this.searchExpenseItems(args, tenantContext);
+          result = await this.searchExpenseItems(args, tenantContext, tracker);
           break;
 
         case 'get_expense_item':
           this.logger.info(`💳 Executing get_expense_item`, { toolCallId });
-          result = await this.getExpenseItem(args, tenantContext);
+          result = await this.getExpenseItem(args, tenantContext, tracker);
           break;
 
         case 'create_expense_item':
           this.logger.info(`➕ Executing create_expense_item`, { toolCallId });
-          result = await this.createExpenseItem(args, tenantContext);
+          result = await this.createExpenseItem(args, tenantContext, tracker);
           break;
 
         case 'update_expense_item':
           this.logger.info(`✏️ Executing update_expense_item`, { toolCallId });
-          result = await this.updateExpenseItem(args, tenantContext);
+          result = await this.updateExpenseItem(args, tenantContext, tracker);
           break;
 
         // Configuration Items Management
         case 'search_configuration_items':
           this.logger.info(`🖥️ Executing search_configuration_items`, { toolCallId });
-          result = await this.searchConfigurationItems(args, tenantContext);
+          result = await this.searchConfigurationItems(args, tenantContext, tracker);
           break;
 
         case 'create_configuration_item':
           this.logger.info(`➕ Executing create_configuration_item`, { toolCallId });
-          result = await this.createConfigurationItem(args, tenantContext);
+          result = await this.createConfigurationItem(args, tenantContext, tracker);
           break;
 
         case 'update_configuration_item':
           this.logger.info(`✏️ Executing update_configuration_item`, { toolCallId });
-          result = await this.updateConfigurationItem(args, tenantContext);
+          result = await this.updateConfigurationItem(args, tenantContext, tracker);
           break;
 
         // Pagination Helper Tools
         case 'get_companies_page':
           this.logger.info(`📄 Executing get_companies_page`, { toolCallId });
-          result = await this.getCompaniesPage(args, tenantContext);
+          result = await this.getCompaniesPage(args, tenantContext, tracker);
           break;
 
         case 'query_entity':
           this.logger.info(`🔍 Executing query_entity`, { toolCallId });
-          result = await this.queryEntity(args, tenantContext);
+          result = await this.queryEntity(args, tenantContext, tracker);
           break;
 
         case 'get_entity':
           this.logger.info(`🏢 Executing get_entity`, { toolCallId });
-          result = await this.getEntityById(args, tenantContext);
+          result = await this.getEntityById(args, tenantContext, tracker);
           break;
 
         // Managed Services Tools
         case 'get_company_categories':
           this.logger.info(`📋 Executing get_company_categories`, { toolCallId });
-          result = await this.getCompanyCategories(args, tenantContext);
+          result = await this.getCompanyCategories(args, tenantContext, tracker);
           break;
 
         case 'find_clients_by_category':
           this.logger.info(`🏢 Executing find_clients_by_category`, { toolCallId });
-          result = await this.findClientsByCategory(args, tenantContext);
+          result = await this.findClientsByCategory(args, tenantContext, tracker);
           break;
 
         default:
@@ -2938,25 +2949,40 @@ export class EnhancedAutotaskToolHandler {
       const contentLength = result.content && result.content.length > 0 && result.content[0] && result.content[0].type === 'text' 
         ? (result.content[0] as any).text.length 
         : 0;
+      
+      // Log API call summary
+      tracker.logSummary();
+      
+      // Inject API call summary into the result
+      const apiCallSummary = tracker.getSummary();
+      result = this.injectApiCallSummary(result, apiCallSummary);
         
       this.logger.info(`✅ Tool call completed successfully: ${name}`, {
         toolCallId,
         toolName: name,
         executionTimeMs: executionTime,
         resultType: result.isError ? 'error' : 'success',
-        contentLength
+        contentLength,
+        apiCalls: apiCallSummary.apiCalls,
+        cacheHits: apiCallSummary.cacheHits
       });
 
       return result;
       
     } catch (error) {
       const executionTime = Date.now() - startTime;
+      
+      // Log API call summary even on error
+      tracker.logSummary();
+      
       this.logger.error(`❌ Tool call failed: ${name}`, {
         toolCallId,
         toolName: name,
         executionTimeMs: executionTime,
         error: error instanceof Error ? error.message : 'Unknown error',
-        stack: error instanceof Error ? error.stack : undefined
+        stack: error instanceof Error ? error.stack : undefined,
+        apiCalls: tracker.getSummary().apiCalls,
+        cacheHits: tracker.getSummary().cacheHits
       });
       
       return {
@@ -2968,8 +2994,58 @@ export class EnhancedAutotaskToolHandler {
       };
     }
   }
+  
+  /**
+   * Inject API call summary into tool result
+   * Modifies the JSON response to include _apiCalls metadata
+   */
+  private injectApiCallSummary(result: McpToolResult, summary: ApiCallSummary): McpToolResult {
+    // If there are no calls tracked, skip injection
+    if (summary.totalCalls === 0) {
+      return result;
+    }
+    
+    // Try to inject into the first text content that looks like JSON
+    if (result.content && result.content.length > 0) {
+      const firstContent = result.content[0];
+      if (firstContent.type === 'text' && firstContent.text) {
+        try {
+          // Try to parse as JSON
+          const jsonData = JSON.parse(firstContent.text);
+          
+          // Add the _apiCalls summary
+          jsonData._apiCalls = {
+            totalCalls: summary.totalCalls,
+            apiCalls: summary.apiCalls,
+            cacheHits: summary.cacheHits,
+            totalDurationMs: summary.totalDurationMs,
+            calls: summary.calls.map(call => ({
+              entity: call.entity,
+              operation: call.operation,
+              source: call.source,
+              ...(call.durationMs !== undefined && { durationMs: call.durationMs })
+            }))
+          };
+          
+          // Replace the content with updated JSON
+          return {
+            ...result,
+            content: [{
+              type: 'text',
+              text: JSON.stringify(jsonData, null, 2)
+            }]
+          };
+        } catch {
+          // Not valid JSON, skip injection
+          this.logger.debug('Could not inject API call summary - response is not JSON');
+        }
+      }
+    }
+    
+    return result;
+  }
 
-  private async searchCompanies(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
+  private async searchCompanies(args: Record<string, any>, tenantContext?: TenantContext, tracker?: ApiCallTracker): Promise<McpToolResult> {
     try {
       const { page = 1, pageSize = 500 } = args;
       const options: any = {};
@@ -3039,12 +3115,12 @@ export class EnhancedAutotaskToolHandler {
       
       options.pageSize = Math.min(pageSize, 500);
 
-      const companies = await this.autotaskService.searchCompanies(options, tenantContext);
+      const companies = await this.autotaskService.searchCompanies(options, tenantContext, tracker);
       
       // Get total count for pagination
       let totalCount = companies.length;
       try {
-        const countResult = await this.autotaskService.countCompanies(options, tenantContext);
+        const countResult = await this.autotaskService.countCompanies(options, tenantContext, tracker);
         totalCount = countResult ?? companies.length;
       } catch (countError) {
         this.logger.warn('Could not get total count for companies, using returned count');
@@ -3090,11 +3166,11 @@ export class EnhancedAutotaskToolHandler {
     }
   }
 
-  private async createCompany(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
+  private async createCompany(args: Record<string, any>, tenantContext?: TenantContext, tracker?: ApiCallTracker): Promise<McpToolResult> {
     try {
       const companyData = { ...args };
       
-      const companyId = await this.autotaskService.createCompany(companyData, tenantContext);
+      const companyId = await this.autotaskService.createCompany(companyData, tenantContext, tracker);
       
       return this.createCreationResponse('company', companyId);
     } catch (error) {
@@ -3102,7 +3178,7 @@ export class EnhancedAutotaskToolHandler {
     }
   }
 
-  private async updateCompany(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
+  private async updateCompany(args: Record<string, any>, tenantContext?: TenantContext, _tracker?: ApiCallTracker): Promise<McpToolResult> {
     return this.updateEntity(
       args,
       'Company',
@@ -3112,7 +3188,7 @@ export class EnhancedAutotaskToolHandler {
     );
   }
 
-  private async searchContacts(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
+  private async searchContacts(args: Record<string, any>, tenantContext?: TenantContext, tracker?: ApiCallTracker): Promise<McpToolResult> {
     try {
       const { page = 1, pageSize = 500 } = args;
       const options: any = {};
@@ -3153,7 +3229,7 @@ export class EnhancedAutotaskToolHandler {
       
       options.pageSize = Math.min(pageSize, 500);
 
-      const contacts = await this.autotaskService.searchContacts(options, tenantContext);
+      const contacts = await this.autotaskService.searchContacts(options, tenantContext, tracker);
       this.logger.info(`🏢 Found ${contacts.length} contacts`, {
         tenant: tenantContext,
         sessionId: tenantContext?.sessionId
@@ -3162,19 +3238,27 @@ export class EnhancedAutotaskToolHandler {
       // Get total count for pagination
       let totalCount = contacts.length;
       try {
-        const countResult = await this.autotaskService.countContacts(options, tenantContext);
+        const countResult = await this.autotaskService.countContacts(options, tenantContext, tracker);
         totalCount = countResult ?? contacts.length;
       } catch (countError) {
         this.logger.warn('Could not get total count for contacts, using returned count');
       }
       
-      // Enhanced results with mapped names
+      // Pre-fetch unique IDs to avoid cache stampede
+      await this.prefetchMappingIds(
+        contacts,
+        ['companyID'],
+        [],
+        tenantContext
+      );
+      
+      // Enhanced results with mapped names (cache is now populated)
       const mappingService = await this.getMappingService();
       const enhancedContacts = await Promise.all(
         contacts.map(async (contact: any) => {
           const enhanced: any = { ...contact };
           
-          // Add company name if available
+          // Add company name if available (from cache)
           if (contact.companyID) {
             try {
               enhanced._enhanced = enhanced._enhanced || {};
@@ -3219,11 +3303,11 @@ export class EnhancedAutotaskToolHandler {
     }
   }
 
-  private async createContact(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
+  private async createContact(args: Record<string, any>, tenantContext?: TenantContext, tracker?: ApiCallTracker): Promise<McpToolResult> {
     try {
       const contactData = { ...args };
       
-      const contactId = await this.autotaskService.createContact(contactData, tenantContext);
+      const contactId = await this.autotaskService.createContact(contactData, tenantContext, tracker);
       
       return this.createCreationResponse('contact', contactId);
     } catch (error) {
@@ -3231,7 +3315,7 @@ export class EnhancedAutotaskToolHandler {
     }
   }
 
-  private async updateContact(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
+  private async updateContact(args: Record<string, any>, tenantContext?: TenantContext, _tracker?: ApiCallTracker): Promise<McpToolResult> {
     return this.updateEntity(
       args,
       'Contact',
@@ -3241,7 +3325,7 @@ export class EnhancedAutotaskToolHandler {
     );
   }
 
-  private async searchTickets(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
+  private async searchTickets(args: Record<string, any>, tenantContext?: TenantContext, tracker?: ApiCallTracker): Promise<McpToolResult> {
     try {
       const { page = 1, pageSize = 500 } = args;
       const options: any = {};
@@ -3289,7 +3373,7 @@ export class EnhancedAutotaskToolHandler {
       
       options.pageSize = Math.min(pageSize, 500);
 
-      let tickets = await this.autotaskService.searchTickets(options, tenantContext);
+      let tickets = await this.autotaskService.searchTickets(options, tenantContext, tracker);
       
       // If no results with searchTerm and we haven't tried the alternate field, try fallback
       if (tickets.length === 0 && args.searchTerm) {
@@ -3319,7 +3403,7 @@ export class EnhancedAutotaskToolHandler {
         }
         
         try {
-          tickets = await this.autotaskService.searchTickets(fallbackOptions, tenantContext);
+          tickets = await this.autotaskService.searchTickets(fallbackOptions, tenantContext, tracker);
           if (tickets.length > 0) {
             this.logger.info(`Fallback search found ${tickets.length} tickets`);
           }
@@ -3331,7 +3415,7 @@ export class EnhancedAutotaskToolHandler {
       // Get total count for pagination
       let totalCount = tickets.length;
       try {
-        const countResult = await this.autotaskService.countTickets(options, tenantContext);
+        const countResult = await this.autotaskService.countTickets(options, tenantContext, tracker);
         totalCount = countResult ?? tickets.length;
       } catch (countError) {
         this.logger.warn('Could not get total count for tickets, using returned count');
@@ -3346,13 +3430,21 @@ export class EnhancedAutotaskToolHandler {
       if (!args.assignedResourceID) unusedFilters.push('assignedResourceID (filter by technician)');
       if (!args.createdDateFrom) unusedFilters.push('createdDateFrom (filter by date range)');
       
-      // Enhanced results with mapped names
+      // Pre-fetch unique IDs to avoid cache stampede
+      await this.prefetchMappingIds(
+        tickets,
+        ['companyID'],
+        ['assignedResourceID'],
+        tenantContext
+      );
+      
+      // Enhanced results with mapped names (cache is now populated)
       const mappingService = await this.getMappingService();
       const enhancedTickets = await Promise.all(
         tickets.map(async (ticket: any) => {
           const enhanced: any = { ...ticket };
           
-          // Add company name if available
+          // Add company name if available (from cache)
           if (ticket.companyID) {
             try {
               enhanced._enhanced = enhanced._enhanced || {};
@@ -3364,7 +3456,7 @@ export class EnhancedAutotaskToolHandler {
             }
           }
 
-          // Add assigned resource name if available
+          // Add assigned resource name if available (from cache)
           if (ticket.assignedResourceID) {
             try {
               enhanced._enhanced = enhanced._enhanced || {};
@@ -3417,11 +3509,11 @@ export class EnhancedAutotaskToolHandler {
     }
   }
 
-  private async createTicket(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
+  private async createTicket(args: Record<string, any>, tenantContext?: TenantContext, tracker?: ApiCallTracker): Promise<McpToolResult> {
     try {
       const ticketData = { ...args };
       
-      const ticketID = await this.autotaskService.createTicket(ticketData, tenantContext);
+      const ticketID = await this.autotaskService.createTicket(ticketData, tenantContext, tracker);
       
       return this.createCreationResponse('ticket', ticketID);
     } catch (error) {
@@ -3429,13 +3521,13 @@ export class EnhancedAutotaskToolHandler {
     }
   }
 
-  private async updateTicket(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
+  private async updateTicket(args: Record<string, any>, tenantContext?: TenantContext, tracker?: ApiCallTracker): Promise<McpToolResult> {
     try {
       const ticketData = { ...args };
       const ticketID = ticketData.id;
       delete ticketData.id; // Remove ID from data for update
 
-      await this.autotaskService.updateTicket(ticketID, ticketData, tenantContext);
+      await this.autotaskService.updateTicket(ticketID, ticketData, tenantContext, tracker);
 
       return this.createUpdateResponse('ticket', ticketID);
     } catch (error) {
@@ -3443,11 +3535,11 @@ export class EnhancedAutotaskToolHandler {
     }
   }
 
-  private async createTimeEntry(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
+  private async createTimeEntry(args: Record<string, any>, tenantContext?: TenantContext, tracker?: ApiCallTracker): Promise<McpToolResult> {
     try {
       const timeEntryData = { ...args };
       
-      const timeEntryId = await this.autotaskService.createTimeEntry(timeEntryData, tenantContext);
+      const timeEntryId = await this.autotaskService.createTimeEntry(timeEntryData, tenantContext, tracker);
       
       return this.createCreationResponse('time entry', timeEntryId);
     } catch (error) {
@@ -3455,7 +3547,7 @@ export class EnhancedAutotaskToolHandler {
     }
   }
 
-  private async searchProjects(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
+  private async searchProjects(args: Record<string, any>, tenantContext?: TenantContext, tracker?: ApiCallTracker): Promise<McpToolResult> {
     try {
       const options: any = {};
       
@@ -3510,15 +3602,23 @@ export class EnhancedAutotaskToolHandler {
         options.pageSize = args.pageSize;
       }
 
-      const projects = await this.autotaskService.searchProjects(options, tenantContext);
+      const projects = await this.autotaskService.searchProjects(options, tenantContext, tracker);
       
-      // Enhanced results with mapped names
+      // Pre-fetch unique IDs to avoid cache stampede
+      await this.prefetchMappingIds(
+        projects,
+        ['companyID'],
+        [],
+        tenantContext
+      );
+      
+      // Enhanced results with mapped names (cache is now populated)
       const mappingService = await this.getMappingService();
       const enhancedProjects = await Promise.all(
         projects.map(async (project: any) => {
           const enhanced: any = { ...project };
           
-          // Add company name if available
+          // Add company name if available (from cache)
           if (project.companyID) {
             try {
               enhanced._enhanced = enhanced._enhanced || {};
@@ -3556,7 +3656,7 @@ export class EnhancedAutotaskToolHandler {
     }
   }
 
-  private async searchResources(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
+  private async searchResources(args: Record<string, any>, tenantContext?: TenantContext, tracker?: ApiCallTracker): Promise<McpToolResult> {
     try {
       const options: any = {};
       
@@ -3622,7 +3722,7 @@ export class EnhancedAutotaskToolHandler {
         options.pageSize = args.pageSize;
       }
 
-      const resources = await this.autotaskService.searchResources(options, tenantContext);
+      const resources = await this.autotaskService.searchResources(options, tenantContext, tracker);
       
       // Enhanced results with mapped names
       const enhancedResources = resources.map((resource: any) => {
@@ -3656,7 +3756,7 @@ export class EnhancedAutotaskToolHandler {
   // Phase 1: Individual Entity Getters
   // ===================================
 
-  private async getTicketByNumber(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
+  private async getTicketByNumber(args: Record<string, any>, tenantContext?: TenantContext, tracker?: ApiCallTracker): Promise<McpToolResult> {
     try {
       const { ticketNumber, fullDetails = false } = args;
       
@@ -3664,7 +3764,7 @@ export class EnhancedAutotaskToolHandler {
         throw new Error('Ticket number is required and must be a string (e.g., T20250914.0008)');
       }
 
-      const ticket = await this.autotaskService.getTicketByNumber(ticketNumber, fullDetails, tenantContext);
+      const ticket = await this.autotaskService.getTicketByNumber(ticketNumber, fullDetails, tenantContext, tracker);
       
       if (!ticket) {
         return this.createNotFoundResponse('ticket', ticketNumber);
@@ -3676,7 +3776,7 @@ export class EnhancedAutotaskToolHandler {
     }
   }
 
-  private async createProject(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
+  private async createProject(args: Record<string, any>, tenantContext?: TenantContext, tracker?: ApiCallTracker): Promise<McpToolResult> {
     try {
       const { 
         companyID, 
@@ -3706,7 +3806,7 @@ export class EnhancedAutotaskToolHandler {
         ...(estimatedHours && { estimatedHours })
       };
 
-      const projectId = await this.autotaskService.createProject(projectData, tenantContext);
+      const projectId = await this.autotaskService.createProject(projectData, tenantContext, tracker);
       
       return this.createCreationResponse('project', projectId);
     } catch (error) {
@@ -3714,7 +3814,7 @@ export class EnhancedAutotaskToolHandler {
     }
   }
 
-  private async updateProject(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
+  private async updateProject(args: Record<string, any>, tenantContext?: TenantContext, tracker?: ApiCallTracker): Promise<McpToolResult> {
     try {
       const { 
         id, 
@@ -3745,7 +3845,7 @@ export class EnhancedAutotaskToolHandler {
         throw new Error('At least one field to update must be provided');
       }
 
-      await this.autotaskService.updateProject(id, updateData, tenantContext);
+      await this.autotaskService.updateProject(id, updateData, tenantContext, tracker);
       
       return this.createUpdateResponse('project', id);
     } catch (error) {
@@ -3753,7 +3853,7 @@ export class EnhancedAutotaskToolHandler {
     }
   }
 
-  private async getProjectDetails(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
+  private async getProjectDetails(args: Record<string, any>, tenantContext?: TenantContext, tracker?: ApiCallTracker): Promise<McpToolResult> {
     try {
       const { 
         projectId, 
@@ -3769,7 +3869,7 @@ export class EnhancedAutotaskToolHandler {
       
       // Get project by ID or search term
       if (projectId) {
-        project = await this.autotaskService.getProject(projectId, tenantContext);
+        project = await this.autotaskService.getProject(projectId, tenantContext, tracker);
         if (!project) {
           return this.createNotFoundResponse('project', projectId);
         }
@@ -3856,7 +3956,7 @@ export class EnhancedAutotaskToolHandler {
             
             for (const resourceId of uniqueTaskResourceIds) {
               try {
-                const resource = await this.autotaskService.getResource(resourceId, tenantContext);
+                const resource = await this.autotaskService.getResource(resourceId, tenantContext, tracker);
                 if (resource) {
                   taskResourceMap.set(resourceId, {
                     id: resource.id,
@@ -4136,7 +4236,7 @@ export class EnhancedAutotaskToolHandler {
   // Phase 1: Time Entry Management
   // ===================================
 
-  private async searchTimeEntries(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
+  private async searchTimeEntries(args: Record<string, any>, tenantContext?: TenantContext, tracker?: ApiCallTracker): Promise<McpToolResult> {
     try {
       const { ticketID, taskID, resourceID, resourceId, dateFrom, dateTo, page = 1, pageSize = 500 } = args;
       
@@ -4176,20 +4276,61 @@ export class EnhancedAutotaskToolHandler {
         pageSize: Math.min(pageSize, 500)
       };
 
-      const timeEntries = await this.autotaskService.getTimeEntries(queryOptions, tenantContext);
+      const timeEntries = await this.autotaskService.getTimeEntries(queryOptions, tenantContext, tracker);
+      
+      // Pre-fetch unique IDs to avoid cache stampede (N parallel API calls for same ID)
+      await this.prefetchMappingIds(
+        timeEntries,
+        [], // No company fields in time entries
+        ['resourceID', 'billingApprovalResourceID'],
+        tenantContext
+      );
+      
+      // Enhanced results with mapped names (cache is now populated)
+      const mappingService = await this.getMappingService();
+      const enhancedTimeEntries = await Promise.all(
+        timeEntries.map(async (entry: any) => {
+          const enhanced: any = { ...entry };
+          enhanced._enhanced = {};
+          
+          // Add resource name if available (from cache)
+          if (entry.resourceID) {
+            try {
+              const resourceName = await mappingService.getResourceName(entry.resourceID, tenantContext);
+              enhanced._enhanced.resourceName = resourceName ?? `Unknown (${entry.resourceID})`;
+            } catch (error) {
+              this.logger.debug(`Failed to map resource ID ${entry.resourceID}:`, error);
+              enhanced._enhanced.resourceName = `Unknown (${entry.resourceID})`;
+            }
+          }
+          
+          // Add billing approval resource name if available (from cache)
+          if (entry.billingApprovalResourceID) {
+            try {
+              const resourceName = await mappingService.getResourceName(entry.billingApprovalResourceID, tenantContext);
+              enhanced._enhanced.billingApprovalResourceName = resourceName ?? `Unknown (${entry.billingApprovalResourceID})`;
+            } catch (error) {
+              this.logger.debug(`Failed to map billing approval resource ID ${entry.billingApprovalResourceID}:`, error);
+              enhanced._enhanced.billingApprovalResourceName = `Unknown (${entry.billingApprovalResourceID})`;
+            }
+          }
+          
+          return enhanced;
+        })
+      );
       
       // Get total count for pagination
-      let totalCount = timeEntries.length;
+      let totalCount = enhancedTimeEntries.length;
       try {
-        const countResult = await this.autotaskService.countTimeEntries({ filter }, tenantContext);
-        totalCount = countResult ?? timeEntries.length;
+        const countResult = await this.autotaskService.countTimeEntries({ filter }, tenantContext, tracker);
+        totalCount = countResult ?? enhancedTimeEntries.length;
       } catch (countError) {
         this.logger.warn('Could not get total count for time entries, using returned count');
       }
 
       // Apply pagination protocol
       const paginationResult = PaginationEnforcer.enforce({
-        items: timeEntries,
+        items: enhancedTimeEntries,
         totalCount,
         currentPage: page,
         pageSize: Math.min(pageSize, 500),
@@ -4221,7 +4362,7 @@ export class EnhancedAutotaskToolHandler {
   // Phase 1: Task Management
   // ===================================
 
-  private async searchTasks(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
+  private async searchTasks(args: Record<string, any>, tenantContext?: TenantContext, tracker?: ApiCallTracker): Promise<McpToolResult> {
     try {
       const { projectId, assignedResourceId, status, priorityLabel, searchTerm, dueDateFrom, dueDateTo, createdDateFrom, createdDateTo, pageSize } = args;
       
@@ -4274,15 +4415,67 @@ export class EnhancedAutotaskToolHandler {
         ...(pageSize && { pageSize })
       };
 
-      const tasks = await this.autotaskService.searchTasks(queryOptions, tenantContext);
+      const tasks = await this.autotaskService.searchTasks(queryOptions, tenantContext, tracker);
+      
+      // Pre-fetch unique IDs to avoid cache stampede
+      await this.prefetchMappingIds(
+        tasks,
+        [], // No company fields in tasks
+        ['assignedResourceID', 'creatorResourceID', 'completedByResourceID'],
+        tenantContext
+      );
+      
+      // Enhanced results with mapped names (cache is now populated)
+      const mappingService = await this.getMappingService();
+      const enhancedTasks = await Promise.all(
+        tasks.map(async (task: any) => {
+          const enhanced: any = { ...task };
+          enhanced._enhanced = {};
+          
+          // Add assigned resource name if available (from cache)
+          if (task.assignedResourceID) {
+            try {
+              const resourceName = await mappingService.getResourceName(task.assignedResourceID, tenantContext);
+              enhanced._enhanced.assignedResourceName = resourceName ?? `Unknown (${task.assignedResourceID})`;
+            } catch (error) {
+              this.logger.debug(`Failed to map assigned resource ID ${task.assignedResourceID}:`, error);
+              enhanced._enhanced.assignedResourceName = `Unknown (${task.assignedResourceID})`;
+            }
+          }
+          
+          // Add creator resource name if available (from cache)
+          if (task.creatorResourceID) {
+            try {
+              const resourceName = await mappingService.getResourceName(task.creatorResourceID, tenantContext);
+              enhanced._enhanced.creatorResourceName = resourceName ?? `Unknown (${task.creatorResourceID})`;
+            } catch (error) {
+              this.logger.debug(`Failed to map creator resource ID ${task.creatorResourceID}:`, error);
+              enhanced._enhanced.creatorResourceName = `Unknown (${task.creatorResourceID})`;
+            }
+          }
+          
+          // Add completed by resource name if available (from cache)
+          if (task.completedByResourceID) {
+            try {
+              const resourceName = await mappingService.getResourceName(task.completedByResourceID, tenantContext);
+              enhanced._enhanced.completedByResourceName = resourceName ?? `Unknown (${task.completedByResourceID})`;
+            } catch (error) {
+              this.logger.debug(`Failed to map completed by resource ID ${task.completedByResourceID}:`, error);
+              enhanced._enhanced.completedByResourceName = `Unknown (${task.completedByResourceID})`;
+            }
+          }
+          
+          return enhanced;
+        })
+      );
       
       const content = [{
         type: 'text',
-        text: JSON.stringify(tasks, null, 2)
+        text: JSON.stringify(enhancedTasks, null, 2)
       }];
 
       // Add guidance for large responses
-      const contentWithGuidance = this.addLargeResponseGuidance(content, tasks.length, 'tasks');
+      const contentWithGuidance = this.addLargeResponseGuidance(content, enhancedTasks.length, 'tasks');
       
       return {
         content: contentWithGuidance,
@@ -4293,7 +4486,7 @@ export class EnhancedAutotaskToolHandler {
     }
   }
 
-  private async createTask(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
+  private async createTask(args: Record<string, any>, tenantContext?: TenantContext, tracker?: ApiCallTracker): Promise<McpToolResult> {
     try {
       const { 
         projectID, 
@@ -4323,7 +4516,7 @@ export class EnhancedAutotaskToolHandler {
         ...(priorityLabel && { priorityLabel })
       };
 
-      const taskID = await this.autotaskService.createTask(taskData, tenantContext);
+      const taskID = await this.autotaskService.createTask(taskData, tenantContext, tracker);
       
       return this.createCreationResponse('task', taskID);
     } catch (error) {
@@ -4331,7 +4524,7 @@ export class EnhancedAutotaskToolHandler {
     }
   }
 
-  private async updateTask(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
+  private async updateTask(args: Record<string, any>, tenantContext?: TenantContext, tracker?: ApiCallTracker): Promise<McpToolResult> {
     try {
       const { 
         id, 
@@ -4364,7 +4557,7 @@ export class EnhancedAutotaskToolHandler {
         throw new Error('At least one field to update must be provided');
       }
 
-      await this.autotaskService.updateTask(id, updateData, tenantContext);
+      await this.autotaskService.updateTask(id, updateData, tenantContext, tracker);
       
       return this.createUpdateResponse('task', id);
     } catch (error) {
@@ -4376,7 +4569,7 @@ export class EnhancedAutotaskToolHandler {
   // Phase 2: Notes Management
   // ===================================
 
-  private async searchTicketNotes(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
+  private async searchTicketNotes(args: Record<string, any>, tenantContext?: TenantContext, _tracker?: ApiCallTracker): Promise<McpToolResult> {
     try {
       const { ticketID, pageSize } = args;
       
@@ -4396,7 +4589,7 @@ export class EnhancedAutotaskToolHandler {
     }
   }
 
-  private async getTicketNote(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
+  private async getTicketNote(args: Record<string, any>, tenantContext?: TenantContext, _tracker?: ApiCallTracker): Promise<McpToolResult> {
     try {
       const { ticketID, noteId } = args;
       
@@ -4420,7 +4613,7 @@ export class EnhancedAutotaskToolHandler {
     }
   }
 
-  private async createTicketNote(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
+  private async createTicketNote(args: Record<string, any>, tenantContext?: TenantContext, _tracker?: ApiCallTracker): Promise<McpToolResult> {
     try {
       const { ticketID, title, description, noteType, publish } = args;
       
@@ -4447,7 +4640,7 @@ export class EnhancedAutotaskToolHandler {
     }
   }
 
-  private async searchProjectNotes(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
+  private async searchProjectNotes(args: Record<string, any>, tenantContext?: TenantContext, _tracker?: ApiCallTracker): Promise<McpToolResult> {
     try {
       const { projectId, pageSize } = args;
       
@@ -4467,7 +4660,7 @@ export class EnhancedAutotaskToolHandler {
     }
   }
 
-  private async getProjectNote(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
+  private async getProjectNote(args: Record<string, any>, tenantContext?: TenantContext, _tracker?: ApiCallTracker): Promise<McpToolResult> {
     try {
       const { projectId, noteId } = args;
       
@@ -4491,7 +4684,7 @@ export class EnhancedAutotaskToolHandler {
     }
   }
 
-  private async createProjectNote(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
+  private async createProjectNote(args: Record<string, any>, tenantContext?: TenantContext, _tracker?: ApiCallTracker): Promise<McpToolResult> {
     try {
       const { projectId, title, description, noteType, publish } = args;
       
@@ -4518,7 +4711,7 @@ export class EnhancedAutotaskToolHandler {
     }
   }
 
-  private async searchCompanyNotes(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
+  private async searchCompanyNotes(args: Record<string, any>, tenantContext?: TenantContext, _tracker?: ApiCallTracker): Promise<McpToolResult> {
     try {
       const { companyId, pageSize } = args;
       
@@ -4538,7 +4731,7 @@ export class EnhancedAutotaskToolHandler {
     }
   }
 
-  private async getCompanyNote(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
+  private async getCompanyNote(args: Record<string, any>, tenantContext?: TenantContext, _tracker?: ApiCallTracker): Promise<McpToolResult> {
     try {
       const { companyId, noteId } = args;
       
@@ -4562,7 +4755,7 @@ export class EnhancedAutotaskToolHandler {
     }
   }
 
-  private async createCompanyNote(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
+  private async createCompanyNote(args: Record<string, any>, tenantContext?: TenantContext, _tracker?: ApiCallTracker): Promise<McpToolResult> {
     try {
       const { companyId, title, description, noteType, publish } = args;
       
@@ -4593,7 +4786,7 @@ export class EnhancedAutotaskToolHandler {
   // Phase 2: Attachments Management
   // ===================================
 
-  private async searchTicketAttachments(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
+  private async searchTicketAttachments(args: Record<string, any>, tenantContext?: TenantContext, _tracker?: ApiCallTracker): Promise<McpToolResult> {
     try {
       const { ticketID, pageSize } = args;
       
@@ -4613,7 +4806,7 @@ export class EnhancedAutotaskToolHandler {
     }
   }
 
-  private async getTicketAttachment(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
+  private async getTicketAttachment(args: Record<string, any>, tenantContext?: TenantContext, _tracker?: ApiCallTracker): Promise<McpToolResult> {
     try {
       const { ticketID, attachmentId, includeData = false } = args;
       
@@ -4641,7 +4834,7 @@ export class EnhancedAutotaskToolHandler {
   // Phase 3: Financial Management
   // ===================================
 
-  private async searchContracts(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
+  private async searchContracts(args: Record<string, any>, tenantContext?: TenantContext, tracker?: ApiCallTracker): Promise<McpToolResult> {
     try {
       const { companyId, status, contractType, searchTerm, pageSize } = args;
       
@@ -4674,15 +4867,50 @@ export class EnhancedAutotaskToolHandler {
         ...(pageSize && { pageSize })
       };
 
-      const contracts = await this.autotaskService.searchContracts(queryOptions, tenantContext);
+      const contracts = await this.autotaskService.searchContracts(queryOptions, tenantContext, tracker);
       
-      return this.createDataResponse(contracts);
+      // Pre-fetch unique IDs to avoid cache stampede
+      await this.prefetchMappingIds(
+        contracts,
+        ['companyID'],
+        [],
+        tenantContext
+      );
+      
+      // Enhanced results with mapped names (cache is now populated)
+      const mappingService = await this.getMappingService();
+      const enhancedContracts = await Promise.all(
+        contracts.map(async (contract: any) => {
+          const enhanced: any = { ...contract };
+          enhanced._enhanced = {};
+          
+          // Add company name if available (from cache)
+          if (contract.companyID) {
+            try {
+              const companyName = await mappingService.getCompanyName(contract.companyID, tenantContext);
+              enhanced._enhanced.companyName = companyName ?? `Unknown (${contract.companyID})`;
+            } catch (error) {
+              this.logger.debug(`Failed to map company ID ${contract.companyID}:`, error);
+              enhanced._enhanced.companyName = `Unknown (${contract.companyID})`;
+            }
+          }
+          
+          // Add billing contact name if available (contact ID would require separate lookup)
+          if (contract.billToCompanyContactID) {
+            enhanced._enhanced.billToContactId = contract.billToCompanyContactID;
+          }
+          
+          return enhanced;
+        })
+      );
+      
+      return this.createDataResponse(enhancedContracts);
     } catch (error) {
       throw new Error(`Failed to search contracts: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   }
 
-  private async searchInvoices(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
+  private async searchInvoices(args: Record<string, any>, tenantContext?: TenantContext, _tracker?: ApiCallTracker): Promise<McpToolResult> {
     try {
       const { companyId, fromDate, toDate, pageSize } = args;
       // Build filter for invoices search
@@ -4715,13 +4943,54 @@ export class EnhancedAutotaskToolHandler {
 
       const invoices = await this.autotaskService.searchInvoices(queryOptions, tenantContext);
       
-      return this.createDataResponse(invoices);
+      // Pre-fetch unique IDs to avoid cache stampede
+      await this.prefetchMappingIds(
+        invoices,
+        ['companyID'],
+        ['creatorResourceID'],
+        tenantContext
+      );
+      
+      // Enhanced results with mapped names (cache is now populated)
+      const mappingService = await this.getMappingService();
+      const enhancedInvoices = await Promise.all(
+        invoices.map(async (invoice: any) => {
+          const enhanced: any = { ...invoice };
+          enhanced._enhanced = {};
+          
+          // Add company name if available (from cache)
+          if (invoice.companyID) {
+            try {
+              const companyName = await mappingService.getCompanyName(invoice.companyID, tenantContext);
+              enhanced._enhanced.companyName = companyName ?? `Unknown (${invoice.companyID})`;
+            } catch (error) {
+              this.logger.debug(`Failed to map company ID ${invoice.companyID}:`, error);
+              enhanced._enhanced.companyName = `Unknown (${invoice.companyID})`;
+            }
+          }
+          
+          // Add creator resource name if available (from cache)
+          if (invoice.creatorResourceID) {
+            try {
+              const resourceName = await mappingService.getResourceName(invoice.creatorResourceID, tenantContext);
+              enhanced._enhanced.creatorResourceName = resourceName ?? `Unknown (${invoice.creatorResourceID})`;
+            } catch (error) {
+              this.logger.debug(`Failed to map creator resource ID ${invoice.creatorResourceID}:`, error);
+              enhanced._enhanced.creatorResourceName = `Unknown (${invoice.creatorResourceID})`;
+            }
+          }
+          
+          return enhanced;
+        })
+      );
+      
+      return this.createDataResponse(enhancedInvoices);
     } catch (error) {
       throw new Error(`Failed to search invoices: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   }
 
-  private async searchQuotes(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
+  private async searchQuotes(args: Record<string, any>, tenantContext?: TenantContext, _tracker?: ApiCallTracker): Promise<McpToolResult> {
     try {
       const { companyId, contactId, opportunityId, searchTerm, pageSize } = args;
       
@@ -4756,13 +5025,54 @@ export class EnhancedAutotaskToolHandler {
 
       const quotes = await this.autotaskService.searchQuotes(queryOptions, tenantContext);
       
-      return this.createDataResponse(quotes);
+      // Pre-fetch unique IDs to avoid cache stampede
+      await this.prefetchMappingIds(
+        quotes,
+        ['accountId'],
+        ['creatorResourceID'],
+        tenantContext
+      );
+      
+      // Enhanced results with mapped names (cache is now populated)
+      const mappingService = await this.getMappingService();
+      const enhancedQuotes = await Promise.all(
+        quotes.map(async (quote: any) => {
+          const enhanced: any = { ...quote };
+          enhanced._enhanced = {};
+          
+          // Add company name if available (quotes use accountId, from cache)
+          if (quote.accountId) {
+            try {
+              const companyName = await mappingService.getCompanyName(quote.accountId, tenantContext);
+              enhanced._enhanced.companyName = companyName ?? `Unknown (${quote.accountId})`;
+            } catch (error) {
+              this.logger.debug(`Failed to map account ID ${quote.accountId}:`, error);
+              enhanced._enhanced.companyName = `Unknown (${quote.accountId})`;
+            }
+          }
+          
+          // Add creator resource name if available (from cache)
+          if (quote.creatorResourceID) {
+            try {
+              const resourceName = await mappingService.getResourceName(quote.creatorResourceID, tenantContext);
+              enhanced._enhanced.creatorResourceName = resourceName ?? `Unknown (${quote.creatorResourceID})`;
+            } catch (error) {
+              this.logger.debug(`Failed to map creator resource ID ${quote.creatorResourceID}:`, error);
+              enhanced._enhanced.creatorResourceName = `Unknown (${quote.creatorResourceID})`;
+            }
+          }
+          
+          return enhanced;
+        })
+      );
+      
+      return this.createDataResponse(enhancedQuotes);
     } catch (error) {
       throw new Error(`Failed to search quotes: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   }
 
-  private async createQuote(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
+  private async createQuote(args: Record<string, any>, tenantContext?: TenantContext, _tracker?: ApiCallTracker): Promise<McpToolResult> {
     try {
       const { 
         accountId, 
@@ -4800,7 +5110,7 @@ export class EnhancedAutotaskToolHandler {
     }
   }
 
-  private async searchOpportunities(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
+  private async searchOpportunities(args: Record<string, any>, tenantContext?: TenantContext, tracker?: ApiCallTracker): Promise<McpToolResult> {
     try {
       const { page = 1, pageSize = 500 } = args;
       const options: any = {};
@@ -4902,13 +5212,65 @@ export class EnhancedAutotaskToolHandler {
       
       options.pageSize = Math.min(pageSize, 500);
 
-      const opportunities = await this.autotaskService.searchOpportunities(options, tenantContext);
+      const opportunities = await this.autotaskService.searchOpportunities(options, tenantContext, tracker);
+      
+      // Pre-fetch unique IDs to avoid cache stampede
+      await this.prefetchMappingIds(
+        opportunities,
+        ['accountID'],
+        ['ownerResourceID', 'creatorResourceID'],
+        tenantContext
+      );
+      
+      // Enhanced results with mapped names (cache is now populated)
+      const mappingService = await this.getMappingService();
+      const enhancedOpportunities = await Promise.all(
+        opportunities.map(async (opportunity: any) => {
+          const enhanced: any = { ...opportunity };
+          enhanced._enhanced = {};
+          
+          // Add company name if available (opportunities use accountID, from cache)
+          if (opportunity.accountID) {
+            try {
+              const companyName = await mappingService.getCompanyName(opportunity.accountID, tenantContext);
+              enhanced._enhanced.companyName = companyName ?? `Unknown (${opportunity.accountID})`;
+            } catch (error) {
+              this.logger.debug(`Failed to map account ID ${opportunity.accountID}:`, error);
+              enhanced._enhanced.companyName = `Unknown (${opportunity.accountID})`;
+            }
+          }
+          
+          // Add owner resource name if available (from cache)
+          if (opportunity.ownerResourceID) {
+            try {
+              const resourceName = await mappingService.getResourceName(opportunity.ownerResourceID, tenantContext);
+              enhanced._enhanced.ownerResourceName = resourceName ?? `Unknown (${opportunity.ownerResourceID})`;
+            } catch (error) {
+              this.logger.debug(`Failed to map owner resource ID ${opportunity.ownerResourceID}:`, error);
+              enhanced._enhanced.ownerResourceName = `Unknown (${opportunity.ownerResourceID})`;
+            }
+          }
+          
+          // Add creator resource name if available (from cache)
+          if (opportunity.creatorResourceID) {
+            try {
+              const resourceName = await mappingService.getResourceName(opportunity.creatorResourceID, tenantContext);
+              enhanced._enhanced.creatorResourceName = resourceName ?? `Unknown (${opportunity.creatorResourceID})`;
+            } catch (error) {
+              this.logger.debug(`Failed to map creator resource ID ${opportunity.creatorResourceID}:`, error);
+              enhanced._enhanced.creatorResourceName = `Unknown (${opportunity.creatorResourceID})`;
+            }
+          }
+          
+          return enhanced;
+        })
+      );
       
       // Get total count for pagination
-      let totalCount = opportunities.length;
+      let totalCount = enhancedOpportunities.length;
       try {
-        const countResult = await this.autotaskService.countOpportunities(options, tenantContext);
-        totalCount = countResult ?? opportunities.length;
+        const countResult = await this.autotaskService.countOpportunities(options, tenantContext, tracker);
+        totalCount = countResult ?? enhancedOpportunities.length;
       } catch (countError) {
         this.logger.warn('Could not get total count for opportunities, using returned count');
       }
@@ -4926,7 +5288,7 @@ export class EnhancedAutotaskToolHandler {
 
       // Apply pagination protocol
       const paginationResult = PaginationEnforcer.enforce({
-        items: opportunities,
+        items: enhancedOpportunities,
         totalCount,
         currentPage: page,
         pageSize: Math.min(pageSize, 500),
@@ -4955,7 +5317,7 @@ export class EnhancedAutotaskToolHandler {
     }
   }
 
-  private async searchExpenseReports(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
+  private async searchExpenseReports(args: Record<string, any>, tenantContext?: TenantContext, _tracker?: ApiCallTracker): Promise<McpToolResult> {
     try {
       const { submitterId, status, fromDate, toDate, pageSize } = args;
       
@@ -4993,13 +5355,55 @@ export class EnhancedAutotaskToolHandler {
 
       const expenseReports = await this.autotaskService.searchExpenseReports(queryOptions, tenantContext);
       
-      return this.createDataResponse(expenseReports);
+      // Pre-fetch unique IDs to avoid cache stampede
+      await this.prefetchMappingIds(
+        expenseReports,
+        [],
+        ['submittedByResourceID', 'resourceId', 'approvedByResourceID'],
+        tenantContext
+      );
+      
+      // Enhanced results with mapped names (cache is now populated)
+      const mappingService = await this.getMappingService();
+      const enhancedExpenseReports = await Promise.all(
+        expenseReports.map(async (report: any) => {
+          const enhanced: any = { ...report };
+          enhanced._enhanced = {};
+          
+          // Add submitter resource name if available (from cache)
+          if (report.submittedByResourceID || report.resourceId) {
+            const resourceId = report.submittedByResourceID || report.resourceId;
+            try {
+              const resourceName = await mappingService.getResourceName(resourceId, tenantContext);
+              enhanced._enhanced.submittedByResourceName = resourceName ?? `Unknown (${resourceId})`;
+            } catch (error) {
+              this.logger.debug(`Failed to map submitter resource ID ${resourceId}:`, error);
+              enhanced._enhanced.submittedByResourceName = `Unknown (${resourceId})`;
+            }
+          }
+          
+          // Add approver resource name if available (from cache)
+          if (report.approvedByResourceID) {
+            try {
+              const resourceName = await mappingService.getResourceName(report.approvedByResourceID, tenantContext);
+              enhanced._enhanced.approvedByResourceName = resourceName ?? `Unknown (${report.approvedByResourceID})`;
+            } catch (error) {
+              this.logger.debug(`Failed to map approver resource ID ${report.approvedByResourceID}:`, error);
+              enhanced._enhanced.approvedByResourceName = `Unknown (${report.approvedByResourceID})`;
+            }
+          }
+          
+          return enhanced;
+        })
+      );
+      
+      return this.createDataResponse(enhancedExpenseReports);
     } catch (error) {
       throw new Error(`Failed to search expense reports: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   }
 
-  private async createExpenseReport(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
+  private async createExpenseReport(args: Record<string, any>, tenantContext?: TenantContext, _tracker?: ApiCallTracker): Promise<McpToolResult> {
     try {
       const { 
         resourceId, 
@@ -5031,7 +5435,7 @@ export class EnhancedAutotaskToolHandler {
     }
   }
 
-  private async updateExpenseReport(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
+  private async updateExpenseReport(args: Record<string, any>, tenantContext?: TenantContext, _tracker?: ApiCallTracker): Promise<McpToolResult> {
     try {
       const { 
         id, 
@@ -5070,7 +5474,7 @@ export class EnhancedAutotaskToolHandler {
   // Configuration Items Management  
   // ===================================
 
-  private async searchConfigurationItems(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
+  private async searchConfigurationItems(args: Record<string, any>, tenantContext?: TenantContext, _tracker?: ApiCallTracker): Promise<McpToolResult> {
     try {
       const { companyId, configurationItemType, serialNumber, referenceTitle, searchTerm, pageSize } = args;
       
@@ -5109,13 +5513,43 @@ export class EnhancedAutotaskToolHandler {
 
       const configItems = await this.autotaskService.searchConfigurationItems(queryOptions, tenantContext);
       
-      return this.createDataResponse(configItems);
+      // Pre-fetch unique IDs to avoid cache stampede
+      await this.prefetchMappingIds(
+        configItems,
+        ['companyID'],
+        [],
+        tenantContext
+      );
+      
+      // Enhanced results with mapped names (cache is now populated)
+      const mappingService = await this.getMappingService();
+      const enhancedConfigItems = await Promise.all(
+        configItems.map(async (item: any) => {
+          const enhanced: any = { ...item };
+          enhanced._enhanced = {};
+          
+          // Add company name if available (from cache)
+          if (item.companyID) {
+            try {
+              const companyName = await mappingService.getCompanyName(item.companyID, tenantContext);
+              enhanced._enhanced.companyName = companyName ?? `Unknown (${item.companyID})`;
+            } catch (error) {
+              this.logger.debug(`Failed to map company ID ${item.companyID}:`, error);
+              enhanced._enhanced.companyName = `Unknown (${item.companyID})`;
+            }
+          }
+          
+          return enhanced;
+        })
+      );
+      
+      return this.createDataResponse(enhancedConfigItems);
     } catch (error) {
       throw new Error(`Failed to search configuration items: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   }
 
-  private async createConfigurationItem(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
+  private async createConfigurationItem(args: Record<string, any>, tenantContext?: TenantContext, _tracker?: ApiCallTracker): Promise<McpToolResult> {
     try {
       const { 
         companyID, 
@@ -5151,7 +5585,7 @@ export class EnhancedAutotaskToolHandler {
     }
   }
 
-  private async updateConfigurationItem(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
+  private async updateConfigurationItem(args: Record<string, any>, tenantContext?: TenantContext, _tracker?: ApiCallTracker): Promise<McpToolResult> {
     try {
       const { 
         id, 
@@ -5192,7 +5626,7 @@ export class EnhancedAutotaskToolHandler {
   // Pagination Helper Methods  
   // ===================================
 
-  private async getCompaniesPage(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
+  private async getCompaniesPage(args: Record<string, any>, tenantContext?: TenantContext, _tracker?: ApiCallTracker): Promise<McpToolResult> {
     try {
       // ⚠️ IMPORTANT: Autotask API uses cursor-based pagination with nextPageUrl/prevPageUrl
       // It does NOT support jumping to specific pages - only sequential traversal via URLs
@@ -5247,13 +5681,21 @@ export class EnhancedAutotaskToolHandler {
 
       const companies = await this.autotaskService.searchCompanies(options, tenantContext);
       
-      // Enhanced results with mapped names
+      // Pre-fetch unique IDs to avoid cache stampede
+      await this.prefetchMappingIds(
+        companies,
+        [],
+        ['ownerResourceID'],
+        tenantContext
+      );
+      
+      // Enhanced results with mapped names (cache is now populated)
       const mappingService = await this.getMappingService();
       const enhancedCompanies = await Promise.all(
         companies.map(async (company: any) => {
           const enhanced: any = { ...company };
           
-          // Add owner resource name if available
+          // Add owner resource name if available (from cache)
           if (company.ownerResourceID) {
             try {
               enhanced._enhanced = enhanced._enhanced || {};
@@ -5318,7 +5760,7 @@ export class EnhancedAutotaskToolHandler {
   // Expense Items Management  
   // ===================================
 
-  private async searchExpenseItems(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
+  private async searchExpenseItems(args: Record<string, any>, tenantContext?: TenantContext, _tracker?: ApiCallTracker): Promise<McpToolResult> {
     try {
       const { expenseReportId, pageSize } = args;
       
@@ -5343,8 +5785,38 @@ export class EnhancedAutotaskToolHandler {
 
       const expenseItems = await this.autotaskService.searchExpenseItems(expenseReportId, queryOptions, tenantContext);
 
-      const resultsText = expenseItems.length > 0 
-        ? `Found ${expenseItems.length} expense items in expense report ${expenseReportId}:\n\n${JSON.stringify(expenseItems, null, 2)}`
+      // Pre-fetch unique IDs to avoid cache stampede
+      await this.prefetchMappingIds(
+        expenseItems,
+        ['companyID'],
+        [],
+        tenantContext
+      );
+
+      // Enhanced results with mapped names (cache is now populated)
+      const mappingService = await this.getMappingService();
+      const enhancedExpenseItems = await Promise.all(
+        expenseItems.map(async (item: any) => {
+          const enhanced: any = { ...item };
+          enhanced._enhanced = {};
+          
+          // Add company name if available (from cache)
+          if (item.companyID) {
+            try {
+              const companyName = await mappingService.getCompanyName(item.companyID, tenantContext);
+              enhanced._enhanced.companyName = companyName ?? `Unknown (${item.companyID})`;
+            } catch (error) {
+              this.logger.debug(`Failed to map company ID ${item.companyID}:`, error);
+              enhanced._enhanced.companyName = `Unknown (${item.companyID})`;
+            }
+          }
+          
+          return enhanced;
+        })
+      );
+
+      const resultsText = enhancedExpenseItems.length > 0 
+        ? `Found ${enhancedExpenseItems.length} expense items in expense report ${expenseReportId}:\n\n${JSON.stringify(enhancedExpenseItems, null, 2)}`
         : `No expense items found in expense report ${expenseReportId}`;
 
       return {
@@ -5359,7 +5831,7 @@ export class EnhancedAutotaskToolHandler {
     }
   }
 
-  private async getExpenseItem(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
+  private async getExpenseItem(args: Record<string, any>, tenantContext?: TenantContext, _tracker?: ApiCallTracker): Promise<McpToolResult> {
     try {
       const { id, expenseReportId } = args;
       
@@ -5392,7 +5864,7 @@ export class EnhancedAutotaskToolHandler {
     }
   }
 
-  private async createExpenseItem(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
+  private async createExpenseItem(args: Record<string, any>, tenantContext?: TenantContext, _tracker?: ApiCallTracker): Promise<McpToolResult> {
     try {
       const { expenseReportID, ...itemData } = args;
       
@@ -5416,7 +5888,7 @@ export class EnhancedAutotaskToolHandler {
     }
   }
 
-  private async updateExpenseItem(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
+  private async updateExpenseItem(args: Record<string, any>, tenantContext?: TenantContext, _tracker?: ApiCallTracker): Promise<McpToolResult> {
     try {
       const { id, expenseReportId, ...updateData } = args;
       
@@ -5449,7 +5921,7 @@ export class EnhancedAutotaskToolHandler {
     }
   }
 
-  private async queryEntity(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
+  private async queryEntity(args: Record<string, any>, tenantContext?: TenantContext, _tracker?: ApiCallTracker): Promise<McpToolResult> {
     try {
       const { entity, search, pageSize } = args;
       
@@ -5508,7 +5980,7 @@ export class EnhancedAutotaskToolHandler {
     }
   }
 
-  private async getEntityById(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
+  private async getEntityById(args: Record<string, any>, tenantContext?: TenantContext, _tracker?: ApiCallTracker): Promise<McpToolResult> {
     try {
       const { entity, id, fullDetails } = args;
       
@@ -5584,7 +6056,7 @@ export class EnhancedAutotaskToolHandler {
    * Get company categories from Autotask CompanyCategories entity
    * This shows the actual classification values available in the system
    */
-  private async getCompanyCategories(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
+  private async getCompanyCategories(args: Record<string, any>, tenantContext?: TenantContext, _tracker?: ApiCallTracker): Promise<McpToolResult> {
     try {
       const { includeInactive = false } = args;
       
@@ -5637,7 +6109,7 @@ export class EnhancedAutotaskToolHandler {
    * Uses the actual CompanyCategories from Autotask instead of guessing field types
    * Now supports both categoryName (string) and categoryId (number) for better usability
    */
-  private async findClientsByCategory(args: Record<string, any>, tenantContext?: TenantContext): Promise<McpToolResult> {
+  private async findClientsByCategory(args: Record<string, any>, tenantContext?: TenantContext, _tracker?: ApiCallTracker): Promise<McpToolResult> {
     try {
       const { categoryName, categoryId, includeContracts = true, pageSize = 25 } = args;
       
