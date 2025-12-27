@@ -9,7 +9,8 @@ import { Logger } from '../utils/logger.js';
 import { MappingService } from '../utils/mapping.service.js';
 import { AutotaskCredentials, TenantContext } from '../types/mcp.js'; 
 import { PaginationEnforcer, buildPaginatedToolDescription } from '../core/pagination.js';
-import { ApiCallTracker, ApiCallSummary } from '../utils/api-call-tracker.js'; 
+import { ApiCallTracker, ApiCallSummary } from '../utils/api-call-tracker.js';
+import { ConcurrencyLimiter } from '../core/rate-limiter.js'; 
 
 export const LARGE_RESPONSE_THRESHOLDS = {
   tickets: 100,        
@@ -308,7 +309,8 @@ export class EnhancedAutotaskToolHandler {
     items: any[],
     companyFields: string[],
     resourceFields: string[],
-    tenantContext?: TenantContext
+    tenantContext?: TenantContext,
+    tracker?: ApiCallTracker
   ): Promise<void> {
     const mappingService = await this.getMappingService();
     
@@ -337,14 +339,14 @@ export class EnhancedAutotaskToolHandler {
     if (companyIds.size > 0) {
       this.logger.debug(`Pre-fetching ${companyIds.size} unique company IDs for enhancement`);
       for (const id of companyIds) {
-        await mappingService.getCompanyName(id, tenantContext);
+        await mappingService.getCompanyName(id, tenantContext, tracker);
       }
     }
     
     if (resourceIds.size > 0) {
       this.logger.debug(`Pre-fetching ${resourceIds.size} unique resource IDs for enhancement`);
       for (const id of resourceIds) {
-        await mappingService.getResourceName(id, tenantContext);
+        await mappingService.getResourceName(id, tenantContext, tracker);
       }
     }
   }
@@ -2444,7 +2446,7 @@ export class EnhancedAutotaskToolHandler {
       ),
       EnhancedAutotaskToolHandler.createTool(
         'get_entity',
-        'Get a specific entity by ID with full details. Works for any major Autotask entity type. This is a read-only operation that retrieves a single record.',
+        'Get one or more entities by ID with full details. Works for any major Autotask entity type. Supports fetching multiple entities in a single call for efficiency. This is a read-only operation.',
         'read',
         {
           entity: {
@@ -2453,14 +2455,19 @@ export class EnhancedAutotaskToolHandler {
           },
           id: {
             type: 'number',
-            description: 'Entity ID to retrieve (required)'
+            description: 'Single entity ID to retrieve (use this OR ids, not both)'
+          },
+          ids: {
+            type: 'array',
+            items: { type: 'number' },
+            description: 'Array of entity IDs to retrieve in a single call (use this OR id, not both). Example: [123, 456, 789]. Maximum 25 IDs per call for performance.'
           },
           fullDetails: {
             type: 'boolean',
             description: 'Whether to include full details (optional, only applicable to some entities like tickets for optimized responses)'
           }
         },
-        ['entity', 'id']
+        ['entity']
       ), 
       EnhancedAutotaskToolHandler.createTool(
         'get_project_details',
@@ -3249,7 +3256,8 @@ export class EnhancedAutotaskToolHandler {
         contacts,
         ['companyID'],
         [],
-        tenantContext
+        tenantContext,
+        tracker
       );
       
       // Enhanced results with mapped names (cache is now populated)
@@ -3262,7 +3270,7 @@ export class EnhancedAutotaskToolHandler {
           if (contact.companyID) {
             try {
               enhanced._enhanced = enhanced._enhanced || {};
-              enhanced._enhanced.companyName = await mappingService.getCompanyName(contact.companyID, tenantContext);
+              enhanced._enhanced.companyName = await mappingService.getCompanyName(contact.companyID, tenantContext, tracker);
             } catch (error) {
               this.logger.info(`Failed to map company ID ${contact.companyID}:`, error);
               enhanced._enhanced = enhanced._enhanced || {};
@@ -3435,7 +3443,8 @@ export class EnhancedAutotaskToolHandler {
         tickets,
         ['companyID'],
         ['assignedResourceID'],
-        tenantContext
+        tenantContext,
+        tracker
       );
       
       // Enhanced results with mapped names (cache is now populated)
@@ -3448,7 +3457,7 @@ export class EnhancedAutotaskToolHandler {
           if (ticket.companyID) {
             try {
               enhanced._enhanced = enhanced._enhanced || {};
-              enhanced._enhanced.companyName = await mappingService.getCompanyName(ticket.companyID, tenantContext);
+              enhanced._enhanced.companyName = await mappingService.getCompanyName(ticket.companyID, tenantContext, tracker);
             } catch (error) {
               this.logger.info(`Failed to map company ID ${ticket.companyID}:`, error);
               enhanced._enhanced = enhanced._enhanced || {};
@@ -3460,7 +3469,7 @@ export class EnhancedAutotaskToolHandler {
           if (ticket.assignedResourceID) {
             try {
               enhanced._enhanced = enhanced._enhanced || {};
-              enhanced._enhanced.assignedResourceName = await mappingService.getResourceName(ticket.assignedResourceID, tenantContext);
+              enhanced._enhanced.assignedResourceName = await mappingService.getResourceName(ticket.assignedResourceID, tenantContext, tracker);
             } catch (error) {
               this.logger.info(`Failed to map assigned resource ID ${ticket.assignedResourceID}:`, error);
               enhanced._enhanced = enhanced._enhanced || {};
@@ -3609,7 +3618,8 @@ export class EnhancedAutotaskToolHandler {
         projects,
         ['companyID'],
         [],
-        tenantContext
+        tenantContext,
+        tracker
       );
       
       // Enhanced results with mapped names (cache is now populated)
@@ -3622,7 +3632,7 @@ export class EnhancedAutotaskToolHandler {
           if (project.companyID) {
             try {
               enhanced._enhanced = enhanced._enhanced || {};
-              enhanced._enhanced.companyName = await mappingService.getCompanyName(project.companyID, tenantContext);
+              enhanced._enhanced.companyName = await mappingService.getCompanyName(project.companyID, tenantContext, tracker);
             } catch (error) {
               this.logger.info(`Failed to map company ID ${project.companyID}:`, error);
               enhanced._enhanced = enhanced._enhanced || {};
@@ -3926,7 +3936,7 @@ export class EnhancedAutotaskToolHandler {
       if (projectData.companyID) {
         try {
           const mappingService = await this.getMappingService();
-          result.project.companyName = await mappingService.getCompanyName(projectData.companyID, tenantContext);
+          result.project.companyName = await mappingService.getCompanyName(projectData.companyID, tenantContext, tracker);
         } catch (error) {
           this.logger.info(`Failed to map company ID ${projectData.companyID}:`, error);
           result.project.companyName = `Unknown (${projectData.companyID})`;
@@ -4283,7 +4293,8 @@ export class EnhancedAutotaskToolHandler {
         timeEntries,
         [], // No company fields in time entries
         ['resourceID', 'billingApprovalResourceID'],
-        tenantContext
+        tenantContext,
+        tracker
       );
       
       // Enhanced results with mapped names (cache is now populated)
@@ -4296,7 +4307,7 @@ export class EnhancedAutotaskToolHandler {
           // Add resource name if available (from cache)
           if (entry.resourceID) {
             try {
-              const resourceName = await mappingService.getResourceName(entry.resourceID, tenantContext);
+              const resourceName = await mappingService.getResourceName(entry.resourceID, tenantContext, tracker);
               enhanced._enhanced.resourceName = resourceName ?? `Unknown (${entry.resourceID})`;
             } catch (error) {
               this.logger.debug(`Failed to map resource ID ${entry.resourceID}:`, error);
@@ -4307,7 +4318,7 @@ export class EnhancedAutotaskToolHandler {
           // Add billing approval resource name if available (from cache)
           if (entry.billingApprovalResourceID) {
             try {
-              const resourceName = await mappingService.getResourceName(entry.billingApprovalResourceID, tenantContext);
+              const resourceName = await mappingService.getResourceName(entry.billingApprovalResourceID, tenantContext, tracker);
               enhanced._enhanced.billingApprovalResourceName = resourceName ?? `Unknown (${entry.billingApprovalResourceID})`;
             } catch (error) {
               this.logger.debug(`Failed to map billing approval resource ID ${entry.billingApprovalResourceID}:`, error);
@@ -4422,7 +4433,8 @@ export class EnhancedAutotaskToolHandler {
         tasks,
         [], // No company fields in tasks
         ['assignedResourceID', 'creatorResourceID', 'completedByResourceID'],
-        tenantContext
+        tenantContext,
+        tracker
       );
       
       // Enhanced results with mapped names (cache is now populated)
@@ -4435,7 +4447,7 @@ export class EnhancedAutotaskToolHandler {
           // Add assigned resource name if available (from cache)
           if (task.assignedResourceID) {
             try {
-              const resourceName = await mappingService.getResourceName(task.assignedResourceID, tenantContext);
+              const resourceName = await mappingService.getResourceName(task.assignedResourceID, tenantContext, tracker);
               enhanced._enhanced.assignedResourceName = resourceName ?? `Unknown (${task.assignedResourceID})`;
             } catch (error) {
               this.logger.debug(`Failed to map assigned resource ID ${task.assignedResourceID}:`, error);
@@ -4446,7 +4458,7 @@ export class EnhancedAutotaskToolHandler {
           // Add creator resource name if available (from cache)
           if (task.creatorResourceID) {
             try {
-              const resourceName = await mappingService.getResourceName(task.creatorResourceID, tenantContext);
+              const resourceName = await mappingService.getResourceName(task.creatorResourceID, tenantContext, tracker);
               enhanced._enhanced.creatorResourceName = resourceName ?? `Unknown (${task.creatorResourceID})`;
             } catch (error) {
               this.logger.debug(`Failed to map creator resource ID ${task.creatorResourceID}:`, error);
@@ -4457,7 +4469,7 @@ export class EnhancedAutotaskToolHandler {
           // Add completed by resource name if available (from cache)
           if (task.completedByResourceID) {
             try {
-              const resourceName = await mappingService.getResourceName(task.completedByResourceID, tenantContext);
+              const resourceName = await mappingService.getResourceName(task.completedByResourceID, tenantContext, tracker);
               enhanced._enhanced.completedByResourceName = resourceName ?? `Unknown (${task.completedByResourceID})`;
             } catch (error) {
               this.logger.debug(`Failed to map completed by resource ID ${task.completedByResourceID}:`, error);
@@ -4874,7 +4886,8 @@ export class EnhancedAutotaskToolHandler {
         contracts,
         ['companyID'],
         [],
-        tenantContext
+        tenantContext,
+        tracker
       );
       
       // Enhanced results with mapped names (cache is now populated)
@@ -4887,7 +4900,7 @@ export class EnhancedAutotaskToolHandler {
           // Add company name if available (from cache)
           if (contract.companyID) {
             try {
-              const companyName = await mappingService.getCompanyName(contract.companyID, tenantContext);
+              const companyName = await mappingService.getCompanyName(contract.companyID, tenantContext, tracker);
               enhanced._enhanced.companyName = companyName ?? `Unknown (${contract.companyID})`;
             } catch (error) {
               this.logger.debug(`Failed to map company ID ${contract.companyID}:`, error);
@@ -4910,7 +4923,7 @@ export class EnhancedAutotaskToolHandler {
     }
   }
 
-  private async searchInvoices(args: Record<string, any>, tenantContext?: TenantContext, _tracker?: ApiCallTracker): Promise<McpToolResult> {
+  private async searchInvoices(args: Record<string, any>, tenantContext?: TenantContext, tracker?: ApiCallTracker): Promise<McpToolResult> {
     try {
       const { companyId, fromDate, toDate, pageSize } = args;
       // Build filter for invoices search
@@ -4948,7 +4961,8 @@ export class EnhancedAutotaskToolHandler {
         invoices,
         ['companyID'],
         ['creatorResourceID'],
-        tenantContext
+        tenantContext,
+        tracker
       );
       
       // Enhanced results with mapped names (cache is now populated)
@@ -4961,7 +4975,7 @@ export class EnhancedAutotaskToolHandler {
           // Add company name if available (from cache)
           if (invoice.companyID) {
             try {
-              const companyName = await mappingService.getCompanyName(invoice.companyID, tenantContext);
+              const companyName = await mappingService.getCompanyName(invoice.companyID, tenantContext, tracker);
               enhanced._enhanced.companyName = companyName ?? `Unknown (${invoice.companyID})`;
             } catch (error) {
               this.logger.debug(`Failed to map company ID ${invoice.companyID}:`, error);
@@ -4972,7 +4986,7 @@ export class EnhancedAutotaskToolHandler {
           // Add creator resource name if available (from cache)
           if (invoice.creatorResourceID) {
             try {
-              const resourceName = await mappingService.getResourceName(invoice.creatorResourceID, tenantContext);
+              const resourceName = await mappingService.getResourceName(invoice.creatorResourceID, tenantContext, tracker);
               enhanced._enhanced.creatorResourceName = resourceName ?? `Unknown (${invoice.creatorResourceID})`;
             } catch (error) {
               this.logger.debug(`Failed to map creator resource ID ${invoice.creatorResourceID}:`, error);
@@ -4990,7 +5004,7 @@ export class EnhancedAutotaskToolHandler {
     }
   }
 
-  private async searchQuotes(args: Record<string, any>, tenantContext?: TenantContext, _tracker?: ApiCallTracker): Promise<McpToolResult> {
+  private async searchQuotes(args: Record<string, any>, tenantContext?: TenantContext, tracker?: ApiCallTracker): Promise<McpToolResult> {
     try {
       const { companyId, contactId, opportunityId, searchTerm, pageSize } = args;
       
@@ -5030,7 +5044,8 @@ export class EnhancedAutotaskToolHandler {
         quotes,
         ['accountId'],
         ['creatorResourceID'],
-        tenantContext
+        tenantContext,
+        tracker
       );
       
       // Enhanced results with mapped names (cache is now populated)
@@ -5043,7 +5058,7 @@ export class EnhancedAutotaskToolHandler {
           // Add company name if available (quotes use accountId, from cache)
           if (quote.accountId) {
             try {
-              const companyName = await mappingService.getCompanyName(quote.accountId, tenantContext);
+              const companyName = await mappingService.getCompanyName(quote.accountId, tenantContext, tracker);
               enhanced._enhanced.companyName = companyName ?? `Unknown (${quote.accountId})`;
             } catch (error) {
               this.logger.debug(`Failed to map account ID ${quote.accountId}:`, error);
@@ -5054,7 +5069,7 @@ export class EnhancedAutotaskToolHandler {
           // Add creator resource name if available (from cache)
           if (quote.creatorResourceID) {
             try {
-              const resourceName = await mappingService.getResourceName(quote.creatorResourceID, tenantContext);
+              const resourceName = await mappingService.getResourceName(quote.creatorResourceID, tenantContext, tracker);
               enhanced._enhanced.creatorResourceName = resourceName ?? `Unknown (${quote.creatorResourceID})`;
             } catch (error) {
               this.logger.debug(`Failed to map creator resource ID ${quote.creatorResourceID}:`, error);
@@ -5219,7 +5234,8 @@ export class EnhancedAutotaskToolHandler {
         opportunities,
         ['accountID'],
         ['ownerResourceID', 'creatorResourceID'],
-        tenantContext
+        tenantContext,
+        tracker
       );
       
       // Enhanced results with mapped names (cache is now populated)
@@ -5232,7 +5248,7 @@ export class EnhancedAutotaskToolHandler {
           // Add company name if available (opportunities use accountID, from cache)
           if (opportunity.accountID) {
             try {
-              const companyName = await mappingService.getCompanyName(opportunity.accountID, tenantContext);
+              const companyName = await mappingService.getCompanyName(opportunity.accountID, tenantContext, tracker);
               enhanced._enhanced.companyName = companyName ?? `Unknown (${opportunity.accountID})`;
             } catch (error) {
               this.logger.debug(`Failed to map account ID ${opportunity.accountID}:`, error);
@@ -5243,7 +5259,7 @@ export class EnhancedAutotaskToolHandler {
           // Add owner resource name if available (from cache)
           if (opportunity.ownerResourceID) {
             try {
-              const resourceName = await mappingService.getResourceName(opportunity.ownerResourceID, tenantContext);
+              const resourceName = await mappingService.getResourceName(opportunity.ownerResourceID, tenantContext, tracker);
               enhanced._enhanced.ownerResourceName = resourceName ?? `Unknown (${opportunity.ownerResourceID})`;
             } catch (error) {
               this.logger.debug(`Failed to map owner resource ID ${opportunity.ownerResourceID}:`, error);
@@ -5254,7 +5270,7 @@ export class EnhancedAutotaskToolHandler {
           // Add creator resource name if available (from cache)
           if (opportunity.creatorResourceID) {
             try {
-              const resourceName = await mappingService.getResourceName(opportunity.creatorResourceID, tenantContext);
+              const resourceName = await mappingService.getResourceName(opportunity.creatorResourceID, tenantContext, tracker);
               enhanced._enhanced.creatorResourceName = resourceName ?? `Unknown (${opportunity.creatorResourceID})`;
             } catch (error) {
               this.logger.debug(`Failed to map creator resource ID ${opportunity.creatorResourceID}:`, error);
@@ -5317,7 +5333,7 @@ export class EnhancedAutotaskToolHandler {
     }
   }
 
-  private async searchExpenseReports(args: Record<string, any>, tenantContext?: TenantContext, _tracker?: ApiCallTracker): Promise<McpToolResult> {
+  private async searchExpenseReports(args: Record<string, any>, tenantContext?: TenantContext, tracker?: ApiCallTracker): Promise<McpToolResult> {
     try {
       const { submitterId, status, fromDate, toDate, pageSize } = args;
       
@@ -5360,7 +5376,8 @@ export class EnhancedAutotaskToolHandler {
         expenseReports,
         [],
         ['submittedByResourceID', 'resourceId', 'approvedByResourceID'],
-        tenantContext
+        tenantContext,
+        tracker
       );
       
       // Enhanced results with mapped names (cache is now populated)
@@ -5374,7 +5391,7 @@ export class EnhancedAutotaskToolHandler {
           if (report.submittedByResourceID || report.resourceId) {
             const resourceId = report.submittedByResourceID || report.resourceId;
             try {
-              const resourceName = await mappingService.getResourceName(resourceId, tenantContext);
+              const resourceName = await mappingService.getResourceName(resourceId, tenantContext, tracker);
               enhanced._enhanced.submittedByResourceName = resourceName ?? `Unknown (${resourceId})`;
             } catch (error) {
               this.logger.debug(`Failed to map submitter resource ID ${resourceId}:`, error);
@@ -5385,7 +5402,7 @@ export class EnhancedAutotaskToolHandler {
           // Add approver resource name if available (from cache)
           if (report.approvedByResourceID) {
             try {
-              const resourceName = await mappingService.getResourceName(report.approvedByResourceID, tenantContext);
+              const resourceName = await mappingService.getResourceName(report.approvedByResourceID, tenantContext, tracker);
               enhanced._enhanced.approvedByResourceName = resourceName ?? `Unknown (${report.approvedByResourceID})`;
             } catch (error) {
               this.logger.debug(`Failed to map approver resource ID ${report.approvedByResourceID}:`, error);
@@ -5474,7 +5491,7 @@ export class EnhancedAutotaskToolHandler {
   // Configuration Items Management  
   // ===================================
 
-  private async searchConfigurationItems(args: Record<string, any>, tenantContext?: TenantContext, _tracker?: ApiCallTracker): Promise<McpToolResult> {
+  private async searchConfigurationItems(args: Record<string, any>, tenantContext?: TenantContext, tracker?: ApiCallTracker): Promise<McpToolResult> {
     try {
       const { companyId, configurationItemType, serialNumber, referenceTitle, searchTerm, pageSize } = args;
       
@@ -5518,7 +5535,8 @@ export class EnhancedAutotaskToolHandler {
         configItems,
         ['companyID'],
         [],
-        tenantContext
+        tenantContext,
+        tracker
       );
       
       // Enhanced results with mapped names (cache is now populated)
@@ -5531,7 +5549,7 @@ export class EnhancedAutotaskToolHandler {
           // Add company name if available (from cache)
           if (item.companyID) {
             try {
-              const companyName = await mappingService.getCompanyName(item.companyID, tenantContext);
+              const companyName = await mappingService.getCompanyName(item.companyID, tenantContext, tracker);
               enhanced._enhanced.companyName = companyName ?? `Unknown (${item.companyID})`;
             } catch (error) {
               this.logger.debug(`Failed to map company ID ${item.companyID}:`, error);
@@ -5626,7 +5644,7 @@ export class EnhancedAutotaskToolHandler {
   // Pagination Helper Methods  
   // ===================================
 
-  private async getCompaniesPage(args: Record<string, any>, tenantContext?: TenantContext, _tracker?: ApiCallTracker): Promise<McpToolResult> {
+  private async getCompaniesPage(args: Record<string, any>, tenantContext?: TenantContext, tracker?: ApiCallTracker): Promise<McpToolResult> {
     try {
       // ⚠️ IMPORTANT: Autotask API uses cursor-based pagination with nextPageUrl/prevPageUrl
       // It does NOT support jumping to specific pages - only sequential traversal via URLs
@@ -5686,7 +5704,8 @@ export class EnhancedAutotaskToolHandler {
         companies,
         [],
         ['ownerResourceID'],
-        tenantContext
+        tenantContext,
+        tracker
       );
       
       // Enhanced results with mapped names (cache is now populated)
@@ -5699,7 +5718,7 @@ export class EnhancedAutotaskToolHandler {
           if (company.ownerResourceID) {
             try {
               enhanced._enhanced = enhanced._enhanced || {};
-              enhanced._enhanced.ownerResourceName = await mappingService.getResourceName(company.ownerResourceID, tenantContext);
+              enhanced._enhanced.ownerResourceName = await mappingService.getResourceName(company.ownerResourceID, tenantContext, tracker);
             } catch (error) {
               this.logger.info(`Failed to map owner resource ID ${company.ownerResourceID}:`, error);
               enhanced._enhanced = enhanced._enhanced || {};
@@ -5760,7 +5779,7 @@ export class EnhancedAutotaskToolHandler {
   // Expense Items Management  
   // ===================================
 
-  private async searchExpenseItems(args: Record<string, any>, tenantContext?: TenantContext, _tracker?: ApiCallTracker): Promise<McpToolResult> {
+  private async searchExpenseItems(args: Record<string, any>, tenantContext?: TenantContext, tracker?: ApiCallTracker): Promise<McpToolResult> {
     try {
       const { expenseReportId, pageSize } = args;
       
@@ -5790,7 +5809,8 @@ export class EnhancedAutotaskToolHandler {
         expenseItems,
         ['companyID'],
         [],
-        tenantContext
+        tenantContext,
+        tracker
       );
 
       // Enhanced results with mapped names (cache is now populated)
@@ -5803,7 +5823,7 @@ export class EnhancedAutotaskToolHandler {
           // Add company name if available (from cache)
           if (item.companyID) {
             try {
-              const companyName = await mappingService.getCompanyName(item.companyID, tenantContext);
+              const companyName = await mappingService.getCompanyName(item.companyID, tenantContext, tracker);
               enhanced._enhanced.companyName = companyName ?? `Unknown (${item.companyID})`;
             } catch (error) {
               this.logger.debug(`Failed to map company ID ${item.companyID}:`, error);
@@ -5980,14 +6000,42 @@ export class EnhancedAutotaskToolHandler {
     }
   }
 
-  private async getEntityById(args: Record<string, any>, tenantContext?: TenantContext, _tracker?: ApiCallTracker): Promise<McpToolResult> {
+  private async getEntityById(args: Record<string, any>, tenantContext?: TenantContext, tracker?: ApiCallTracker): Promise<McpToolResult> {
     try {
-      const { entity, id, fullDetails } = args;
+      const { entity, id, ids, fullDetails } = args;
       
-      if (!entity || !id) {
+      // Validate entity is provided
+      if (!entity) {
         return {
           isError: true,
-          content: [{ type: 'text', text: 'Both entity and id parameters are required' }]
+          content: [{ type: 'text', text: 'Entity parameter is required' }]
+        };
+      }
+
+      // Validate that either id or ids is provided (but not both)
+      if (!id && (!ids || !Array.isArray(ids) || ids.length === 0)) {
+        return {
+          isError: true,
+          content: [{ type: 'text', text: 'Either id (single number) or ids (array of numbers) parameter is required' }]
+        };
+      }
+
+      if (id && ids) {
+        return {
+          isError: true,
+          content: [{ type: 'text', text: 'Provide either id or ids parameter, not both' }]
+        };
+      }
+
+      // Normalize to array of IDs
+      const idsToFetch: number[] = ids ? ids : [id];
+      
+      // Limit to prevent abuse (max 25 IDs per call)
+      const MAX_IDS = 25;
+      if (idsToFetch.length > MAX_IDS) {
+        return {
+          isError: true,
+          content: [{ type: 'text', text: `Maximum ${MAX_IDS} IDs allowed per call. Received ${idsToFetch.length} IDs.` }]
         };
       }
 
@@ -6030,20 +6078,66 @@ export class EnhancedAutotaskToolHandler {
       // Only tickets support fullDetails parameter (as second argument)
       const supportsFullDetails = ['getTicket', 'getTicketByNumber'].includes(methodName);
       
-      let result;
-      if (supportsFullDetails && fullDetails !== undefined) {
-        // Pass id, fullDetails, tenantContext as separate parameters
-        result = await serviceMethod.call(this.autotaskService, id, fullDetails, tenantContext);
-      } else {
-        // Pass id, tenantContext as separate parameters
-        result = await serviceMethod.call(this.autotaskService, id, tenantContext);
-      }
+      // Use ConcurrencyLimiter to respect Autotask's thread limit (max 3 concurrent requests)
+      const concurrencyLimiter = new ConcurrencyLimiter(3);
       
-      if (!result) {
-        return this.createNotFoundResponse(entity, id);
-      }
+      // Fetch all entities with controlled concurrency
+      const fetchPromises = idsToFetch.map(async (entityId: number) => {
+        return concurrencyLimiter.execute(async () => {
+          try {
+            let result;
+            if (supportsFullDetails && fullDetails !== undefined) {
+              result = await serviceMethod.call(this.autotaskService, entityId, fullDetails, tenantContext, tracker);
+            } else {
+              result = await serviceMethod.call(this.autotaskService, entityId, tenantContext, tracker);
+            }
+            return { id: entityId, success: true, data: result };
+          } catch (error: any) {
+            return { id: entityId, success: false, error: error.message };
+          }
+        });
+      });
+
+      const results = await Promise.all(fetchPromises);
       
-      return this.createDataResponse(result);
+      // Separate successful and failed results
+      const successful = results.filter(r => r.success && r.data);
+      const notFound = results.filter(r => r.success && !r.data);
+      const failed = results.filter(r => !r.success);
+
+      // If single ID was requested, return simple response
+      if (!ids) {
+        if (successful.length === 1) {
+          return this.createDataResponse(successful[0].data);
+        }
+        if (notFound.length === 1) {
+          return this.createNotFoundResponse(entity, id);
+        }
+        return {
+          isError: true,
+          content: [{ type: 'text', text: `Failed to get ${entity} ${id}: ${failed[0]?.error || 'Unknown error'}` }]
+        };
+      }
+
+      // Multiple IDs: return structured response
+      const response: any = {
+        entity,
+        requested: idsToFetch.length,
+        found: successful.length,
+        notFound: notFound.length,
+        failed: failed.length,
+        items: successful.map(r => r.data)
+      };
+
+      if (notFound.length > 0) {
+        response.notFoundIds = notFound.map(r => r.id);
+      }
+
+      if (failed.length > 0) {
+        response.errors = failed.map(r => ({ id: r.id, error: r.error }));
+      }
+
+      return this.createDataResponse(response);
     } catch (error: any) {
       return { 
         isError: true, 

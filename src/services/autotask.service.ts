@@ -2037,15 +2037,22 @@ export class AutotaskService {
   // }
 
   // Configuration Item operations
-  async getConfigurationItem(id: number, tenantContext?: TenantContext): Promise<AutotaskConfigurationItem | null> {
+  async getConfigurationItem(id: number, tenantContext?: TenantContext, tracker?: ApiCallTracker): Promise<AutotaskConfigurationItem | null> {
+    const startTime = Date.now();
     const client = await this.getClientForTenant(tenantContext);
     
     try {
       this.logger.info(`Getting configuration item with ID: ${id}`);
       const result = await client.ConfigurationItems.get(id);
+      
+      const executionTime = Date.now() - startTime;
+      tracker?.recordApiCall('ConfigurationItems', 'get', executionTime, { id });
+      
       // @apigrate library returns { item: configItemData } or null
       return result?.item as AutotaskConfigurationItem || null;
     } catch (error) {
+      const executionTime = Date.now() - startTime;
+      tracker?.recordApiCall('ConfigurationItems', 'get', executionTime, { id, error: true });
       this.logger.error(`Failed to get configuration item ${id}:`, error);
       throw error;
     }
@@ -2127,15 +2134,22 @@ export class AutotaskService {
   // }
 
   // Contract operations (read-only for now as they're complex)
-  async getContract(id: number, tenantContext?: TenantContext): Promise<AutotaskContract | null> {
+  async getContract(id: number, tenantContext?: TenantContext, tracker?: ApiCallTracker): Promise<AutotaskContract | null> {
+    const startTime = Date.now();
     const client = await this.getClientForTenant(tenantContext);
     
     try {
       this.logger.info(`Getting contract with ID: ${id}`);
       const result = await client.Contracts.get(id);
+      
+      const executionTime = Date.now() - startTime;
+      tracker?.recordApiCall('Contracts', 'get', executionTime, { id });
+      
       // @apigrate library returns { item: contractData } or null
       return result?.item as AutotaskContract || null;
     } catch (error) {
+      const executionTime = Date.now() - startTime;
+      tracker?.recordApiCall('Contracts', 'get', executionTime, { id, error: true });
       this.logger.error(`Failed to get contract ${id}:`, error);
       throw error;
     }
@@ -2241,15 +2255,22 @@ export class AutotaskService {
   }
 
   // Invoice operations (read-only)
-  async getInvoice(id: number, tenantContext?: TenantContext): Promise<AutotaskInvoice | null> {
+  async getInvoice(id: number, tenantContext?: TenantContext, tracker?: ApiCallTracker): Promise<AutotaskInvoice | null> {
+    const startTime = Date.now();
     const client = await this.getClientForTenant(tenantContext);
     
     try {
       this.logger.info(`Getting invoice with ID: ${id}`);
       const result = await client.Invoices.get(id);
+      
+      const executionTime = Date.now() - startTime;
+      tracker?.recordApiCall('Invoices', 'get', executionTime, { id });
+      
       // @apigrate library returns { item: invoiceData } or null
       return result?.item as AutotaskInvoice || null;
     } catch (error) {
+      const executionTime = Date.now() - startTime;
+      tracker?.recordApiCall('Invoices', 'get', executionTime, { id, error: true });
       this.logger.error(`Failed to get invoice ${id}:`, error);
       throw error;
     }
@@ -2962,7 +2983,8 @@ export class AutotaskService {
   }
 
   // Expense entities
-  async getExpenseReport(id: number, tenantContext?: TenantContext): Promise<AutotaskExpenseReport | null> {
+  async getExpenseReport(id: number, tenantContext?: TenantContext, tracker?: ApiCallTracker): Promise<AutotaskExpenseReport | null> {
+    const startTime = Date.now();
     const client = await this.getClientForTenant(tenantContext);
     
     try {
@@ -2980,6 +3002,9 @@ export class AutotaskService {
       const response = await client.ExpenseReports.query(searchBody);
       const reports = response?.data?.items || [];
       
+      const executionTime = Date.now() - startTime;
+      tracker?.recordApiCall('ExpenseReports', 'query', executionTime, { id });
+      
       if (reports.length > 0) {
         this.logger.info(`Retrieved expense report ${id}`);
         return reports[0] as AutotaskExpenseReport;
@@ -2988,6 +3013,8 @@ export class AutotaskService {
       this.logger.info(`Expense report ${id} not found`);
       return null;
     } catch (error) {
+      const executionTime = Date.now() - startTime;
+      tracker?.recordApiCall('ExpenseReports', 'query', executionTime, { id, error: true });
       this.logger.error(`Failed to get expense report ${id}:`, error);
       throw error;
     }
@@ -3176,15 +3203,22 @@ export class AutotaskService {
   }
 
   // Quote entity
-  async getQuote(id: number, tenantContext?: TenantContext): Promise<AutotaskQuote | null> {
+  async getQuote(id: number, tenantContext?: TenantContext, tracker?: ApiCallTracker): Promise<AutotaskQuote | null> {
+    const startTime = Date.now();
     const client = await this.getClientForTenant(tenantContext);
     
     try {
       this.logger.info(`Getting quote with ID: ${id}`);
       const result = await client.Quotes.get(id);
+      
+      const executionTime = Date.now() - startTime;
+      tracker?.recordApiCall('Quotes', 'get', executionTime, { id });
+      
       // @apigrate library returns { item: quoteData } or null
       return result?.item as AutotaskQuote || null;
     } catch (error) {
+      const executionTime = Date.now() - startTime;
+      tracker?.recordApiCall('Quotes', 'get', executionTime, { id, error: true });
       this.logger.error(`Failed to get quote ${id}:`, error);
       throw error;
     }

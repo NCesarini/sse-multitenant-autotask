@@ -75,22 +75,8 @@ export class AutotaskSseServer {
         bodySize: req.body ? JSON.stringify(req.body).length : 0
       };
 
-      this.logger.info(`📥 Incoming request: ${req.method} ${req.path}`, requestInfo);
-
-      // Log tenant information if present in body or query
-      const hasTenantInBody = req.body && (req.body._tenant || req.body.tenant || req.body.credentials);
-      const hasTenantInQuery = req.query && (req.query._tenant || req.query.tenant || req.query.credentials);
-      
-      if (hasTenantInBody || hasTenantInQuery) {
-        this.logger.info('🏢 Tenant credentials detected in request', {
-          inBody: hasTenantInBody,
-          inQuery: hasTenantInQuery,
-          tenantFields: {
-            body: hasTenantInBody ? Object.keys(req.body._tenant || req.body.tenant || req.body.credentials || {}) : [],
-            query: hasTenantInQuery ? Object.keys(req.query._tenant || req.query.tenant || req.query.credentials || {}) : []
-          }
-        });
-      }
+      // Only log non-routine requests at debug level
+      this.logger.debug(`📥 Incoming request: ${req.method} ${req.path}`, requestInfo);
 
       next();
     });
@@ -173,47 +159,6 @@ export class AutotaskSseServer {
       try {
         const sessionId = req.query.sessionId as string;
         
-        // Enhanced debugging for tenant context flow
-        this.logger.info('📨 RAW MESSAGE STRUCTURE DEBUG', {
-          sessionId,
-          messageId: req.body?.id,
-          method: req.body?.method,
-          jsonrpc: req.body?.jsonrpc,
-          hasParams: !!req.body?.params,
-          paramsKeys: req.body?.params ? Object.keys(req.body.params) : 'none',
-          toolName: req.body?.params?.name,
-          hasArguments: !!(req.body?.params?.arguments),
-          argumentsKeys: req.body?.params?.arguments ? Object.keys(req.body.params.arguments) : 'none',
-          fullBody: req.body
-        });
-
-        // Check for tenant information in the message
-        if (req.body?.params?.arguments) {
-          const args = req.body.params.arguments;
-          const hasTenant = args._tenant || args.tenant || args.credentials;
-          
-          if (hasTenant) {
-            const tenantInfo = args._tenant || args.tenant || args.credentials;
-            this.logger.info('🏢 Tenant credentials found in MCP message', {
-              sessionId,
-              messageId: req.body?.id,
-              method: req.body?.method,
-              tenantId: tenantInfo.tenantId,
-              username: tenantInfo.username ? `${tenantInfo.username.substring(0, 3)}***` : undefined,
-              hasSecret: !!tenantInfo.secret,
-              hasIntegrationCode: !!tenantInfo.integrationCode,
-              hasApiUrl: !!tenantInfo.apiUrl,
-              hasSessionId: !!tenantInfo.sessionId
-            });
-          } else {
-            this.logger.info('🏠 No tenant credentials in MCP message (single-tenant mode)', {
-              sessionId,
-              messageId: req.body?.id,
-              method: req.body?.method
-            });
-          }
-        }
-        
         if (!sessionId) {
           this.logger.warn('❌ Missing session ID in message request', {
             query: req.query,
@@ -240,23 +185,8 @@ export class AutotaskSseServer {
           });
         }
 
-        this.logger.info(`🔄 Processing MCP message for session ${sessionId}`, {
-          sessionId,
-          messageId: req.body?.id,
-          method: req.body?.method,
-          processingStartTime: startTime
-        });
-
         // Handle the message through the SSE transport
         await transport.handlePostMessage(req, res, req.body);
-        
-        const processingTime = Date.now() - startTime;
-        this.logger.info(`✅ MCP message processed successfully`, {
-          sessionId,
-          messageId: req.body?.id,
-          method: req.body?.method,
-          processingTimeMs: processingTime
-        });
         
         return;
 
