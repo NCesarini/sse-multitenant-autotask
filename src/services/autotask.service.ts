@@ -28,19 +28,29 @@ import {
 import { McpServerConfig, AutotaskCredentials, TenantContext } from '../types/mcp';
 import { Logger } from '../utils/logger';
 import { ApiCallTracker } from '../utils/api-call-tracker'; 
+import { CursorStore, type CursorContinuation } from '../core/cursor-store.js';
+import {
+  PaginatedQueryEngine,
+  type PaginatedQueryClientProvider,
+  type PaginatedFetchResult
+} from '../core/paginated-query.js';
 
 
+/** Default rows per Autotask /query POST (max 500). Pagination merges multiple pages server-side. */
+export const DEFAULT_ENTITY_PAGE_SIZE = 500;
+
+/** @deprecated Use DEFAULT_ENTITY_PAGE_SIZE and env AT_MAX_*; kept for backward-compatible static threshold updates */
 export const LARGE_RESPONSE_THRESHOLDS = {
-  tickets: 100,        
-  companies: 100,     
-  contacts: 100,     
-  projects: 100,      
-  resources: 100,     
-  tasks: 100,          
-  timeentries: 100,    
-  contracts: 100,      
-  default: 100,        
-  responseSizeKB: 200  
+  tickets: DEFAULT_ENTITY_PAGE_SIZE,
+  companies: DEFAULT_ENTITY_PAGE_SIZE,
+  contacts: DEFAULT_ENTITY_PAGE_SIZE,
+  projects: DEFAULT_ENTITY_PAGE_SIZE,
+  resources: DEFAULT_ENTITY_PAGE_SIZE,
+  tasks: DEFAULT_ENTITY_PAGE_SIZE,
+  timeentries: DEFAULT_ENTITY_PAGE_SIZE,
+  contracts: DEFAULT_ENTITY_PAGE_SIZE,
+  default: DEFAULT_ENTITY_PAGE_SIZE,
+  responseSizeKB: 200
 };
 
 
@@ -55,7 +65,7 @@ interface ClientPoolEntry {
   credentials: AutotaskCredentials;
 }
 
-export class AutotaskService {
+export class AutotaskService implements PaginatedQueryClientProvider {
   private client: AutotaskClient | null = null;
   private logger: Logger;
   private config: McpServerConfig;
@@ -66,6 +76,9 @@ export class AutotaskService {
   private clientPool: Map<string, ClientPoolEntry> = new Map();
   private readonly poolSize: number;
   private readonly sessionTimeout: number;
+
+  private readonly cursorStore: CursorStore;
+  private readonly paginatedQuery: PaginatedQueryEngine;
 
   constructor(config: McpServerConfig, logger: Logger) {
     this.config = config;
@@ -87,8 +100,54 @@ export class AutotaskService {
       // Start cleanup interval for expired clients
       this.startClientCleanup();
     }
+
+    this.cursorStore = new CursorStore({ logger: this.logger });
+    this.paginatedQuery = new PaginatedQueryEngine(this, this.cursorStore, this.logger);
   }
- 
+
+  /** Shrink ticket objects for list/search MCP responses. */
+  shrinkTicketForList(ticket: AutotaskTicket): AutotaskTicket {
+    return this.optimizeTicketDataAggressive(ticket);
+  }
+
+  /** Shrink project objects for list/search MCP responses. */
+  shrinkProjectForList(project: AutotaskProject): AutotaskProject {
+    return this.optimizeProjectData(project);
+  }
+
+  /** Shrink task objects for list/search MCP responses. */
+  shrinkTaskForList(task: AutotaskTask): AutotaskTask {
+    return this.optimizeTaskData(task);
+  }
+
+  /** Low-level paginated POST+nextPageUrl (MCP tools use this for cursor metadata). */
+  fetchPaginatedEntity<T>(
+    entity: string,
+    queryBody: Record<string, unknown>,
+    tenantContext?: TenantContext,
+    tracker?: ApiCallTracker,
+    maxItems?: number,
+    continuation?: CursorContinuation
+  ): Promise<PaginatedFetchResult<T>> {
+    return this.paginatedQuery.fetchAll<T>(
+      entity,
+      queryBody,
+      tenantContext,
+      tracker,
+      maxItems,
+      continuation
+    );
+  }
+
+  /** Resume MCP cursor pagination (see tool `continue_query`). */
+  resumePaginatedFetch<T>(
+    cursor: string,
+    tenantContext?: TenantContext,
+    tracker?: ApiCallTracker,
+    maxItems?: number
+  ): Promise<PaginatedFetchResult<T>> {
+    return this.paginatedQuery.resumeFromCursor<T>(cursor, tenantContext, tracker, maxItems);
+  }
 
   /**
    * Get or create Autotask client for tenant
@@ -171,6 +230,33 @@ export class AutotaskService {
     });
 
     return client;
+  }
+
+  /**
+   * Public accessor for REST client (zone discovery on first use).
+   * Used by PaginatedQueryEngine for POST query + shared session.
+   */
+  getAutotaskRestClient(tenantContext?: TenantContext): Promise<unknown> {
+    return this.getClientForTenant(tenantContext);
+  }
+
+  /**
+   * Credentials for the current request (multi-tenant body or single-tenant config).
+   */
+  getCredentialsForRequest(tenantContext?: TenantContext): AutotaskCredentials {
+    if (tenantContext?.credentials) {
+      return tenantContext.credentials;
+    }
+    const c = this.config.autotask;
+    if (!c?.username || !c?.secret || !c?.integrationCode) {
+      throw new Error('No Autotask credentials: provide _tenant in multi-tenant mode or set AUTOTASK_* env vars.');
+    }
+    return {
+      username: c.username,
+      secret: c.secret,
+      integrationCode: c.integrationCode,
+      ...(c.apiUrl !== undefined ? { apiUrl: c.apiUrl } : {})
+    };
   }
 
   /**
@@ -439,152 +525,85 @@ export class AutotaskService {
     }
   }
 
+  /**
+   * JSON body for POST /Companies/query (shared by searchCompanies and MCP handler).
+   */
+  buildCompaniesQueryPayload(options: AutotaskQueryOptions = {}): Record<string, unknown> {
+    const searchBody: Record<string, unknown> = {};
+
+    if (
+      !options.filter ||
+      (Array.isArray(options.filter) && options.filter.length === 0) ||
+      (!Array.isArray(options.filter) && Object.keys(options.filter).length === 0)
+    ) {
+      searchBody.filter = [{ op: 'gte', field: 'id', value: 0 }];
+    } else if (!Array.isArray(options.filter)) {
+      const filterArray: unknown[] = [];
+      for (const [field, value] of Object.entries(options.filter)) {
+        filterArray.push({ op: 'eq', field, value });
+      }
+      searchBody.filter = filterArray;
+    } else {
+      searchBody.filter = options.filter;
+    }
+
+    if (options.sort) {
+      searchBody.sort = options.sort;
+    }
+
+    const requestedPageSize = Math.min(options.pageSize ?? DEFAULT_ENTITY_PAGE_SIZE, 500);
+    searchBody.pageSize = requestedPageSize;
+    searchBody.MaxRecords = requestedPageSize;
+    return searchBody;
+  }
+
   async searchCompanies(options: AutotaskQueryOptions = {}, tenantContext?: TenantContext, tracker?: ApiCallTracker): Promise<AutotaskCompany[]> {
-    
     const startTime = Date.now();
     this.logger.info('🔍 Searching companies', {
       hasTenantContext: !!tenantContext,
       tenantId: tenantContext?.tenantId,
       impersonationResourceId: tenantContext?.impersonationResourceId?.toString(),
-      hasFilter: !!(options.filter && (Array.isArray(options.filter) ? options.filter.length > 0 : Object.keys(options.filter).length > 0)),
-      filterCount: options.filter ? (Array.isArray(options.filter) ? options.filter.length : Object.keys(options.filter).length) : 0,
+      hasFilter: !!(
+        options.filter &&
+        (Array.isArray(options.filter) ? options.filter.length > 0 : Object.keys(options.filter).length > 0)
+      ),
+      filterCount: options.filter
+        ? Array.isArray(options.filter)
+          ? options.filter.length
+          : Object.keys(options.filter).length
+        : 0,
       operation: 'searchCompanies'
     });
 
-    const client = await this.getClientForTenant(tenantContext);
-    
     try {
       this.logger.info('Searching companies with options:', options);
-      
-      
-      this.logger.info('Making direct POST API call to Companies/query with JSON body');
-       
-      // Prepare search body in the same format as working endpoints
-      const searchBody: any = {};
-      
-      // Ensure there's a filter - Autotask API requires a filter
-      if (!options.filter || (Array.isArray(options.filter) && options.filter.length === 0) || 
-          (!Array.isArray(options.filter) && Object.keys(options.filter).length === 0)) {
-        searchBody.filter = [
-          {
-            "op": "gte",
-            "field": "id",
-            "value": 0
-          }
-        ];
-      } else {
-        // If filter is provided as an object, convert to array format expected by API
-        if (!Array.isArray(options.filter)) {
-          const filterArray = [];
-          for (const [field, value] of Object.entries(options.filter)) {
-            filterArray.push({
-              "op": "eq",
-              "field": field,
-              "value": value
-            });
-          }
-          searchBody.filter = filterArray;
-        } else {
-          searchBody.filter = options.filter;
-        }
-      }
 
-      // Add other search parameters
-      if (options.sort) searchBody.sort = options.sort;
-      // NOTE: Autotask API uses cursor-based pagination (nextPageUrl), not simple page numbers
-      // The 'page' parameter is not reliably supported - pagination must use nextPageUrl from response
       if (options.page && options.page > 1) {
-        this.logger.warn(`⚠️ searchCompanies: Page parameter (${options.page}) may not work - Autotask uses cursor-based pagination. Results may be incorrect.`);
+        this.logger.warn(
+          `⚠️ searchCompanies: page=${options.page} is ignored by Autotask REST; use MCP continue_query with a cursor instead.`
+        );
       }
-       
-      // THRESHOLD-BASED PAGINATION: Use thresholds to prevent oversized responses
-      const THRESHOLD_LIMIT = LARGE_RESPONSE_THRESHOLDS.companies; // 100
-      const DEFAULT_PAGE_SIZE = 80; // Reasonable default for UI display
-      
-      let requestedPageSize = options.pageSize;
-      let isHittingLimit = false;
-      
-      // If no pageSize specified, use default
-      if (!requestedPageSize) {
-        requestedPageSize = DEFAULT_PAGE_SIZE;
-        this.logger.info(`No pageSize specified, using default: ${DEFAULT_PAGE_SIZE}`);
-      } else {
-        // Cap at threshold limit to prevent oversized responses
-        const originalRequest = requestedPageSize;
-        requestedPageSize = Math.min(requestedPageSize, THRESHOLD_LIMIT);  // Fixed: Math.min, not Math.max!
-        isHittingLimit = originalRequest >= THRESHOLD_LIMIT;
-        
-        if (isHittingLimit) {
-          this.logger.info(`🔍 Companies request hits threshold limit (${THRESHOLD_LIMIT}), capped from ${originalRequest} to ${requestedPageSize}`);
-        }
-      }
-      
-      searchBody.pageSize = requestedPageSize;
-      searchBody.MaxRecords = requestedPageSize;  // Add MaxRecords for response size control
 
-      this.logger.info('📋 Companies query parameters:', {
-        page: searchBody.page || 1,
-        pageSize: searchBody.pageSize,
-        MaxRecords: searchBody.MaxRecords,
-        filterCount: searchBody.filter?.length || 0,
-        hasSort: !!searchBody.sort
+      const searchBody = this.buildCompaniesQueryPayload(options);
+      const result = await this.paginatedQuery.fetchAll<AutotaskCompany>(
+        'Companies',
+        searchBody,
+        tenantContext,
+        tracker,
+        options.maxItems,
+        { enrichment: 'companies', responseKey: 'companies' }
+      );
+
+      const executionTime = Date.now() - startTime;
+      this.logger.info(`✅ Retrieved ${result.items.length} companies (paginated)`, {
+        tenantId: tenantContext?.tenantId,
+        resultCount: result.items.length,
+        status: result.status,
+        pagesFetched: result.pagesFetched,
+        executionTimeMs: executionTime
       });
-      
-      this.logger.info('Querying Companies via native library method');
-      
-      try {
-        // Use native @apigrate/autotask-restapi method
-        const response = await client.Companies.query(searchBody);
-        
-        this.logger.info('✅ Companies.query() successful:', {
-          itemsCount: response.items?.length ?? 0,
-          pageDetails: response.pageDetails
-        });
 
-        // Extract companies from response
-        const companies: AutotaskCompany[] = response.items ?? [];
-        
-        // Log a sample company if available
-        if (companies.length > 0) {
-          this.logger.info('Sample company from response:', {
-            sampleCompany: companies[0],
-            totalItems: companies.length,
-            sampleKeys: Object.keys(companies[0] || {})
-          });
-        }
-        
-        const executionTime = Date.now() - startTime;
-        
-        // Record API call
-        tracker?.recordApiCall('Companies', 'query', executionTime, { 
-          filterCount: searchBody.filter?.length, 
-          resultCount: companies.length 
-        });
-        
-        this.logger.info(`✅ Retrieved ${companies.length} companies using direct POST API call`, {
-          tenantId: tenantContext?.tenantId,
-          resultCount: companies.length,
-          requestedPageSize,
-          executionTimeMs: executionTime,
-          wasLimited: isHittingLimit
-        });
-        return companies;
-        
-      } catch (directApiError: any) {
-        const executionTime = Date.now() - startTime;
-        tracker?.recordApiCall('Companies', 'query', executionTime, { error: true });
-        this.logger.error('❌ Direct POST /Companies/query failed:', {
-          error: directApiError.message,
-          name: directApiError.name,
-          status: directApiError.response?.status,
-          statusText: directApiError.response?.statusText,
-          responseData: directApiError.response?.data,
-          requestUrl: directApiError.config?.url,
-          requestMethod: directApiError.config?.method
-        });
-        throw directApiError;
-      }
-      
+      return result.items;
     } catch (error) {
       const executionTime = Date.now() - startTime;
       tracker?.recordApiCall('Companies', 'query', executionTime, { error: true });
@@ -608,28 +627,13 @@ export class AutotaskService {
     
     try {
       this.logger.info('Counting companies with options:', options);
-      
-      // Build filter (same as searchCompanies)
-      let filter: any[];
-      if (!options.filter || (Array.isArray(options.filter) && options.filter.length === 0) || 
-          (!Array.isArray(options.filter) && Object.keys(options.filter).length === 0)) {
-        filter = [{ "op": "gte", "field": "id", "value": 0 }];
-      } else {
-        if (!Array.isArray(options.filter)) {
-          filter = [];
-          for (const [field, value] of Object.entries(options.filter)) {
-            filter.push({ "op": "eq", "field": field, "value": value });
-          }
-        } else {
-          filter = options.filter;
-        }
-      }
+
+      const filter = this.buildCompaniesQueryPayload(options).filter as unknown[];
 
       const response = await client.Companies.count({ filter });
-      
       const executionTime = Date.now() - startTime;
       tracker?.recordApiCall('Companies', 'count', executionTime, { filterCount: filter.length });
-      
+
       const count = response.queryCount ?? 0;
       this.logger.info(`Companies count: ${count}`);
       return count;
@@ -721,99 +725,56 @@ export class AutotaskService {
     }
   }
 
+  /**
+   * JSON body for POST /Contacts/query.
+   */
+  buildContactsQueryPayload(options: AutotaskQueryOptions = {}): Record<string, unknown> {
+    let filter: unknown[];
+    if (!options.filter || (Array.isArray(options.filter) && options.filter.length === 0)) {
+      filter = [{ op: 'gte', field: 'id', value: 0 }];
+    } else if (Array.isArray(options.filter)) {
+      filter = options.filter;
+    } else {
+      filter = [{ op: 'gte', field: 'id', value: 0 }];
+    }
+    const pageSize = Math.min(options.pageSize ?? DEFAULT_ENTITY_PAGE_SIZE, 500);
+    const body: Record<string, unknown> = {
+      filter,
+      pageSize,
+      MaxRecords: pageSize
+    };
+    if (options.sort) {
+      body.sort = options.sort;
+    }
+    return body;
+  }
+
   async searchContacts(options: AutotaskQueryOptions = {}, tenantContext?: TenantContext, tracker?: ApiCallTracker): Promise<AutotaskContact[]> {
     const startTime = Date.now();
-    const client = await this.getClientForTenant(tenantContext);
-    
+
     try {
       this.logger.info('Searching contacts with options:', options);
-      
-      // SMART PAGINATION: Use sensible defaults instead of fetching everything
-      const DEFAULT_PAGE_SIZE = 50; // Reasonable default for UI display
-      const MAX_PAGE_SIZE = 500; // API limit per request
-      const MAX_TOTAL_RESULTS = 2000; // Maximum total results to prevent huge responses
-      const MAX_PAGES = 5; // Maximum pages to fetch
-      
-      let requestedPageSize = options.pageSize;
-      
-      // If no pageSize specified, use default (don't fetch everything!)
-      if (!requestedPageSize) {
-        requestedPageSize = DEFAULT_PAGE_SIZE;
-        this.logger.info(`No pageSize specified, using default: ${DEFAULT_PAGE_SIZE}`);
-      }
-      
-      // If user wants a small number, just do a single request
-      if (requestedPageSize <= MAX_PAGE_SIZE) {
-        const queryOptions = {
-          ...options,
-          pageSize: Math.min(requestedPageSize, MAX_PAGE_SIZE)
-        };
 
-        this.logger.info('Single page request with limited results:', queryOptions);
-        
-        const pageStartTime = Date.now();
-        const result = await client.contacts.list(queryOptions as any);
-        const contacts = (result.data as AutotaskContact[]) || [];
-        const executionTime = Date.now() - pageStartTime;
-        tracker?.recordApiCall('Contacts', 'list', executionTime, { page: 1, resultCount: contacts.length });
-        
-        this.logger.info(`Retrieved ${contacts.length} contacts (single page)`);
-        return contacts;
-        
-      } else {
-        // Multi-page request with safety limits
-        let allContacts: AutotaskContact[] = [];
-        const pageSize = MAX_PAGE_SIZE; // Use max safe page size for efficiency
-        let currentPage = 1;
-        let hasMorePages = true;
-        
-        while (hasMorePages && currentPage <= MAX_PAGES && allContacts.length < MAX_TOTAL_RESULTS) {
-          const queryOptions = {
-            ...options,
-            pageSize: pageSize,
-            page: currentPage
-          };
+      const searchBody = this.buildContactsQueryPayload(options);
+      const result = await this.paginatedQuery.fetchAll<AutotaskContact>(
+        'Contacts',
+        searchBody,
+        tenantContext,
+        tracker,
+        options.maxItems,
+        { enrichment: 'contacts', responseKey: 'contacts' }
+      );
 
-          this.logger.info(`Fetching contacts page ${currentPage}...`);
-          
-          const pageStartTime = Date.now();
-          const result = await client.contacts.list(queryOptions as any);
-          const contacts = (result.data as AutotaskContact[]) || [];
-          const executionTime = Date.now() - pageStartTime;
-          tracker?.recordApiCall('Contacts', 'list', executionTime, { page: currentPage, resultCount: contacts.length });
-          
-          if (contacts.length === 0) {
-            hasMorePages = false;
-          } else {
-            allContacts.push(...contacts);
-            
-            // Check if we've reached the requested amount
-            if (allContacts.length >= requestedPageSize) {
-              // Trim to exact requested size
-              allContacts = allContacts.slice(0, requestedPageSize);
-              hasMorePages = false;
-              this.logger.info(`Reached requested page size limit: ${requestedPageSize}`);
-            } else if (contacts.length < pageSize) {
-              // Got less than full page - we're done
-              hasMorePages = false;
-            } else {
-              currentPage++;
-            }
-          }
-          
-          // Safety check for response size (prevent huge responses)
-          if (allContacts.length >= MAX_TOTAL_RESULTS) {
-            this.logger.warn(`Response size limit reached: ${MAX_TOTAL_RESULTS} contacts`);
-            hasMorePages = false;
-          }
-        }
-        
-        this.logger.info(`Retrieved ${allContacts.length} contacts across ${currentPage} pages`);
-        return allContacts;
-      }
+      const executionTime = Date.now() - startTime;
+      this.logger.info(`Retrieved ${result.items.length} contacts (paginated)`, {
+        executionTimeMs: executionTime,
+        status: result.status,
+        pagesFetched: result.pagesFetched
+      });
+      return result.items;
     } catch (error) {
       const executionTime = Date.now() - startTime;
-      tracker?.recordApiCall('Contacts', 'list', executionTime, { error: true });
+      tracker?.recordApiCall('Contacts', 'query', executionTime, { error: true });
       this.logger.error('Failed to search contacts:', error);
       throw error;
     }
@@ -829,16 +790,8 @@ export class AutotaskService {
     
     try {
       this.logger.info('Counting contacts with options:', options);
-      
-      // Build filter (same as searchContacts)
-      let filter: any[];
-      if (!options.filter || (Array.isArray(options.filter) && options.filter.length === 0)) {
-        filter = [{ "op": "gte", "field": "id", "value": 0 }];
-      } else if (Array.isArray(options.filter)) {
-        filter = options.filter;
-      } else {
-        filter = [{ "op": "gte", "field": "id", "value": 0 }];
-      }
+
+      const filter = this.buildContactsQueryPayload(options).filter as unknown[];
 
       const response = await client.Contacts.count({ filter });
       const executionTime = Date.now() - startTime;
@@ -968,10 +921,86 @@ export class AutotaskService {
 
 
 
+  /**
+   * JSON body for POST /Tickets/query (shared by searchTickets, countTickets, MCP handler).
+   */
+  buildTicketsQueryPayload(options: AutotaskQueryOptionsExtended = {}): Record<string, unknown> {
+    const filters: unknown[] = [];
+
+    if (options.searchTerm) {
+      const searchTerm = options.searchTerm;
+      const looksLikeTicketNumber = /^T\d+\.\d+$/.test(searchTerm);
+      if (looksLikeTicketNumber) {
+        filters.push({ op: 'eq', field: 'ticketNumber', value: searchTerm });
+      } else {
+        filters.push({ op: 'contains', field: 'title', value: searchTerm });
+      }
+    }
+
+    if (options.status !== undefined) {
+      filters.push({ op: 'eq', field: 'status', value: options.status });
+    } else {
+      filters.push({ op: 'ne', field: 'status', value: 5 });
+    }
+
+    if (options.unassigned === true) {
+      filters.push({ op: 'eq', field: 'assignedResourceID', value: null });
+    } else if (options.assignedResourceID !== undefined) {
+      filters.push({ op: 'eq', field: 'assignedResourceID', value: options.assignedResourceID });
+    }
+
+    if (options.priority !== undefined) {
+      filters.push({ op: 'eq', field: 'priority', value: options.priority });
+    }
+
+    if (options.companyId !== undefined) {
+      filters.push({ op: 'eq', field: 'companyID', value: options.companyId });
+    }
+
+    if (options.projectId !== undefined) {
+      filters.push({ op: 'eq', field: 'projectID', value: options.projectId });
+    }
+
+    if (options.contractId !== undefined) {
+      filters.push({ op: 'eq', field: 'contractID', value: options.contractId });
+    }
+
+    if (options.createdDateFrom) {
+      filters.push({ op: 'gte', field: 'createDate', value: options.createdDateFrom });
+    }
+    if (options.createdDateTo) {
+      filters.push({ op: 'lte', field: 'createDate', value: options.createdDateTo });
+    }
+    if (options.completedDateFrom) {
+      filters.push({ op: 'gte', field: 'completedDate', value: options.completedDateFrom });
+    }
+    if (options.completedDateTo) {
+      filters.push({ op: 'lte', field: 'completedDate', value: options.completedDateTo });
+    }
+    if (options.lastActivityDateFrom) {
+      filters.push({ op: 'gte', field: 'lastActivityDate', value: options.lastActivityDateFrom });
+    }
+    if (options.lastActivityDateTo) {
+      filters.push({ op: 'lte', field: 'lastActivityDate', value: options.lastActivityDateTo });
+    }
+
+    if (Array.isArray(options.filter)) {
+      for (const clause of options.filter) {
+        filters.push(clause);
+      }
+    }
+
+    const requestedPageSize = Math.min(options.pageSize ?? DEFAULT_ENTITY_PAGE_SIZE, 500);
+    return {
+      filter: filters,
+      pageSize: requestedPageSize,
+      MaxRecords: requestedPageSize
+    };
+  }
+
   async searchTickets(options: AutotaskQueryOptionsExtended = {}, tenantContext?: TenantContext, tracker?: ApiCallTracker): Promise<AutotaskTicket[]> {
     const startTime = Date.now();
-    const client = await this.getClientForTenant(tenantContext);
-    
+
     try {
       this.logger.info('🎫 Searching tickets', {
         tenantId: tenantContext?.tenantId,
@@ -982,228 +1011,32 @@ export class AutotaskService {
         operation: 'searchTickets'
       });
 
-      // Log detailed API parameters
-      this.logger.info('📋 API Parameters for searchTickets', {
-        tenantId: tenantContext?.tenantId,
-        impersonationResourceId: tenantContext?.impersonationResourceId,
-        searchCriteria: {
-          searchTerm: options.searchTerm,
-          status: options.status,
-          pageSize: options.pageSize,
-          // Don't log the full filter array as it can be large, just summary
-          filterCount: 'will be calculated'
-        },
-        apiEndpoint: 'client.tickets.list'
-      });
-      
-      // Build proper filter array for Autotask API
-      const filters: any[] = [];
-      
-      // Handle searchTerm - search in ticket number and title
-      if (options.searchTerm) {
-        const searchTerm = options.searchTerm;
-        
-        // Smart search: determine search strategy based on the term format
-        const looksLikeTicketNumber = /^T\d+\.\d+$/.test(searchTerm);
-        
-        if (looksLikeTicketNumber) {
-          // For ticket number format, search ticket number field first
-          filters.push({
-            op: 'eq',
-            field: 'ticketNumber',
-            value: searchTerm
-          });
-        } else {
-          // For other search terms, search in title first
-          filters.push({
-            op: 'contains',
-            field: 'title',
-            value: searchTerm
-          });
-        }
-      }
-      
-      // Handle status filter with more accurate open ticket definition
-      if (options.status !== undefined) {
-        filters.push({
-          op: 'eq',
-          field: 'status',
-          value: options.status
-        });
-      } else {
-        // For "open" tickets, we need to be more specific about Autotask status values
-        // Based on Autotask documentation, typical open statuses are:
-        // 1 = New, 2 = In Progress, 8 = Waiting Customer, 9 = Waiting Vendor, etc.
-        // Status 5 = Complete/Closed, so anything NOT complete should be considered open
-        filters.push({
-          op: 'ne',
-          field: 'status',
-          value: 5  // 5 = Complete in Autotask
-        });
-      }
-      
-      // Handle assignedResourceID filter or unassigned filter
-      if (options.unassigned === true) {
-        // Search for tickets with no assigned resource (null assignedResourceID)
-        filters.push({
-          op: 'eq',
-          field: 'assignedResourceID',
-          value: null
-        });
-      } else if (options.assignedResourceID !== undefined) {
-        filters.push({
-          op: 'eq',
-          field: 'assignedResourceID',
-          value: options.assignedResourceID
-        });
-      }
-      
-      // Handle priority filter
-      if (options.priority !== undefined) {
-        filters.push({
-          op: 'eq',
-          field: 'priority',
-          value: options.priority
-        });
-      }
-      
-      // Only add company filter if explicitly provided
-      if (options.companyId !== undefined) {
-        filters.push({
-          op: 'eq',
-          field: 'companyID',
-          value: options.companyId
-        });
-      }
-      
-      // Handle projectID filter
-      if (options.projectId !== undefined) {
-        filters.push({
-          op: 'eq',
-          field: 'projectID',
-          value: options.projectId
-        });
-      }
-      
-      // Handle contractID filter
-      if (options.contractId !== undefined) {
-        filters.push({
-          op: 'eq',
-          field: 'contractID',
-          value: options.contractId
-        });
-      }
-      
-      // Handle createdDate range filters
-      if (options.createdDateFrom) {
-        filters.push({
-          op: 'gte',
-          field: 'createDate',
-          value: options.createdDateFrom
-        });
-      }
-      
-      if (options.createdDateTo) {
-        filters.push({
-          op: 'lte',
-          field: 'createDate',
-          value: options.createdDateTo
-        });
-      }
-      
-      // Handle completedDate range filters
-      if (options.completedDateFrom) {
-        filters.push({
-          op: 'gte',
-          field: 'completedDate',
-          value: options.completedDateFrom
-        });
-      }
-      
-      if (options.completedDateTo) {
-        filters.push({
-          op: 'lte',
-          field: 'completedDate',
-          value: options.completedDateTo
-        });
-      }
-      
-      // Handle lastActivityDate range filters
-      if (options.lastActivityDateFrom) {
-        filters.push({
-          op: 'gte',
-          field: 'lastActivityDate',
-          value: options.lastActivityDateFrom
-        });
-      }
-      
-      if (options.lastActivityDateTo) {
-        filters.push({
-          op: 'lte',
-          field: 'lastActivityDate',
-          value: options.lastActivityDateTo
-        });
-      }
-      
-      // THRESHOLD-BASED PAGINATION: Use thresholds to prevent oversized responses
-      const THRESHOLD_LIMIT = LARGE_RESPONSE_THRESHOLDS.tickets;
-      const DEFAULT_PAGE_SIZE = 100; // Reasonable default for UI display
-      
-      let requestedPageSize = options.pageSize;
-      let isHittingLimit = false;
-      
-      // If no pageSize specified, use default
-      if (!requestedPageSize) {
-        requestedPageSize = DEFAULT_PAGE_SIZE;
-        this.logger.info(`No pageSize specified, using default: ${DEFAULT_PAGE_SIZE}`);
-      } else {
-        // Cap at threshold limit to prevent oversized responses
-        const originalRequest = requestedPageSize;
-        requestedPageSize = Math.min(requestedPageSize, THRESHOLD_LIMIT);
-        isHittingLimit = originalRequest >= THRESHOLD_LIMIT;
-        
-        if (isHittingLimit) {
-          this.logger.info(`🔍 Tickets request hits threshold limit (${THRESHOLD_LIMIT}), capped from ${originalRequest} to ${requestedPageSize}`);
-        }
-      }
-      
-      // Single request approach (always use this now with threshold limiting)
-      const queryOptions = {
-        filter: filters,
-        pageSize: requestedPageSize,
-        MaxRecords: requestedPageSize  // Add MaxRecords for response size control
-      };
+      const queryBody = this.buildTicketsQueryPayload(options);
+      const result = await this.paginatedQuery.fetchAll<AutotaskTicket>(
+        'Tickets',
+        queryBody,
+        tenantContext,
+        tracker,
+        options.maxItems,
+        { enrichment: 'tickets', responseKey: 'tickets' }
+      );
 
-      this.logger.info('Making direct API call to Tickets/query with threshold-limited request:', queryOptions);
-      
-      // Use native library method
-      const response = await client.Tickets.query(queryOptions);
       const executionTime = Date.now() - startTime;
-      tracker?.recordApiCall('Tickets', 'query', executionTime, { filterCount: filters.length, resultCount: response.items?.length || 0 });
-      
-      const tickets = (response.items || []) as AutotaskTicket[];
-      
-              // Log API call result
-        this.logger.info('📊 API Result for searchTickets', {
-          tenantId: tenantContext?.tenantId,
-          impersonationResourceId: tenantContext?.impersonationResourceId,
-          resultCount: tickets.length,
-          requestedPageSize: requestedPageSize,
-          actualFilterCount: filters.length,
-          apiEndpoint: 'Tickets/query',
-          hasResultData: !!response.data,
-          wasLimited: isHittingLimit
-        });
-      
-      const optimizedTickets = tickets.map(ticket => this.optimizeTicketDataAggressive(ticket));
-      
-      this.logger.info(`✅ Retrieved ${optimizedTickets.length} tickets (threshold-limited)`, {
-        tenantId: tenantContext?.tenantId,
-        impersonationResourceId: tenantContext?.impersonationResourceId,
-        resultCount: optimizedTickets.length,
-        wasLimited: isHittingLimit
+      tracker?.recordApiCall('Tickets', 'query', executionTime, {
+        filterCount: (queryBody.filter as unknown[]).length,
+        resultCount: result.items.length,
+        paginated: true
       });
-      return optimizedTickets;
+
+      this.logger.info('📊 API Result for searchTickets (paginated)', {
+        tenantId: tenantContext?.tenantId,
+        resultCount: result.items.length,
+        status: result.status,
+        pagesFetched: result.pagesFetched,
+        executionTimeMs: executionTime
+      });
+
+      return result.items.map((ticket) => this.optimizeTicketDataAggressive(ticket));
     } catch (error) {
       const executionTime = Date.now() - startTime;
       tracker?.recordApiCall('Tickets', 'query', executionTime, { error: true });
@@ -1221,61 +1054,13 @@ export class AutotaskService {
     
     try {
       this.logger.info('Counting tickets with options:', options);
-      
-      // Build filters the same way as searchTickets
-      const filters: any[] = [];
-      
-      if (options.searchTerm) {
-        const searchTerm = options.searchTerm;
-        const looksLikeTicketNumber = /^T\d+\.\d+$/.test(searchTerm);
-        
-        if (looksLikeTicketNumber) {
-          filters.push({ op: 'eq', field: 'ticketNumber', value: searchTerm });
-        } else {
-          filters.push({ op: 'contains', field: 'title', value: searchTerm });
-        }
-      }
-      
-      if (options.status !== undefined) {
-        filters.push({ op: 'eq', field: 'status', value: options.status });
-      } else {
-        filters.push({ op: 'ne', field: 'status', value: 5 });
-      }
-      
-      if (options.unassigned === true) {
-        filters.push({ op: 'eq', field: 'assignedResourceID', value: null });
-      } else if (options.assignedResourceID !== undefined) {
-        filters.push({ op: 'eq', field: 'assignedResourceID', value: options.assignedResourceID });
-      }
-      
-      if (options.priority !== undefined) {
-        filters.push({ op: 'eq', field: 'priority', value: options.priority });
-      }
-      
-      if (options.companyId !== undefined) {
-        filters.push({ op: 'eq', field: 'companyID', value: options.companyId });
-      }
-      
-      if (options.projectId !== undefined) {
-        filters.push({ op: 'eq', field: 'projectID', value: options.projectId });
-      }
-      
-      if (options.contractId !== undefined) {
-        filters.push({ op: 'eq', field: 'contractID', value: options.contractId });
-      }
-      
-      if (options.createdDateFrom) {
-        filters.push({ op: 'gte', field: 'createDate', value: options.createdDateFrom });
-      }
-      
-      if (options.createdDateTo) {
-        filters.push({ op: 'lte', field: 'createDate', value: options.createdDateTo });
-      }
+
+      const filter = this.buildTicketsQueryPayload(options).filter as unknown[];
 
       const startTime = Date.now();
-      const response = await client.Tickets.count({ filter: filters });
+      const response = await client.Tickets.count({ filter });
       const executionTime = Date.now() - startTime;
-      tracker?.recordApiCall('Tickets', 'count', executionTime, { filterCount: filters.length });
+      tracker?.recordApiCall('Tickets', 'count', executionTime, { filterCount: filter.length });
       
       const count = response.queryCount ?? 0;
       this.logger.info(`Tickets count: ${count}`);
@@ -1422,84 +1207,63 @@ export class AutotaskService {
     }
   }
 
+  /**
+   * JSON body for POST /TimeEntries/query (shared by getTimeEntries, countTimeEntries).
+   */
+  buildTimeEntriesQueryPayload(options: AutotaskQueryOptions = {}): Record<string, unknown> {
+    let filter: unknown[];
+    if (
+      !options.filter ||
+      (Array.isArray(options.filter) && options.filter.length === 0) ||
+      (!Array.isArray(options.filter) && Object.keys(options.filter).length === 0)
+    ) {
+      filter = [{ op: 'gte', field: 'id', value: 0 }];
+    } else if (!Array.isArray(options.filter)) {
+      filter = [];
+      for (const [field, value] of Object.entries(options.filter)) {
+        filter.push({ op: 'eq', field, value });
+      }
+    } else {
+      filter = options.filter as unknown[];
+    }
+
+    const pageSize = Math.min(options.pageSize ?? DEFAULT_ENTITY_PAGE_SIZE, 500);
+    const body: Record<string, unknown> = {
+      filter,
+      pageSize,
+      MaxRecords: pageSize
+    };
+    if (options.sort) {
+      body.sort = options.sort;
+    }
+    return body;
+  }
+
   async getTimeEntries(options: AutotaskQueryOptions = {}, tenantContext?: TenantContext, tracker?: ApiCallTracker): Promise<AutotaskTimeEntry[]> {
     const startTime = Date.now();
-    const client = await this.getClientForTenant(tenantContext);
-    
+
     try {
       this.logger.info('Getting time entries with options:', options);
-      
-      // Prepare search body
-      const searchBody: any = {};
-      
-      // Ensure there's a filter - Autotask API requires a filter
-      if (!options.filter || (Array.isArray(options.filter) && options.filter.length === 0) || 
-          (!Array.isArray(options.filter) && Object.keys(options.filter).length === 0)) {
-        searchBody.filter = [
-          {
-            "op": "gte",
-            "field": "id",
-            "value": 0
-          }
-        ];
-      } else {
-        // If filter is provided as an object, convert to array format expected by API
-        if (!Array.isArray(options.filter)) {
-          const filterArray = [];
-          for (const [field, value] of Object.entries(options.filter)) {
-            filterArray.push({
-              "op": "eq",
-              "field": field,
-              "value": value
-            });
-          }
-          searchBody.filter = filterArray;
-        } else {
-          searchBody.filter = options.filter;
-        }
-      }
 
-      // Add other search parameters
-      if (options.sort) searchBody.sort = options.sort;
-      if (options.page) searchBody.page = options.page;
-      if (options.pageSize) searchBody.pageSize = options.pageSize;
-      
-      // Set pagination - TimeEntries API uses both 'pageSize' and 'MaxRecords' for proper limiting
-      // Use threshold-based limiting to prevent oversized responses
-      const THRESHOLD_LIMIT = LARGE_RESPONSE_THRESHOLDS.timeentries;
-      
-      let finalPageSize = 100; // Default if not provided
-      let isHittingLimit = false;
-      
-      if (options.pageSize !== undefined) {
-        const requestedSize = options.pageSize;
-        finalPageSize = Math.max(1, Math.min(requestedSize, THRESHOLD_LIMIT));
-        isHittingLimit = requestedSize >= THRESHOLD_LIMIT;
-        
-        this.logger.info(`⚙️ PageSize provided: ${requestedSize}, using pageSize: ${finalPageSize}`);
-        
-        if (isHittingLimit) {
-          this.logger.info(`🔍 Request hits threshold limit (${THRESHOLD_LIMIT}), guidance should be shown`);
-        }
-      } else {
-        this.logger.info(`⚙️ No pageSize provided, using default pageSize: ${finalPageSize}`);
-      }
-      searchBody.pageSize = finalPageSize;
-      searchBody.MaxRecords = finalPageSize;  // Add MaxRecords for response size control
+      const searchBody = this.buildTimeEntriesQueryPayload(options);
+      const result = await this.paginatedQuery.fetchAll<AutotaskTimeEntry>(
+        'TimeEntries',
+        searchBody,
+        tenantContext,
+        tracker,
+        options.maxItems,
+        { enrichment: 'timeentries', responseKey: 'timeEntries' }
+      );
 
-      this.logger.info('Making direct API call to TimeEntries/query with body:', searchBody);
-
-      // Use native library method
-      const response = await client.TimeEntries.query(searchBody);
       const executionTime = Date.now() - startTime;
-      tracker?.recordApiCall('TimeEntries', 'query', executionTime, { resultCount: response.items?.length || 0 });
-      
-      // Extract time entries from response
-      // @apigrate library returns items directly (not in response.data)
-      const timeEntries: AutotaskTimeEntry[] = response.items ?? [];
-      
-      this.logger.info(`Retrieved ${timeEntries.length} time entries`);
-      return timeEntries;
+      tracker?.recordApiCall('TimeEntries', 'query', executionTime, {
+        resultCount: result.items.length,
+        paginated: true,
+        status: result.status
+      });
+
+      this.logger.info(`Retrieved ${result.items.length} time entries (paginated)`);
+      return result.items;
     } catch (error) {
       const executionTime = Date.now() - startTime;
       tracker?.recordApiCall('TimeEntries', 'query', executionTime, { error: true });
@@ -1518,40 +1282,13 @@ export class AutotaskService {
     
     try {
       this.logger.info('Counting time entries with options:', options);
-      
-      // Prepare count body
-      const countBody: any = {};
-      
-      // Ensure there's a filter
-      if (!options.filter || (Array.isArray(options.filter) && options.filter.length === 0) || 
-          (!Array.isArray(options.filter) && Object.keys(options.filter).length === 0)) {
-        countBody.filter = [
-          {
-            "op": "gte",
-            "field": "id",
-            "value": 0
-          }
-        ];
-      } else {
-        if (!Array.isArray(options.filter)) {
-          const filterArray = [];
-          for (const [field, value] of Object.entries(options.filter)) {
-            filterArray.push({
-              "op": "eq",
-              "field": field,
-              "value": value
-            });
-          }
-          countBody.filter = filterArray;
-        } else {
-          countBody.filter = options.filter;
-        }
-      }
 
-      const response = await client.TimeEntries.count(countBody);
+      const filter = this.buildTimeEntriesQueryPayload(options).filter as unknown[];
+
+      const response = await client.TimeEntries.count({ filter });
       const executionTime = Date.now() - startTime;
       tracker?.recordApiCall('TimeEntries', 'count', executionTime);
-      
+
       const count = response.queryCount ?? 0;
       this.logger.info(`Time entries count: ${count}`);
       return count;
@@ -1624,105 +1361,84 @@ export class AutotaskService {
     }
   }
 
+  /**
+   * JSON body for POST /Projects/query (shared by searchProjects, countProjects).
+   */
+  buildProjectsQueryPayload(options: AutotaskQueryOptions = {}): Record<string, unknown> {
+    let filter: unknown[];
+    if (
+      !options.filter ||
+      (Array.isArray(options.filter) && options.filter.length === 0) ||
+      (!Array.isArray(options.filter) && Object.keys(options.filter).length === 0)
+    ) {
+      filter = [{ op: 'gte', field: 'id', value: 0 }];
+    } else if (!Array.isArray(options.filter)) {
+      filter = [];
+      for (const [field, value] of Object.entries(options.filter)) {
+        filter.push({ op: 'eq', field, value });
+      }
+    } else {
+      filter = options.filter as unknown[];
+    }
+
+    const raw = options.pageSize ?? DEFAULT_ENTITY_PAGE_SIZE;
+    const pageSize = Math.max(1, Math.min(raw > 0 ? raw : DEFAULT_ENTITY_PAGE_SIZE, 500));
+    const body: Record<string, unknown> = {
+      filter,
+      pageSize,
+      MaxRecords: pageSize
+    };
+    if (options.sort) {
+      body.sort = options.sort;
+    }
+    return body;
+  }
+
   async searchProjects(options: AutotaskQueryOptions = {}, tenantContext?: TenantContext, tracker?: ApiCallTracker): Promise<AutotaskProject[]> {
     const startTime = Date.now();
-    const client = await this.getClientForTenant(tenantContext);
-    
+
     try {
       this.logger.info('Searching projects with options:', options);
-      
-      // Using native @apigrate/autotask-restapi query method
-      // It uses GET with query params instead of POST with body like the working companies endpoint
-      // We'll bypass it and make the correct API call directly
-      
-      // Prepare search body - let API return all available fields instead of restricting them
-      const searchBody: any = {};
-      
-      // Ensure there's a filter - Autotask API requires a filter
-      if (!options.filter || (Array.isArray(options.filter) && options.filter.length === 0) || 
-          (!Array.isArray(options.filter) && Object.keys(options.filter).length === 0)) {
-        searchBody.filter = [
-          {
-            "op": "gte",
-            "field": "id",
-            "value": 0
-          }
-        ];
-      } else {
-        // If filter is provided as an object, convert to array format expected by API
-        if (!Array.isArray(options.filter)) {
-          const filterArray = [];
-          for (const [field, value] of Object.entries(options.filter)) {
-            filterArray.push({
-              "op": "eq",
-              "field": field,
-              "value": value
-            });
-          }
-          searchBody.filter = filterArray;
-        } else {
-          searchBody.filter = options.filter;
-        }
+
+      if (options.page && options.page > 1) {
+        this.logger.warn(
+          `⚠️ searchProjects: page=${options.page} is ignored by Autotask REST; use MCP continue_query with a cursor instead.`
+        );
       }
 
-      // Add other search parameters
-      if (options.sort) searchBody.sort = options.sort;
-      if (options.page) searchBody.page = options.page;
-      
-      // THRESHOLD-BASED PAGINATION: Use thresholds to prevent oversized responses
-      const THRESHOLD_LIMIT = LARGE_RESPONSE_THRESHOLDS.projects;
-      const DEFAULT_PAGE_SIZE = 100; // Reasonable default for UI display
-      
-      let requestedPageSize = options.pageSize;
-      let isHittingLimit = false;
-      
-      // If no pageSize specified, use default
-      if (!requestedPageSize) {
-        requestedPageSize = DEFAULT_PAGE_SIZE;
-        this.logger.info(`No pageSize specified, using default: ${DEFAULT_PAGE_SIZE}`);
-      } else {
-        // Cap at threshold limit to prevent oversized responses
-        const originalRequest = requestedPageSize;
-        requestedPageSize = Math.min(requestedPageSize, THRESHOLD_LIMIT);
-        isHittingLimit = originalRequest >= THRESHOLD_LIMIT;
-        
-        if (isHittingLimit) {
-          this.logger.info(`🔍 Projects request hits threshold limit (${THRESHOLD_LIMIT}), capped from ${originalRequest} to ${requestedPageSize}`);
-        }
-      }
-      
-      searchBody.pageSize = requestedPageSize;
-      searchBody.MaxRecords = requestedPageSize;  // Add MaxRecords for response size control
+      const searchBody = this.buildProjectsQueryPayload(options);
+      const result = await this.paginatedQuery.fetchAll<AutotaskProject>(
+        'Projects',
+        searchBody,
+        tenantContext,
+        tracker,
+        options.maxItems,
+        { enrichment: 'projects', responseKey: 'projects' }
+      );
 
-      // Don't restrict fields - let the API return whatever is available
-      // This avoids field availability issues across different Autotask instances
-
-      this.logger.info('Making direct API call to Projects/query with body:', searchBody);
-
-      // Use native library method
-      const response = await client.Projects.query(searchBody);
       const executionTime = Date.now() - startTime;
-      tracker?.recordApiCall('Projects', 'query', executionTime, { resultCount: response.items?.length || 0 });
-      
-      // Extract projects from response
-      // @apigrate library returns items directly (not in response.data)
-      const projects: AutotaskProject[] = response.items ?? [];
-      
-      // Transform projects to optimize data size
-      const optimizedProjects = projects.map(project => this.optimizeProjectData(project));
-      
-      this.logger.info(`✅ Projects search successful:`, {
-        resultCount: optimizedProjects.length,
-        fieldsReturned: projects.length > 0 ? Object.keys(projects[0]).length : 0
+      tracker?.recordApiCall('Projects', 'query', executionTime, {
+        resultCount: result.items.length,
+        paginated: true,
+        status: result.status,
+        pagesFetched: result.pagesFetched
       });
-      
-      return optimizedProjects;
-    } catch (error: any) {
+
+      this.logger.info(`Retrieved ${result.items.length} projects (paginated)`, {
+        status: result.status,
+        pagesFetched: result.pagesFetched,
+        executionTimeMs: executionTime
+      });
+
+      return result.items.map((project) => this.optimizeProjectData(project));
+    } catch (error: unknown) {
       const executionTime = Date.now() - startTime;
       tracker?.recordApiCall('Projects', 'query', executionTime, { error: true });
-      // Check if it's the same 405 error pattern
-      if (error.response && error.response.status === 405) {
-        this.logger.warn('Projects endpoint may not support listing via API (405 Method Not Allowed). This is common with some Autotask configurations.');
+      const err = error as { response?: { status?: number } };
+      if (err.response && err.response.status === 405) {
+        this.logger.warn(
+          'Projects endpoint may not support listing via API (405 Method Not Allowed). This is common with some Autotask configurations.'
+        );
         return [];
       }
       this.logger.error('Failed to search projects:', error);
@@ -1760,15 +1476,8 @@ export class AutotaskService {
     
     try {
       this.logger.info('Counting projects with options:', options);
-      
-      let filter: any[];
-      if (!options.filter || (Array.isArray(options.filter) && options.filter.length === 0)) {
-        filter = [{ "op": "gte", "field": "id", "value": 0 }];
-      } else if (Array.isArray(options.filter)) {
-        filter = options.filter;
-      } else {
-        filter = [{ "op": "gte", "field": "id", "value": 0 }];
-      }
+
+      const filter = this.buildProjectsQueryPayload(options).filter as unknown[];
 
       const response = await client.Projects.count({ filter });
       const executionTime = Date.now() - startTime;
@@ -1844,101 +1553,83 @@ export class AutotaskService {
     }
   }
 
+  /**
+   * JSON body for POST /Resources/query (shared by searchResources, countResources).
+   */
+  buildResourcesQueryPayload(options: AutotaskQueryOptions = {}): Record<string, unknown> {
+    let filter: unknown[];
+    if (
+      !options.filter ||
+      (Array.isArray(options.filter) && options.filter.length === 0) ||
+      (!Array.isArray(options.filter) && Object.keys(options.filter).length === 0)
+    ) {
+      filter = [{ op: 'gte', field: 'id', value: 0 }];
+    } else if (!Array.isArray(options.filter)) {
+      filter = [];
+      for (const [field, value] of Object.entries(options.filter)) {
+        filter.push({ op: 'eq', field, value });
+      }
+    } else {
+      filter = options.filter as unknown[];
+    }
+
+    const raw = options.pageSize ?? DEFAULT_ENTITY_PAGE_SIZE;
+    const pageSize = Math.max(1, Math.min(raw > 0 ? raw : DEFAULT_ENTITY_PAGE_SIZE, 500));
+    const body: Record<string, unknown> = {
+      filter,
+      pageSize,
+      MaxRecords: pageSize
+    };
+    if (options.sort) {
+      body.sort = options.sort;
+    }
+    return body;
+  }
+
   async searchResources(options: AutotaskQueryOptions = {}, tenantContext?: TenantContext, tracker?: ApiCallTracker): Promise<AutotaskResource[]> {
     const startTime = Date.now();
-    const client = await this.getClientForTenant(tenantContext);
-    
+
     try {
       this.logger.info('Searching resources with options:', options);
-      
 
-      // Prepare search body in the same format as working endpoints
-      const searchBody: any = {};
-      
-      // Ensure there's a filter - Autotask API requires a filter
-      if (!options.filter || (Array.isArray(options.filter) && options.filter.length === 0) || 
-          (!Array.isArray(options.filter) && Object.keys(options.filter).length === 0)) {
-        searchBody.filter = [
-          {
-            "op": "gte",
-            "field": "id",
-            "value": 0
-          }
-        ];
-      } else {
-        // If filter is provided as an object, convert to array format expected by API
-        if (!Array.isArray(options.filter)) {
-          const filterArray = [];
-          for (const [field, value] of Object.entries(options.filter)) {
-            filterArray.push({
-              "op": "eq",
-              "field": field,
-              "value": value
-            });
-          }
-          searchBody.filter = filterArray;
-        } else {
-          searchBody.filter = options.filter;
-        }
+      if (options.page && options.page > 1) {
+        this.logger.warn(
+          `⚠️ searchResources: page=${options.page} is ignored by Autotask REST; use MCP continue_query with a cursor instead.`
+        );
       }
 
-      // Add other search parameters
-      if (options.sort) searchBody.sort = options.sort;
-      if (options.page) searchBody.page = options.page;
-      
-      // THRESHOLD-BASED PAGINATION: Use thresholds to prevent oversized responses
-      const THRESHOLD_LIMIT = LARGE_RESPONSE_THRESHOLDS.resources;
-      const DEFAULT_PAGE_SIZE = 100; // Reasonable default for UI display
-      
-      let requestedPageSize = options.pageSize;
-      let isHittingLimit = false;
-      
-      // If no pageSize specified, use default
-      if (!requestedPageSize) {
-        requestedPageSize = DEFAULT_PAGE_SIZE;
-        this.logger.info(`No pageSize specified, using default: ${DEFAULT_PAGE_SIZE}`);
-      } else {
-        // Cap at threshold limit to prevent oversized responses
-        const originalRequest = requestedPageSize;
-        requestedPageSize = Math.min(requestedPageSize, THRESHOLD_LIMIT);
-        isHittingLimit = originalRequest >= THRESHOLD_LIMIT;
-        
-        if (isHittingLimit) {
-          this.logger.info(`🔍 Resources request hits threshold limit (${THRESHOLD_LIMIT}), capped from ${originalRequest} to ${requestedPageSize}`);
-        }
-      }
-      
-      searchBody.pageSize = requestedPageSize;
-      searchBody.MaxRecords = requestedPageSize;  // Add MaxRecords for response size control
+      const searchBody = this.buildResourcesQueryPayload(options);
+      const result = await this.paginatedQuery.fetchAll<AutotaskResource>(
+        'Resources',
+        searchBody,
+        tenantContext,
+        tracker,
+        options.maxItems,
+        { enrichment: 'resources', responseKey: 'resources' }
+      );
 
-      this.logger.info('Making direct API call to Resources/query with body:', {
-        url: '/Resources/query',
-        method: 'POST',
-        requestBody: JSON.stringify(searchBody, null, 2),
-        bodySize: JSON.stringify(searchBody).length
-      });
-
-      // Use native library method
-      const response = await client.Resources.query(searchBody);
       const executionTime = Date.now() - startTime;
-      tracker?.recordApiCall('Resources', 'query', executionTime, { resultCount: response.items?.length || 0 });
-        
-      this.logger.info('✅ Resources.query() successful:', {
-        itemsCount: response.items?.length ?? 0,
-        pageDetails: response.pageDetails
+      tracker?.recordApiCall('Resources', 'query', executionTime, {
+        resultCount: result.items.length,
+        paginated: true,
+        status: result.status,
+        pagesFetched: result.pagesFetched
       });
-      
-      // Extract resources from response
-      const resources: AutotaskResource[] = response.items ?? [];
-      
-      this.logger.info(`Retrieved ${resources.length} resources (optimized for size)`);
-      return resources;
-    } catch (error: any) {
+
+      this.logger.info(`Retrieved ${result.items.length} resources (paginated)`, {
+        status: result.status,
+        pagesFetched: result.pagesFetched,
+        executionTimeMs: executionTime
+      });
+      return result.items;
+    } catch (error: unknown) {
       const executionTime = Date.now() - startTime;
       tracker?.recordApiCall('Resources', 'query', executionTime, { error: true });
-      // Check if it's the same 405 error pattern
-      if (error.response && error.response.status === 405) {
-        this.logger.warn('Resources endpoint may not support listing via API (405 Method Not Allowed). This is common with some Autotask configurations.');
+      const err = error as { response?: { status?: number } };
+      if (err.response && err.response.status === 405) {
+        this.logger.warn(
+          'Resources endpoint may not support listing via API (405 Method Not Allowed). This is common with some Autotask configurations.'
+        );
         return [];
       }
       this.logger.error('Failed to search resources:', error);
@@ -1956,15 +1647,8 @@ export class AutotaskService {
     
     try {
       this.logger.info('Counting resources with options:', options);
-      
-      let filter: any[];
-      if (!options.filter || (Array.isArray(options.filter) && options.filter.length === 0)) {
-        filter = [{ "op": "gte", "field": "id", "value": 0 }];
-      } else if (Array.isArray(options.filter)) {
-        filter = options.filter;
-      } else {
-        filter = [{ "op": "gte", "field": "id", "value": 0 }];
-      }
+
+      const filter = this.buildResourcesQueryPayload(options).filter as unknown[];
 
       const response = await client.Resources.count({ filter });
       const executionTime = Date.now() - startTime;
@@ -2155,97 +1839,75 @@ export class AutotaskService {
     }
   }
 
+  /**
+   * JSON body for POST /Contracts/query (shared by searchContracts).
+   */
+  buildContractsQueryPayload(options: AutotaskQueryOptions = {}): Record<string, unknown> {
+    let filter: unknown[];
+    if (
+      !options.filter ||
+      (Array.isArray(options.filter) && options.filter.length === 0) ||
+      (!Array.isArray(options.filter) && Object.keys(options.filter).length === 0)
+    ) {
+      filter = [{ op: 'gte', field: 'id', value: 0 }];
+    } else if (!Array.isArray(options.filter)) {
+      filter = [];
+      for (const [field, value] of Object.entries(options.filter)) {
+        filter.push({ op: 'eq', field, value });
+      }
+    } else {
+      filter = options.filter as unknown[];
+    }
+
+    const raw = options.pageSize ?? DEFAULT_ENTITY_PAGE_SIZE;
+    const pageSize = Math.max(1, Math.min(raw > 0 ? raw : DEFAULT_ENTITY_PAGE_SIZE, 500));
+    const body: Record<string, unknown> = {
+      filter,
+      pageSize,
+      MaxRecords: pageSize
+    };
+    if (options.sort) {
+      body.sort = options.sort;
+    }
+    return body;
+  }
+
   async searchContracts(options: AutotaskQueryOptions = {}, tenantContext?: TenantContext, tracker?: ApiCallTracker): Promise<AutotaskContract[]> {
     const startTime = Date.now();
-    const client = await this.getClientForTenant(tenantContext);
-    
+
     try {
       this.logger.info('Searching contracts with options:', options);
-      
-      // Build search body for POST /V1.0/Contracts/query endpoint
-      const searchBody: any = {};
 
-      // Ensure there's a filter - Autotask API requires a filter
-      if (!options.filter || (Array.isArray(options.filter) && options.filter.length === 0) || 
-          (!Array.isArray(options.filter) && Object.keys(options.filter).length === 0)) {
-        // No filter provided - use default to get all contracts
-        searchBody.filter = [
-          {
-            "op": "gte",
-            "field": "id",
-            "value": 0
-          }
-        ];
-      } else {
-        // If filter is provided as an object, convert to array format expected by API
-        if (!Array.isArray(options.filter)) {
-          const filterArray = [];
-          for (const [field, value] of Object.entries(options.filter)) {
-            filterArray.push({
-              "op": "eq",
-              "field": field,
-              "value": value
-            });
-          }
-          searchBody.filter = filterArray;
-        } else {
-          searchBody.filter = options.filter;
-        }
+      if (options.page && options.page > 1) {
+        this.logger.warn(
+          `⚠️ searchContracts: page=${options.page} is ignored by Autotask REST; use MCP continue_query with a cursor instead.`
+        );
       }
 
-      // Add other search parameters
-      if (options.sort) searchBody.sort = options.sort;
-      if (options.page) searchBody.page = options.page;
-       
-      // THRESHOLD-BASED PAGINATION: Use thresholds to prevent oversized responses
-      const THRESHOLD_LIMIT = LARGE_RESPONSE_THRESHOLDS.contracts; // 100
-      const DEFAULT_PAGE_SIZE = 100; // Reasonable default for UI display
-      
-      let requestedPageSize = options.pageSize;
-      let isHittingLimit = false;
-      
-      // If no pageSize specified, use default
-      if (!requestedPageSize) {
-        requestedPageSize = DEFAULT_PAGE_SIZE;
-        this.logger.info(`No pageSize specified, using default: ${DEFAULT_PAGE_SIZE}`);
-      } else {
-        // Cap at threshold limit to prevent oversized responses
-        const originalRequest = requestedPageSize;
-        requestedPageSize = Math.min(requestedPageSize, THRESHOLD_LIMIT);
-        isHittingLimit = originalRequest >= THRESHOLD_LIMIT;
-        
-        if (isHittingLimit) {
-          this.logger.info(`🔍 Contracts request hits threshold limit (${THRESHOLD_LIMIT}), capped from ${originalRequest} to ${requestedPageSize}`);
-        }
-      }
+      const searchBody = this.buildContractsQueryPayload(options);
+      const result = await this.paginatedQuery.fetchAll<AutotaskContract>(
+        'Contracts',
+        searchBody,
+        tenantContext,
+        tracker,
+        options.maxItems,
+        { enrichment: 'contracts', responseKey: 'contracts' }
+      );
 
-      // Set pageSize and MaxRecords in the search body (both are used by the API)
-      searchBody.pageSize = requestedPageSize;
-      searchBody.MaxRecords = requestedPageSize;
-
-      // Log the search request details
-      this.logger.info(`📋 Contracts search: MaxRecords=${searchBody.MaxRecords}, Filters=${searchBody.filter?.length || 0}, Page=${options.page || 1}`, {
-        bodySize: JSON.stringify(searchBody).length,
-        fullSearchBody: JSON.stringify(searchBody, null, 2)
-      });
-      
-      // Use native library method
-      const response = await client.Contracts.query(searchBody);
       const executionTime = Date.now() - startTime;
-      tracker?.recordApiCall('Contracts', 'query', executionTime, { resultCount: response.items?.length || 0 });
-      
-      this.logger.info('✅ Contracts.query() successful:', {
-        itemsCount: response.items?.length ?? 0,
-        pageDetails: response.pageDetails
+      tracker?.recordApiCall('Contracts', 'query', executionTime, {
+        resultCount: result.items.length,
+        paginated: true,
+        status: result.status,
+        pagesFetched: result.pagesFetched
       });
-      
-      const contracts: AutotaskContract[] = response.items ?? [];
-      
-      if (isHittingLimit) {
-        this.logger.warn(`⚠️ Contracts search was capped at ${THRESHOLD_LIMIT} results. Consider using more specific filters.`);
-      }
-      
-      return contracts;
+
+      this.logger.info(`Retrieved ${result.items.length} contracts (paginated)`, {
+        status: result.status,
+        pagesFetched: result.pagesFetched
+      });
+
+      return result.items;
     } catch (error) {
       const executionTime = Date.now() - startTime;
       tracker?.recordApiCall('Contracts', 'query', executionTime, { error: true });
@@ -2276,104 +1938,82 @@ export class AutotaskService {
     }
   }
 
-  async searchInvoices(options: AutotaskQueryOptions = {}, tenantContext?: TenantContext): Promise<AutotaskInvoice[]> {
-    const client = await this.getClientForTenant(tenantContext);
-    
+  /**
+   * JSON body for POST /Invoices/query (shared by searchInvoices).
+   */
+  buildInvoicesQueryPayload(options: AutotaskQueryOptions = {}): Record<string, unknown> {
+    let filter: unknown[];
+    if (
+      !options.filter ||
+      (Array.isArray(options.filter) && options.filter.length === 0) ||
+      (!Array.isArray(options.filter) && Object.keys(options.filter).length === 0)
+    ) {
+      filter = [{ op: 'gte', field: 'id', value: 0 }];
+    } else if (!Array.isArray(options.filter)) {
+      filter = [];
+      for (const [field, value] of Object.entries(options.filter)) {
+        filter.push({ op: 'eq', field, value });
+      }
+    } else {
+      filter = options.filter as unknown[];
+    }
+
+    const raw = options.pageSize ?? DEFAULT_ENTITY_PAGE_SIZE;
+    const pageSize = Math.max(1, Math.min(raw > 0 ? raw : DEFAULT_ENTITY_PAGE_SIZE, 500));
+    const body: Record<string, unknown> = {
+      filter,
+      pageSize,
+      MaxRecords: pageSize
+    };
+    if (options.sort) {
+      body.sort = options.sort;
+    }
+    return body;
+  }
+
+  async searchInvoices(
+    options: AutotaskQueryOptions = {},
+    tenantContext?: TenantContext,
+    tracker?: ApiCallTracker
+  ): Promise<AutotaskInvoice[]> {
+    const startTime = Date.now();
+
     try {
       this.logger.info('Searching invoices with options:', options);
-      
 
-      // Log the options being passed to the library method
-      this.logger.info('Invoice search options being passed to library:', {
-        originalOptions: options,
-        hasFilter: !!options.filter,
-        filterType: Array.isArray(options.filter) ? 'array' : typeof options.filter,
-        filterLength: Array.isArray(options.filter) ? options.filter.length : 'not array',
-        pageSize: options.pageSize,
-        page: options.page,
-        sort: options.sort
-      });
-
-      // CORRECTED APPROACH: Use POST /Invoices/query with JSON body
-      // According to https://webservices5.autotask.net/atservicesrest/swagger/ui/index#/Invoices/Invoices_Query
-      // The POST version might be supported even if GET is not
-      
-      this.logger.info('Making direct POST API call to Invoices/query with JSON body (like Resources/Projects)');
-       
-      // Prepare search body in the same format as working endpoints
-      const searchBody: any = {};
-      
-      // Ensure there's a filter - Autotask API requires a filter
-      if (!options.filter || (Array.isArray(options.filter) && options.filter.length === 0) || 
-          (!Array.isArray(options.filter) && Object.keys(options.filter).length === 0)) {
-        searchBody.filter = [
-          {
-            "op": "gte",
-            "field": "id",
-            "value": 0
-          }
-        ];
-      } else {
-        // If filter is provided as an object, convert to array format expected by API
-        if (!Array.isArray(options.filter)) {
-          const filterArray = [];
-          for (const [field, value] of Object.entries(options.filter)) {
-            filterArray.push({
-              "op": "eq",
-              "field": field,
-              "value": value
-            });
-          }
-          searchBody.filter = filterArray;
-        } else {
-          searchBody.filter = options.filter;
-        }
+      if (options.page && options.page > 1) {
+        this.logger.warn(
+          `⚠️ searchInvoices: page=${options.page} is ignored by Autotask REST; use MCP continue_query with a cursor instead.`
+        );
       }
 
-      // Add other search parameters
-      if (options.sort) searchBody.sort = options.sort;
-      if (options.page) searchBody.page = options.page;
-       
-      // THRESHOLD-BASED PAGINATION: Use thresholds to prevent oversized responses
-      const THRESHOLD_LIMIT = LARGE_RESPONSE_THRESHOLDS.default; // Use default threshold for invoices
-      const DEFAULT_PAGE_SIZE = 100; // Reasonable default for UI display
-      
-      let requestedPageSize = options.pageSize;
-      let isHittingLimit = false;
-      
-      // If no pageSize specified, use default
-      if (!requestedPageSize) {
-        requestedPageSize = DEFAULT_PAGE_SIZE;
-        this.logger.info(`No pageSize specified, using default: ${DEFAULT_PAGE_SIZE}`);
-      } else {
-        // Cap at threshold limit to prevent oversized responses
-        const originalRequest = requestedPageSize;
-        requestedPageSize = Math.min(requestedPageSize, THRESHOLD_LIMIT);
-        isHittingLimit = originalRequest >= THRESHOLD_LIMIT;
-        
-        if (isHittingLimit) {
-          this.logger.info(`🔍 Invoices request hits threshold limit (${THRESHOLD_LIMIT}), capped from ${originalRequest} to ${requestedPageSize}`);
-        }
-      }
-      
-      searchBody.pageSize = requestedPageSize;
-      searchBody.MaxRecords = requestedPageSize;  // Add MaxRecords for response size control
+      const searchBody = this.buildInvoicesQueryPayload(options);
+      const result = await this.paginatedQuery.fetchAll<AutotaskInvoice>(
+        'Invoices',
+        searchBody,
+        tenantContext,
+        tracker,
+        options.maxItems,
+        { enrichment: 'invoices', responseKey: 'invoices' }
+      );
 
-      this.logger.info('Querying Invoices via native library method');
-      
-      // Use native library method
-      const response = await client.Invoices.query(searchBody);
-      
-      this.logger.info('✅ Invoices.query() successful:', {
-        itemsCount: response.items?.length ?? 0,
-        pageDetails: response.pageDetails
+      const executionTime = Date.now() - startTime;
+      tracker?.recordApiCall('Invoices', 'query', executionTime, {
+        resultCount: result.items.length,
+        paginated: true,
+        status: result.status,
+        pagesFetched: result.pagesFetched
       });
-      
-      const invoices: AutotaskInvoice[] = response.items ?? [];
-      
-      this.logger.info(`✅ Retrieved ${invoices.length} invoices`);
-      return invoices;
+
+      this.logger.info(`Retrieved ${result.items.length} invoices (paginated)`, {
+        status: result.status,
+        pagesFetched: result.pagesFetched
+      });
+
+      return result.items;
     } catch (error) {
+      const executionTime = Date.now() - startTime;
+      tracker?.recordApiCall('Invoices', 'query', executionTime, { error: true });
       this.logger.error('Failed to search invoices:', error);
       throw error;
     }
@@ -2419,92 +2059,76 @@ export class AutotaskService {
     }
   }
 
+  /**
+   * JSON body for POST /Tasks/query (shared by searchTasks).
+   */
+  buildTasksQueryPayload(options: AutotaskQueryOptions = {}): Record<string, unknown> {
+    let filter: unknown[];
+    if (
+      !options.filter ||
+      (Array.isArray(options.filter) && options.filter.length === 0) ||
+      (!Array.isArray(options.filter) && Object.keys(options.filter).length === 0)
+    ) {
+      filter = [{ op: 'gte', field: 'id', value: 0 }];
+    } else if (!Array.isArray(options.filter)) {
+      filter = [];
+      for (const [field, value] of Object.entries(options.filter)) {
+        filter.push({ op: 'eq', field, value });
+      }
+    } else {
+      filter = options.filter as unknown[];
+    }
+
+    const raw = options.pageSize ?? DEFAULT_ENTITY_PAGE_SIZE;
+    const pageSize = Math.max(1, Math.min(raw > 0 ? raw : DEFAULT_ENTITY_PAGE_SIZE, 500));
+    const body: Record<string, unknown> = {
+      filter,
+      pageSize,
+      MaxRecords: pageSize
+    };
+    if (options.sort) {
+      body.sort = options.sort;
+    }
+    return body;
+  }
+
   async searchTasks(options: AutotaskQueryOptions = {}, tenantContext?: TenantContext, tracker?: ApiCallTracker): Promise<AutotaskTask[]> {
     const startTime = Date.now();
-    const client = await this.getClientForTenant(tenantContext);
-    
+
     try {
       this.logger.info('Searching tasks with options:', options);
-      
-      // Prepare search body
-      const searchBody: any = {};
-      
-      // Ensure there's a filter - Autotask API requires a filter
-      if (!options.filter || (Array.isArray(options.filter) && options.filter.length === 0) || 
-          (!Array.isArray(options.filter) && Object.keys(options.filter).length === 0)) {
-        searchBody.filter = [
-          {
-            "op": "gte",
-            "field": "id",
-            "value": 0
-          }
-        ];
-      } else {
-        // If filter is provided as an object, convert to array format expected by API
-        if (!Array.isArray(options.filter)) {
-          const filterArray = [];
-          for (const [field, value] of Object.entries(options.filter)) {
-            filterArray.push({
-              "op": "eq",
-              "field": field,
-              "value": value
-            });
-          }
-          searchBody.filter = filterArray;
-        } else {
-          searchBody.filter = options.filter;
-        }
+
+      if (options.page && options.page > 1) {
+        this.logger.warn(
+          `⚠️ searchTasks: page=${options.page} is ignored by Autotask REST; use MCP continue_query with a cursor instead.`
+        );
       }
 
-      // Add other search parameters
-      if (options.sort) searchBody.sort = options.sort;
-      if (options.page) searchBody.page = options.page;
-      
-      // THRESHOLD-BASED PAGINATION: Use thresholds to prevent oversized responses
-      const THRESHOLD_LIMIT = LARGE_RESPONSE_THRESHOLDS.tasks;
-      const DEFAULT_PAGE_SIZE = 100; // Reasonable default for UI display
-      
-      let requestedPageSize = options.pageSize;
-      let isHittingLimit = false;
-      
-      // If no pageSize specified, use default
-      if (!requestedPageSize) {
-        requestedPageSize = DEFAULT_PAGE_SIZE;
-        this.logger.info(`No pageSize specified, using default: ${DEFAULT_PAGE_SIZE}`);
-      } else {
-        // Cap at threshold limit to prevent oversized responses
-        const originalRequest = requestedPageSize;
-        requestedPageSize = Math.min(requestedPageSize, THRESHOLD_LIMIT);
-        isHittingLimit = originalRequest >= THRESHOLD_LIMIT;
-        
-        if (isHittingLimit) {
-          this.logger.info(`🔍 Tasks request hits threshold limit (${THRESHOLD_LIMIT}), capped from ${originalRequest} to ${requestedPageSize}`);
-        }
-      }
-      
-      searchBody.pageSize = requestedPageSize;
-      searchBody.MaxRecords = requestedPageSize;  // Add MaxRecords for response size control
+      const searchBody = this.buildTasksQueryPayload(options);
+      const result = await this.paginatedQuery.fetchAll<AutotaskTask>(
+        'Tasks',
+        searchBody,
+        tenantContext,
+        tracker,
+        options.maxItems,
+        { enrichment: 'tasks', responseKey: 'tasks' }
+      );
 
-      this.logger.info('Making direct API call to Tasks/query with body:', searchBody);
-
-      // Use the correct Tasks/query endpoint
-      const response = await client.Tasks.query(searchBody);
       const executionTime = Date.now() - startTime;
-      tracker?.recordApiCall('Tasks', 'query', executionTime, { resultCount: response.items?.length || 0 });
-      
-      // Extract tasks from response
-      // @apigrate library returns items directly (not in response.data)
-      const tasks: AutotaskTask[] = response.items ?? [];
-      
-      // Transform tasks to optimize data size
-      const optimizedTasks = tasks.map(task => this.optimizeTaskData(task));
-      
-      this.logger.info(`✅ Tasks search successful:`, {
-        resultCount: optimizedTasks.length,
-        fieldsReturned: tasks.length > 0 ? Object.keys(tasks[0]).length : 0
+      tracker?.recordApiCall('Tasks', 'query', executionTime, {
+        resultCount: result.items.length,
+        paginated: true,
+        status: result.status,
+        pagesFetched: result.pagesFetched
       });
-      
-      return optimizedTasks;
+
+      this.logger.info(`Retrieved ${result.items.length} tasks (paginated)`, {
+        status: result.status,
+        pagesFetched: result.pagesFetched,
+        executionTimeMs: executionTime
+      });
+
+      return result.items.map((task) => this.optimizeTaskData(task));
     } catch (error) {
       const executionTime = Date.now() - startTime;
       tracker?.recordApiCall('Tasks', 'query', executionTime, { error: true });
@@ -3224,38 +2848,86 @@ export class AutotaskService {
     }
   }
 
-  async searchQuotes(options: AutotaskQueryOptionsExtended = {}, tenantContext?: TenantContext): Promise<AutotaskQuote[]> {
-    const client = await this.getClientForTenant(tenantContext);
-    
-    try {
-      this.logger.info('Searching quotes with options:', options);
-      
-      // Build filter based on provided options
-      const filters = [];
-      if (options.companyId) {
-        filters.push({ field: 'accountId', op: 'eq', value: options.companyId });
+  /**
+   * JSON body for POST /Quotes/query (shared by searchQuotes).
+   */
+  buildQuotesQueryPayload(options: AutotaskQueryOptionsExtended = {}): Record<string, unknown> {
+    let filter: unknown[];
+    if (Array.isArray(options.filter) && options.filter.length > 0) {
+      filter = options.filter as unknown[];
+    } else {
+      const parts: Record<string, unknown>[] = [];
+      if (options.companyId != null) {
+        parts.push({ field: 'accountId', op: 'eq', value: options.companyId });
       }
-      if (options.contactId) {
-        filters.push({ field: 'contactId', op: 'eq', value: options.contactId });
+      if (options.contactId != null) {
+        parts.push({ field: 'contactId', op: 'eq', value: options.contactId });
       }
-      if (options.opportunityId) {
-        filters.push({ field: 'opportunityId', op: 'eq', value: options.opportunityId });
+      if (options.opportunityId != null) {
+        parts.push({ field: 'opportunityId', op: 'eq', value: options.opportunityId });
       }
       if (options.searchTerm) {
-        filters.push({ field: 'description', op: 'contains', value: options.searchTerm });
+        parts.push({ field: 'description', op: 'contains', value: options.searchTerm });
+      }
+      filter = parts.length > 0 ? parts : [{ field: 'id', op: 'gte', value: 0 }];
+    }
+
+    const raw = options.pageSize ?? DEFAULT_ENTITY_PAGE_SIZE;
+    const pageSize = Math.max(1, Math.min(raw > 0 ? raw : DEFAULT_ENTITY_PAGE_SIZE, 500));
+    const body: Record<string, unknown> = {
+      filter,
+      pageSize,
+      MaxRecords: pageSize
+    };
+    if (options.sort) {
+      body.sort = options.sort;
+    }
+    return body;
+  }
+
+  async searchQuotes(
+    options: AutotaskQueryOptionsExtended = {},
+    tenantContext?: TenantContext,
+    tracker?: ApiCallTracker
+  ): Promise<AutotaskQuote[]> {
+    const startTime = Date.now();
+
+    try {
+      this.logger.info('Searching quotes with options:', options);
+
+      if (options.page && options.page > 1) {
+        this.logger.warn(
+          `⚠️ searchQuotes: page=${options.page} is ignored by Autotask REST; use MCP continue_query with a cursor instead.`
+        );
       }
 
-      const queryOptions = {
-        filter: filters.length > 0 ? filters : [{ field: 'id', op: 'gte', value: 0 }],
-        pageSize: options.pageSize || 25
-      };
+      const searchBody = this.buildQuotesQueryPayload(options);
+      const result = await this.paginatedQuery.fetchAll<AutotaskQuote>(
+        'Quotes',
+        searchBody,
+        tenantContext,
+        tracker,
+        options.maxItems,
+        { enrichment: 'quotes', responseKey: 'quotes' }
+      );
 
-      const result = await client.quotes.list(queryOptions);
-      const quotes = (result.data as any[]) || [];
-      
-      this.logger.info(`Retrieved ${quotes.length} quotes`);
-      return quotes as AutotaskQuote[];
+      const executionTime = Date.now() - startTime;
+      tracker?.recordApiCall('Quotes', 'query', executionTime, {
+        resultCount: result.items.length,
+        paginated: true,
+        status: result.status,
+        pagesFetched: result.pagesFetched
+      });
+
+      this.logger.info(`Retrieved ${result.items.length} quotes (paginated)`, {
+        status: result.status,
+        pagesFetched: result.pagesFetched
+      });
+
+      return result.items;
     } catch (error) {
+      const executionTime = Date.now() - startTime;
+      tracker?.recordApiCall('Quotes', 'query', executionTime, { error: true });
       this.logger.error('Failed to search quotes:', error);
       throw error;
     }
@@ -3277,25 +2949,49 @@ export class AutotaskService {
   }
 
   // Opportunities
+  buildOpportunitiesQueryPayload(options: AutotaskQueryOptionsExtended = {}): Record<string, unknown> {
+    const filters: unknown[] =
+      Array.isArray(options.filter) && options.filter.length > 0
+        ? [...(options.filter as unknown[])]
+        : [{ field: 'id', op: 'gte', value: 0 }];
+    const pageSize = Math.min(options.pageSize ?? DEFAULT_ENTITY_PAGE_SIZE, 500);
+    const body: Record<string, unknown> = {
+      filter: filters,
+      pageSize,
+      MaxRecords: pageSize
+    };
+    if (options.sort) {
+      body.sort = options.sort;
+    }
+    return body;
+  }
+
   async searchOpportunities(options: AutotaskQueryOptionsExtended = {}, tenantContext?: TenantContext, tracker?: ApiCallTracker): Promise<any[]> {
     const startTime = Date.now();
-    const client = await this.getClientForTenant(tenantContext);
-    
+
     try {
       this.logger.info('Searching opportunities with options:', options);
-      
-      const queryOptions = {
-        filter: options.filter || [{ field: 'id', op: 'gte', value: 0 }],
-        pageSize: options.pageSize || 500
-      };
 
-      const result = await client.Opportunities.query(queryOptions);
+      const queryBody = this.buildOpportunitiesQueryPayload(options);
+      const result = await this.paginatedQuery.fetchAll(
+        'Opportunities',
+        queryBody,
+        tenantContext,
+        tracker,
+        options.maxItems,
+        { enrichment: 'opportunities', responseKey: 'opportunities' }
+      );
+
       const executionTime = Date.now() - startTime;
-      tracker?.recordApiCall('Opportunities', 'query', executionTime, { resultCount: result.items?.length || 0 });
-      
+      tracker?.recordApiCall('Opportunities', 'query', executionTime, {
+        resultCount: result.items.length,
+        paginated: true,
+        status: result.status
+      });
+
       const opportunities = result.items || [];
-      
-      this.logger.info(`Retrieved ${opportunities.length} opportunities`);
+
+      this.logger.info(`Retrieved ${opportunities.length} opportunities (paginated)`);
       return opportunities;
     } catch (error) {
       const executionTime = Date.now() - startTime;
@@ -3312,11 +3008,9 @@ export class AutotaskService {
     try {
       this.logger.info('Counting opportunities with options:', options);
       
-      const countOptions = {
-        filter: options.filter || [{ field: 'id', op: 'gte', value: 0 }]
-      };
+      const filter = this.buildOpportunitiesQueryPayload(options).filter as unknown[];
 
-      const result = await client.Opportunities.count(countOptions);
+      const result = await client.Opportunities.count({ filter });
       const executionTime = Date.now() - startTime;
       tracker?.recordApiCall('Opportunities', 'count', executionTime);
       
@@ -3437,7 +3131,8 @@ export class AutotaskService {
     // Use existing searchTickets with searchTerm
     return this.searchTickets({
       searchTerm: options.search,
-      pageSize: 50
+      pageSize: 50,
+      maxItems: 100
     }, tenantContext);
   }
 
@@ -3451,7 +3146,8 @@ export class AutotaskService {
         op: 'contains',
         value: options.search
       }],
-      pageSize: 50
+      pageSize: 50,
+      maxItems: 100
     }, tenantContext);
   }
 
@@ -3465,7 +3161,8 @@ export class AutotaskService {
         op: 'contains',
         value: options.search
       }],
-      pageSize: 50
+      pageSize: 50,
+      maxItems: 100
     }, tenantContext);
   }
 
@@ -3479,7 +3176,8 @@ export class AutotaskService {
         op: 'contains',
         value: options.search
       }],
-      pageSize: 50
+      pageSize: 50,
+      maxItems: 100
     }, tenantContext);
   }
 
@@ -3493,7 +3191,8 @@ export class AutotaskService {
         op: 'contains',
         value: options.search
       }],
-      pageSize: 50
+      pageSize: 50,
+      maxItems: 100
     }, tenantContext);
   }
 
@@ -3503,7 +3202,8 @@ export class AutotaskService {
     // Use existing searchQuotes with searchTerm
     return this.searchQuotes({
       searchTerm: options.search,
-      pageSize: 50
+      pageSize: 50,
+      maxItems: 100
     }, tenantContext);
   }
 
@@ -3517,7 +3217,8 @@ export class AutotaskService {
         op: 'contains',
         value: options.search
       }],
-      pageSize: 50
+      pageSize: 50,
+      maxItems: 100
     }, tenantContext);
   }
 

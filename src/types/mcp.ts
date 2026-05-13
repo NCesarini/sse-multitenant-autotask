@@ -32,7 +32,7 @@ export interface TenantContext {
   tenantId: string;
   credentials: AutotaskCredentials;
   sessionId?: string;
-  // User impersonation - which user this session acts as
+  // User impersonation for write attribution (not used for read-only queries)
   impersonationResourceId?: number;
   // Access mode - restricts what operations this tenant can perform
   mode?: 'read' | 'write';

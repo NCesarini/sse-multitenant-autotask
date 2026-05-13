@@ -83,6 +83,13 @@ In multi-tenant mode, all tool calls must include a `_tenant` parameter with the
 
 *If `tenantId` is not provided, it will be auto-generated as `tenant_{username}`
 
+### Pagination cursors (`continue_query`)
+
+Search tools may return `_paginationProtocol.status: "INCOMPLETE"` with a `cursor` for the generic **`continue_query`** tool. Cursors are **bound to the same tenant credentials** as the search that created them (derived from `username` + `integrationCode`). Using a cursor with a different `_tenant` fails.
+
+- **Lifetime:** in-memory, default **30 minutes TTL** (see `CursorStore` / env-less defaults in code). Server restarts clear all cursors.
+- **Scaling:** one MCP process only; multiple replicas would need a shared cursor store (not in scope today).
+
 ### Available Tools
 
 All standard Autotask MCP tools support the `_tenant` parameter:

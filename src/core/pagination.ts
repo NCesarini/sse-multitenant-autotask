@@ -17,20 +17,24 @@ import {
   PageDetails 
 } from '../adapters/autotask-adapter.interface.js';
 import { McpToolResult } from '../types/mcp.js';
+import type { TruncationReason } from './paginated-query.js';
 
-// ============================================
-// Types for Simple Enforce Interface
 // ============================================
 
 export interface EnforceOptions<T> {
   items: T[];
-  totalCount: number;
-  currentPage: number;
-  pageSize: number;
+  /** Total matching records from Autotask count / pageDetails.count */
+  totalEstimate: number;
   entityName: string;
-  sumField?: string;  // Field to sum for verification (e.g., 'hoursWorked')
-  availableFilters?: string[];  // Suggest filters when result set is too large
-  largeResultThreshold?: number;  // Threshold to consider results "too large" (default: 500)
+  status: 'COMPLETE' | 'INCOMPLETE';
+  /** Present when status is INCOMPLETE — pass to continue_query */
+  cursor?: string;
+  truncationReason?: TruncationReason | null;
+  pagesFetched?: number;
+  sumField?: string;
+  availableFilters?: string[];
+  /** Warn when totalEstimate exceeds this (default 5000) */
+  largeResultWarningThreshold?: number;
 }
 
 export interface EnforceResult<T> {
@@ -38,14 +42,16 @@ export interface EnforceResult<T> {
   protocol: {
     status: 'COMPLETE' | 'INCOMPLETE';
     message: string;
-    currentPage: number;
-    totalPages: number;
     showing: string;
     totalItems: number;
+    itemsInThisResponse: number;
+    itemsAccumulated: number;
+    pagesFetched?: number;
+    truncationReason?: TruncationReason;
     nextAction?: {
+      tool: 'continue_query';
       description: string;
-      callWith: { page: number };
-      remainingPages: number[];
+      callWith: { cursor: string };
     };
     verificationSteps: string[];
     performanceWarning?: {
@@ -64,104 +70,95 @@ export interface EnforceResult<T> {
 export class PaginationEnforcer {
   
   /**
-   * Simple enforce method for direct use in handlers.
-   * 
-   * @param options Configuration for pagination enforcement
-   * @returns Result with items and pagination protocol
+   * Build pagination protocol for results after server-side cursor iteration
+   * (PaginatedQueryEngine + Autotask nextPageUrl).
    */
   static enforce<T>(options: EnforceOptions<T>): EnforceResult<T> {
-    const { 
-      items, 
-      totalCount, 
-      currentPage, 
-      pageSize, 
-      entityName, 
+    const {
+      items,
+      totalEstimate,
+      entityName,
+      status,
+      cursor,
+      truncationReason,
+      pagesFetched,
       sumField,
       availableFilters,
-      largeResultThreshold = 500
+      largeResultWarningThreshold = 5000
     } = options;
-    
-    const totalPages = Math.ceil(totalCount / pageSize);
-    const isComplete = currentPage >= totalPages || items.length < pageSize;
-    const status: 'COMPLETE' | 'INCOMPLETE' = isComplete ? 'COMPLETE' : 'INCOMPLETE';
-    
-    // Calculate running total
-    const startItem = (currentPage - 1) * pageSize + 1;
-    const endItem = startItem + items.length - 1;
-    const showing = `Showing ${startItem}-${endItem} of ${totalCount}`;
-    
-    // Detect if result set is too large (only on first page)
-    const isTooLarge = currentPage === 1 && totalCount > largeResultThreshold;
-    const isMassive = currentPage === 1 && totalCount > 2000;
-    
-    // Build verification steps based on whether data is complete
+
+    const isComplete = status === 'COMPLETE';
+    const itemsAccumulated = items.length;
+    const showing =
+      totalEstimate > 0
+        ? `Retrieved ${itemsAccumulated} row(s); Autotask reports ~${totalEstimate} total matches for this query`
+        : `Retrieved ${itemsAccumulated} row(s)`;
+
     const verificationSteps = isComplete
       ? [
-          '1. All data retrieved',
-          `2. Create verification table with ALL ${entityName}`,
-          sumField 
-            ? `3. Use math_calculator to sum ${sumField} values` 
-            : '3. Analyze the complete dataset',
+          '1. All data for this request has been retrieved (or capped by maxItems).',
+          `2. Create verification table with ALL ${entityName} in this response`,
+          sumField
+            ? `3. Use math_calculator to sum ${sumField} values`
+            : '3. Analyze the complete dataset in this response',
           'PROTOCOL COMPLETE'
         ]
       : [
-          `1. WARNING: Only showing ${items.length} of ${totalCount} ${entityName}`,
-          `2. IMMEDIATELY retrieve page ${currentPage + 1} with page=${currentPage + 1}`,
-          '3. DO NOT perform any analysis until status is COMPLETE',
-          sumField 
-            ? `4. Only after ALL pages: sum ${sumField} with math_calculator`
-            : '4. Only after ALL pages: analyze the complete dataset',
-          'FAILURE TO RETRIEVE ALL PAGES = INCORRECT RESULTS'
+          `1. INCOMPLETE: ${itemsAccumulated} ${entityName} in this response; more exist on Autotask.`,
+          ...(truncationReason
+            ? [`2. Truncation reason: ${truncationReason} (server budget: items/pages/time).`]
+            : ['2. Additional pages were not merged into this response.']),
+          '3. Call tool `continue_query` with argument { cursor: <value from nextAction.callWith.cursor> }',
+          '4. Repeat until _paginationProtocol.status is COMPLETE',
+          sumField
+            ? `5. Only then: sum ${sumField} with math_calculator`
+            : '5. Only then: analyze the full merged dataset',
+          'DO NOT use page=N — Autotask uses cursor URLs only; use continue_query.'
         ];
-    
+
     const protocol: EnforceResult<T>['protocol'] = {
       status,
-      message: isComplete 
-        ? `All ${totalCount} ${entityName} retrieved. Safe to analyze.`
-        : `INCOMPLETE: ${showing}. You MUST retrieve remaining pages before any analysis.`,
-      currentPage,
-      totalPages,
+      message: isComplete
+        ? `Dataset complete for this tool call (${itemsAccumulated} ${entityName}). Safe to analyze.`
+        : `INCOMPLETE: ${showing}. You MUST call continue_query with the cursor before any analysis that requires all rows.`,
       showing,
-      totalItems: totalCount,
+      totalItems: totalEstimate,
+      itemsInThisResponse: itemsAccumulated,
+      itemsAccumulated,
+      ...(pagesFetched !== undefined ? { pagesFetched } : {}),
+      ...(truncationReason !== undefined &&
+      truncationReason !== null &&
+      !isComplete
+        ? { truncationReason }
+        : {}),
       verificationSteps
     };
-    
-    // Add performance warning for large result sets
-    if (isTooLarge) {
-      const pagesNeeded = totalPages;
-      const apiCallsRequired = pagesNeeded;
-      
+
+    if (!isComplete && cursor !== undefined && cursor.length > 0) {
+      protocol.nextAction = {
+        tool: 'continue_query',
+        description: 'Resume Autotask pagination from the server-stored nextPageUrl.',
+        callWith: { cursor }
+      };
+    }
+
+    if (totalEstimate > largeResultWarningThreshold) {
+      const isMassive = totalEstimate > 20_000;
       protocol.performanceWarning = {
         severity: isMassive ? 'HIGH' : 'MEDIUM',
         message: isMassive
-          ? `VERY LARGE RESULT SET: ${totalCount} ${entityName} found (${pagesNeeded} pages required)`
-          : `LARGE RESULT SET: ${totalCount} ${entityName} found (${pagesNeeded} pages required)`,
+          ? `VERY LARGE RESULT SET: ~${totalEstimate} ${entityName} match this filter`
+          : `LARGE RESULT SET: ~${totalEstimate} ${entityName} match this filter`,
         recommendation: isMassive
-          ? `STRONGLY RECOMMENDED: This search is too broad and will require ${apiCallsRequired} API calls. ` +
-            `This is inefficient and time-consuming. Please narrow your search using more specific filters to reduce the result set to < 500 items. ` +
-            `Consider adding date ranges, status filters, or other criteria to focus on the specific ${entityName} you need.`
-          : `RECOMMENDED: Consider narrowing your search using more specific filters to improve performance. ` +
-            `Retrieving all ${pagesNeeded} pages will require ${apiCallsRequired} API calls. ` +
-            `If you only need recent or specific ${entityName}, add filters to reduce the result set.`,
-        ...(availableFilters && availableFilters.length > 0 && {
-          suggestedFilters: availableFilters
-        })
+          ? `STRONGLY RECOMMENDED: Narrow the query (dates, status, companyID, etc.) or use maxItems. Full retrieval may require many continue_query calls.`
+          : `RECOMMENDED: Add filters to reduce matches below ${largeResultWarningThreshold} when possible.`,
+        ...(availableFilters !== undefined &&
+          availableFilters.length > 0 && {
+            suggestedFilters: availableFilters
+          })
       };
     }
-    
-    if (!isComplete) {
-      const remainingPages: number[] = [];
-      for (let p = currentPage + 1; p <= totalPages; p++) {
-        remainingPages.push(p);
-      }
-      
-      protocol.nextAction = {
-        description: `Retrieve page ${currentPage + 1} of ${totalPages}`,
-        callWith: { page: currentPage + 1 },
-        remainingPages
-      };
-    }
-    
+
     return { items, protocol };
   }
 
@@ -388,29 +385,25 @@ export function buildPaginatedToolDescription(
 ): string {
   return `${baseDescription}
 
-CRITICAL PAGINATION PROTOCOL
+CRITICAL PAGINATION PROTOCOL (Autotask REST uses nextPageUrl cursors — not page numbers)
 
-This tool returns paginated results. After EVERY call, you MUST:
+This tool may return many rows in one call (server follows nextPageUrl up to a safety budget). After EVERY call, you MUST:
 
-1. CHECK the response '_paginationProtocol.status' field
+1. CHECK '_paginationProtocol.status'
 2. IF status is 'INCOMPLETE':
-   a. Note the '_paginationProtocol.nextAction.remainingPages' array
-   b. IMMEDIATELY call this tool again with page parameter set to the next page
-   c. Repeat for ALL remaining pages
-   d. DO NOT proceed to any analysis until ALL pages are retrieved
-3. CREATE a verification checkpoint:
-   - Sum itemsInThisResponse across ALL calls
-   - Verify: sum === totalItems from first response
-4. ONLY THEN proceed with analysis
+   a. Read '_paginationProtocol.nextAction.callWith.cursor'
+   b. Call the tool 'continue_query' with arguments: { "cursor": "<that value>" }
+   c. Merge items from each response until status is 'COMPLETE'
+   d. DO NOT analyze totals across the full Autotask universe until COMPLETE
+3. NEVER pass page=2, page=3, etc. — the API ignores page numbers for queries
+4. OPTIONAL: pass 'maxItems' on the search tool to cap how many rows this server will merge per call
 
 FAILURE TO FOLLOW THIS PROTOCOL WILL RESULT IN INCORRECT DATA ANALYSIS.
 
 Example workflow for ${entityType}:
-  Call 1: Returns 500 of 1,247 items, status: INCOMPLETE, remainingPages: [2,3]
-  Call 2: page=2, Returns 500 items, status: INCOMPLETE, remainingPages: [3]
-  Call 3: page=3, Returns 247 items, status: COMPLETE
-  Verify: 500+500+247 = 1,247 - VERIFIED
-  NOW safe to analyze.`;
+  Call 1: search_* returns 5000 rows, status INCOMPLETE, nextAction.callWith.cursor = "abc-..."
+  Call 2: continue_query({ cursor: "abc-..." }) returns 3000 more rows, status COMPLETE
+  Verify: merged row counts match expectations; NOW safe to analyze.`;
 }
 
 // ============================================

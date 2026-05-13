@@ -289,10 +289,13 @@ export interface AutotaskApiSingleResponse<T> {
 
 // Filter and query types that match autotask-node structure
 export interface AutotaskQueryOptions {
-  filter?: Record<string, any>;
+  /** Array of `{ op, field, value }` clauses or legacy object form */
+  filter?: Record<string, any> | Array<Record<string, any>>;
   sort?: string;
   page?: number;
   pageSize?: number;
+  /** Hard cap on merged rows for this tool call (server still uses pageSize per API request) */
+  maxItems?: number;
 }
 
 // Extended query options for more advanced queries

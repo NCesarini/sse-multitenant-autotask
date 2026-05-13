@@ -4,27 +4,15 @@
  */
 
 import { McpTool, McpToolResult } from '../types/mcp.js';
-import { AutotaskService } from '../services/autotask.service.js';
+import { AutotaskService, LARGE_RESPONSE_THRESHOLDS } from '../services/autotask.service.js';
 import { Logger } from '../utils/logger.js';
 import { MappingService } from '../utils/mapping.service.js';
 import { AutotaskCredentials, TenantContext } from '../types/mcp.js'; 
 import { PaginationEnforcer, buildPaginatedToolDescription } from '../core/pagination.js';
 import { ApiCallTracker, ApiCallSummary } from '../utils/api-call-tracker.js';
-import { ConcurrencyLimiter } from '../core/rate-limiter.js'; 
-
-export const LARGE_RESPONSE_THRESHOLDS = {
-  tickets: 100,        
-  companies: 100,     
-  contacts: 100,     
-  projects: 100,      
-  resources: 100,     
-  tasks: 100,          
-  timeentries: 100,    
-  default: 100,        
-  responseSizeKB: 200  
-};
-
-
+import { ConcurrencyLimiter } from '../core/rate-limiter.js';
+import type { PaginatedFetchResult } from '../core/paginated-query.js';
+import type { SearchEnrichmentKind } from '../core/cursor-store.js';
 /**
  * Tool name constants - centralized list of all available tools
  */
@@ -107,6 +95,7 @@ export const TOOL_NAMES = {
   // Generic Tools
   QUERY_ENTITY: 'query_entity',
   GET_ENTITY: 'get_entity',
+  CONTINUE_QUERY: 'continue_query',
   
   // Managed Services Tools
   GET_COMPANY_CATEGORIES: 'get_company_categories',
@@ -140,6 +129,7 @@ export const READ_ONLY_TOOLS = [
   //TOOL_NAMES.SEARCH_CONFIGURATION_ITEMS,
   TOOL_NAMES.QUERY_ENTITY,
   TOOL_NAMES.GET_ENTITY,
+  TOOL_NAMES.CONTINUE_QUERY,
   TOOL_NAMES.GET_COMPANIES_PAGE,
   TOOL_NAMES.GET_TICKET_BY_NUMBER,
   TOOL_NAMES.GET_COMPANY_CATEGORIES,
@@ -249,7 +239,7 @@ export class EnhancedAutotaskToolHandler {
       integrationCode: { type: 'string', description: 'Autotask integration code' },
       apiUrl: { type: 'string', description: 'Optional Autotask API URL' },
       sessionId: { type: 'string', description: 'Optional session identifier' },
-      impersonationResourceId: { type: 'number', description: 'Optional resource ID to impersonate for this request' },
+      impersonationResourceId: { type: 'number', description: 'Optional resource ID to impersonate for write/create/update requests' },
       mode: { type: 'string', enum: ['read', 'write'], description: 'Access mode: "read" for read-only operations, "write" for full access (default: write)' }
     },
     required: ['username', 'secret', 'integrationCode']
@@ -349,6 +339,441 @@ export class EnhancedAutotaskToolHandler {
         await mappingService.getResourceName(id, tenantContext, tracker);
       }
     }
+  }
+
+  private static readonly LEGACY_PAGE_ERROR =
+    'Numeric page>1 is not supported by Autotask (the API ignores it). When _paginationProtocol.status is INCOMPLETE, call tool `continue_query` with { cursor: _paginationProtocol.nextAction.callWith.cursor } until status is COMPLETE.';
+
+  private rejectLegacySearchPage(page: unknown): McpToolResult | null {
+    if (typeof page === 'number' && page > 1) {
+      return {
+        isError: true,
+        content: [
+          {
+            type: 'text',
+            text: `ERROR: ${EnhancedAutotaskToolHandler.LEGACY_PAGE_ERROR}`
+          }
+        ]
+      };
+    }
+    return null;
+  }
+
+  private applyCursorPagination<T>(
+    fetchResult: PaginatedFetchResult<T>,
+    displayItems: T[],
+    entityName: string,
+    extras?: { availableFilters?: string[]; sumField?: string }
+  ) {
+    const base = {
+      items: displayItems,
+      totalEstimate: fetchResult.totalEstimate,
+      entityName,
+      status: fetchResult.status,
+      truncationReason: fetchResult.truncationReason ?? null,
+      pagesFetched: fetchResult.pagesFetched
+    };
+    const withCursor =
+      fetchResult.cursor !== undefined && fetchResult.cursor.length > 0
+        ? { ...base, cursor: fetchResult.cursor }
+        : base;
+    const withSum =
+      extras?.sumField !== undefined ? { ...withCursor, sumField: extras.sumField } : withCursor;
+    const withFilters =
+      extras?.availableFilters !== undefined
+        ? { ...withSum, availableFilters: extras.availableFilters }
+        : withSum;
+    return PaginationEnforcer.enforce(withFilters as any);
+  }
+
+  private async enrichSearchRowsForContinuation(
+    kind: SearchEnrichmentKind,
+    items: any[],
+    tenantContext?: TenantContext,
+    tracker?: ApiCallTracker
+  ): Promise<any[]> {
+    if (kind === 'none' || items.length === 0) {
+      return items;
+    }
+    const mappingService = await this.getMappingService();
+
+    if (kind === 'companies') {
+      return items;
+    }
+
+    if (kind === 'contacts') {
+      await this.prefetchMappingIds(items, ['companyID'], [], tenantContext, tracker);
+      return Promise.all(
+        items.map(async (contact: any) => {
+          const enhanced: any = { ...contact };
+          if (contact.companyID) {
+            try {
+              enhanced._enhanced = enhanced._enhanced || {};
+              enhanced._enhanced.companyName = await mappingService.getCompanyName(
+                contact.companyID,
+                tenantContext,
+                tracker
+              );
+            } catch {
+              enhanced._enhanced = enhanced._enhanced || {};
+              enhanced._enhanced.companyName = `Unknown (${contact.companyID})`;
+            }
+          }
+          return enhanced;
+        })
+      );
+    }
+
+    if (kind === 'tickets') {
+      await this.prefetchMappingIds(items, ['companyID'], ['assignedResourceID'], tenantContext, tracker);
+      return Promise.all(
+        items.map(async (ticket: any) => {
+          const enhanced: any = { ...ticket };
+          if (ticket.companyID) {
+            try {
+              enhanced._enhanced = enhanced._enhanced || {};
+              enhanced._enhanced.companyName = await mappingService.getCompanyName(
+                ticket.companyID,
+                tenantContext,
+                tracker
+              );
+            } catch {
+              enhanced._enhanced = enhanced._enhanced || {};
+              enhanced._enhanced.companyName = `Unknown (${ticket.companyID})`;
+            }
+          }
+          if (ticket.assignedResourceID) {
+            try {
+              enhanced._enhanced = enhanced._enhanced || {};
+              enhanced._enhanced.assignedResourceName = await mappingService.getResourceName(
+                ticket.assignedResourceID,
+                tenantContext,
+                tracker
+              );
+            } catch {
+              enhanced._enhanced = enhanced._enhanced || {};
+              enhanced._enhanced.assignedResourceName = `Unknown (${ticket.assignedResourceID})`;
+            }
+          }
+          if (ticket.contactID) {
+            enhanced._enhanced = enhanced._enhanced || {};
+            enhanced._enhanced.contactName = `Contact ID: ${ticket.contactID}`;
+          }
+          return enhanced;
+        })
+      );
+    }
+
+    if (kind === 'timeentries') {
+      await this.prefetchMappingIds(items, [], ['resourceID', 'billingApprovalResourceID'], tenantContext, tracker);
+      return Promise.all(
+        items.map(async (entry: any) => {
+          const enhanced: any = { ...entry };
+          enhanced._enhanced = {};
+          if (entry.resourceID) {
+            try {
+              enhanced._enhanced.resourceName =
+                (await mappingService.getResourceName(entry.resourceID, tenantContext, tracker)) ??
+                `Unknown (${entry.resourceID})`;
+            } catch {
+              enhanced._enhanced.resourceName = `Unknown (${entry.resourceID})`;
+            }
+          }
+          if (entry.billingApprovalResourceID) {
+            try {
+              enhanced._enhanced.billingApprovalResourceName =
+                (await mappingService.getResourceName(
+                  entry.billingApprovalResourceID,
+                  tenantContext,
+                  tracker
+                )) ?? `Unknown (${entry.billingApprovalResourceID})`;
+            } catch {
+              enhanced._enhanced.billingApprovalResourceName = `Unknown (${entry.billingApprovalResourceID})`;
+            }
+          }
+          return enhanced;
+        })
+      );
+    }
+
+    if (kind === 'opportunities') {
+      await this.prefetchMappingIds(items, ['accountID'], ['ownerResourceID', 'creatorResourceID'], tenantContext, tracker);
+      return Promise.all(
+        items.map(async (opportunity: any) => {
+          const enhanced: any = { ...opportunity };
+          enhanced._enhanced = {};
+          if (opportunity.accountID) {
+            try {
+              enhanced._enhanced.companyName =
+                (await mappingService.getCompanyName(opportunity.accountID, tenantContext, tracker)) ??
+                `Unknown (${opportunity.accountID})`;
+            } catch {
+              enhanced._enhanced.companyName = `Unknown (${opportunity.accountID})`;
+            }
+          }
+          if (opportunity.ownerResourceID) {
+            try {
+              enhanced._enhanced.ownerResourceName =
+                (await mappingService.getResourceName(
+                  opportunity.ownerResourceID,
+                  tenantContext,
+                  tracker
+                )) ?? `Unknown (${opportunity.ownerResourceID})`;
+            } catch {
+              enhanced._enhanced.ownerResourceName = `Unknown (${opportunity.ownerResourceID})`;
+            }
+          }
+          if (opportunity.creatorResourceID) {
+            try {
+              enhanced._enhanced.creatorResourceName =
+                (await mappingService.getResourceName(
+                  opportunity.creatorResourceID,
+                  tenantContext,
+                  tracker
+                )) ?? `Unknown (${opportunity.creatorResourceID})`;
+            } catch {
+              enhanced._enhanced.creatorResourceName = `Unknown (${opportunity.creatorResourceID})`;
+            }
+          }
+          return enhanced;
+        })
+      );
+    }
+
+    if (kind === 'projects') {
+      await this.prefetchMappingIds(items, ['companyID'], ['projectManagerResourceID'], tenantContext, tracker);
+      return Promise.all(
+        items.map(async (project: any) => {
+          const enhanced: any = { ...project };
+          enhanced._enhanced = enhanced._enhanced || {};
+          if (project.companyID) {
+            try {
+              enhanced._enhanced.companyName = await mappingService.getCompanyName(
+                project.companyID,
+                tenantContext,
+                tracker
+              );
+            } catch {
+              enhanced._enhanced.companyName = `Unknown (${project.companyID})`;
+            }
+          }
+          if (project.projectManagerResourceID) {
+            try {
+              enhanced._enhanced.projectManagerName = await mappingService.getResourceName(
+                project.projectManagerResourceID,
+                tenantContext,
+                tracker
+              );
+            } catch {
+              enhanced._enhanced.projectManagerName = `Unknown (${project.projectManagerResourceID})`;
+            }
+          }
+          return enhanced;
+        })
+      );
+    }
+
+    if (kind === 'tasks') {
+      await this.prefetchMappingIds(
+        items,
+        [],
+        ['assignedResourceID', 'creatorResourceID', 'completedByResourceID'],
+        tenantContext,
+        tracker
+      );
+      return Promise.all(
+        items.map(async (task: any) => {
+          const enhanced: any = { ...task };
+          enhanced._enhanced = {};
+          if (task.assignedResourceID) {
+            try {
+              enhanced._enhanced.assignedResourceName =
+                (await mappingService.getResourceName(task.assignedResourceID, tenantContext, tracker)) ??
+                `Unknown (${task.assignedResourceID})`;
+            } catch {
+              enhanced._enhanced.assignedResourceName = `Unknown (${task.assignedResourceID})`;
+            }
+          }
+          if (task.creatorResourceID) {
+            try {
+              enhanced._enhanced.creatorResourceName =
+                (await mappingService.getResourceName(task.creatorResourceID, tenantContext, tracker)) ??
+                `Unknown (${task.creatorResourceID})`;
+            } catch {
+              enhanced._enhanced.creatorResourceName = `Unknown (${task.creatorResourceID})`;
+            }
+          }
+          if (task.completedByResourceID) {
+            try {
+              enhanced._enhanced.completedByResourceName =
+                (await mappingService.getResourceName(task.completedByResourceID, tenantContext, tracker)) ??
+                `Unknown (${task.completedByResourceID})`;
+            } catch {
+              enhanced._enhanced.completedByResourceName = `Unknown (${task.completedByResourceID})`;
+            }
+          }
+          return enhanced;
+        })
+      );
+    }
+
+    if (kind === 'contracts') {
+      await this.prefetchMappingIds(items, ['companyID'], [], tenantContext, tracker);
+      return Promise.all(
+        items.map(async (contract: any) => {
+          const enhanced: any = { ...contract };
+          enhanced._enhanced = {};
+          if (contract.companyID) {
+            try {
+              enhanced._enhanced.companyName =
+                (await mappingService.getCompanyName(contract.companyID, tenantContext, tracker)) ??
+                `Unknown (${contract.companyID})`;
+            } catch {
+              enhanced._enhanced.companyName = `Unknown (${contract.companyID})`;
+            }
+          }
+          if (contract.billToCompanyContactID) {
+            enhanced._enhanced.billToContactId = contract.billToCompanyContactID;
+          }
+          return enhanced;
+        })
+      );
+    }
+
+    if (kind === 'invoices') {
+      await this.prefetchMappingIds(items, ['companyID'], ['creatorResourceID'], tenantContext, tracker);
+      return Promise.all(
+        items.map(async (invoice: any) => {
+          const enhanced: any = { ...invoice };
+          enhanced._enhanced = {};
+          if (invoice.companyID) {
+            try {
+              enhanced._enhanced.companyName =
+                (await mappingService.getCompanyName(invoice.companyID, tenantContext, tracker)) ??
+                `Unknown (${invoice.companyID})`;
+            } catch {
+              enhanced._enhanced.companyName = `Unknown (${invoice.companyID})`;
+            }
+          }
+          if (invoice.creatorResourceID) {
+            try {
+              enhanced._enhanced.creatorResourceName =
+                (await mappingService.getResourceName(invoice.creatorResourceID, tenantContext, tracker)) ??
+                `Unknown (${invoice.creatorResourceID})`;
+            } catch {
+              enhanced._enhanced.creatorResourceName = `Unknown (${invoice.creatorResourceID})`;
+            }
+          }
+          return enhanced;
+        })
+      );
+    }
+
+    if (kind === 'quotes') {
+      await this.prefetchMappingIds(items, ['accountId'], ['creatorResourceID'], tenantContext, tracker);
+      return Promise.all(
+        items.map(async (quote: any) => {
+          const enhanced: any = { ...quote };
+          enhanced._enhanced = {};
+          if (quote.accountId) {
+            try {
+              enhanced._enhanced.companyName =
+                (await mappingService.getCompanyName(quote.accountId, tenantContext, tracker)) ??
+                `Unknown (${quote.accountId})`;
+            } catch {
+              enhanced._enhanced.companyName = `Unknown (${quote.accountId})`;
+            }
+          }
+          if (quote.creatorResourceID) {
+            try {
+              enhanced._enhanced.creatorResourceName =
+                (await mappingService.getResourceName(quote.creatorResourceID, tenantContext, tracker)) ??
+                `Unknown (${quote.creatorResourceID})`;
+            } catch {
+              enhanced._enhanced.creatorResourceName = `Unknown (${quote.creatorResourceID})`;
+            }
+          }
+          return enhanced;
+        })
+      );
+    }
+
+    if (kind === 'resources') {
+      return items.map((resource: any) => {
+        const enhanced: any = { ...resource };
+        enhanced._enhanced = enhanced._enhanced || {};
+        enhanced._enhanced.resourceName = `${resource.firstName || ''} ${resource.lastName || ''}`.trim();
+        return enhanced;
+      });
+    }
+
+    return items;
+  }
+
+  private async continuePaginatedQuery(
+    args: Record<string, any>,
+    tenantContext?: TenantContext,
+    tracker?: ApiCallTracker
+  ): Promise<McpToolResult> {
+    const cursor = args.cursor;
+    if (!cursor || typeof cursor !== 'string') {
+      return {
+        isError: true,
+        content: [{ type: 'text', text: '`cursor` (string) is required for continue_query.' }]
+      };
+    }
+    const maxItems =
+      typeof args.maxItems === 'number' && args.maxItems > 0 ? args.maxItems : undefined;
+    const fetchResult: PaginatedFetchResult<any> = await this.autotaskService.resumePaginatedFetch(
+      cursor,
+      tenantContext,
+      tracker,
+      maxItems
+    );
+    const kind: SearchEnrichmentKind = fetchResult.continuation?.enrichment ?? 'none';
+    const responseKey = fetchResult.continuation?.responseKey ?? 'items';
+
+    let working = fetchResult.items;
+    if (kind === 'tickets') {
+      working = working.map((t: any) => this.autotaskService.shrinkTicketForList(t));
+    }
+    if (kind === 'projects') {
+      working = working.map((p: any) => this.autotaskService.shrinkProjectForList(p));
+    }
+    if (kind === 'tasks') {
+      working = working.map((t: any) => this.autotaskService.shrinkTaskForList(t));
+    }
+
+    const enriched = await this.enrichSearchRowsForContinuation(kind, working, tenantContext, tracker);
+
+    const entityNameByKind: Record<SearchEnrichmentKind, string> = {
+      companies: 'companies',
+      contacts: 'contacts',
+      tickets: 'tickets',
+      timeentries: 'time entries',
+      opportunities: 'opportunities',
+      projects: 'projects',
+      tasks: 'tasks',
+      contracts: 'contracts',
+      invoices: 'invoices',
+      quotes: 'quotes',
+      resources: 'resources',
+      none: 'rows'
+    };
+
+    const paginationResult = this.applyCursorPagination(fetchResult, enriched, entityNameByKind[kind], {
+      ...(kind === 'timeentries' ? { sumField: 'hoursWorked' } : {})
+    });
+
+    const response: Record<string, unknown> = {
+      [responseKey]: paginationResult.items,
+      _paginationProtocol: paginationResult.protocol
+    };
+
+    return {
+      content: [{ type: 'text', text: JSON.stringify(response, null, 2) }],
+      isError: false
+    };
   }
 
 
@@ -464,99 +889,6 @@ export class EnhancedAutotaskToolHandler {
 
 
   /**
-   * Check if response is large and add helpful guidance
-   */
-  private addLargeResponseGuidance(content: any[], resultCount: number, searchType: string): any[] {
-    const threshold = LARGE_RESPONSE_THRESHOLDS[
-      searchType as keyof typeof LARGE_RESPONSE_THRESHOLDS
-    ] || LARGE_RESPONSE_THRESHOLDS.default;
-    
-    // Calculate approximate response size
-    const responseText = JSON.stringify(content);
-    const responseSizeKB = Math.round(responseText.length / 1024);
-    
-    // If result count is high or response size is large, add guidance
-    if (resultCount >= threshold || responseSizeKB > LARGE_RESPONSE_THRESHOLDS.responseSizeKB) {
-      const guidanceMessage = this.generateSearchGuidance(searchType, resultCount, responseSizeKB);
-      
-      // Add guidance as a separate content item
-      return [
-        ...content,
-        {
-          type: 'text',
-          text: `\n\nSearch Guidance: ${guidanceMessage}`
-        }
-      ];
-    }
-    
-    return content;
-  }
-
-  /**
-   * Generate specific guidance based on search type and results
-   */
-  private generateSearchGuidance(searchType: string, resultCount: number, responseSizeKB: number): string {
-    const suggestions: Record<string, string[]> = {
-      tickets: [
-        'Use `status` parameter to filter by ticket status (e.g., status: 1 for New, 5 for Complete)',
-        'Add `companyID` to search tickets for a specific company',
-        'Add `projectID` to search tickets for a specific project',
-        'Add `contractID` to search tickets for a specific contract',
-        'Use `assignedResourceID` to find tickets assigned to specific person',
-        'Try `searchTerm` with specific keywords from ticket title or number',
-        'Use `pageSize` parameter to limit results (e.g., pageSize: 25)'
-      ],
-      companies: [
-        'Use `searchTerm` with company name or partial name',
-        'Add specific filters in your search criteria',
-        'Use `pageSize` parameter to limit results (e.g., pageSize: 50)'
-      ],
-      contacts: [
-        'Use `searchTerm` with contact name or email',
-        'Add `companyId` to search contacts for a specific company',
-        'Use `pageSize` parameter to limit results (e.g., pageSize: 50)'
-      ],
-      projects: [
-        'Use `searchTerm` with project name or description keywords',
-        'Add `companyId` to search projects for a specific company',
-        'Use `pageSize` parameter to limit results (e.g., pageSize: 50)'
-      ],
-      resources: [
-        'Use `searchTerm` with employee name',
-        'Add specific role or department filters',
-        'Use `pageSize` parameter to limit results (e.g., pageSize: 50)'
-      ],
-      tasks: [
-        'Use `projectId` to search tasks for a specific project',
-        'Add `assignedResourceId` to find tasks assigned to specific person',
-        'Use `status` parameter to filter by task status',
-        'Try `searchTerm` with task title keywords',
-        'Use `pageSize` parameter to limit results (e.g., pageSize: 25)'
-      ],
-      timeentries: [
-        'Use `ticketID` to search time entries for a specific ticket',
-        'Use `taskID` to search time entries for a specific task',
-        'Add `projectId` to find time entries for a specific project',
-        'Use `resourceId` to find time entries by a specific person',
-        'Add date filters with `dateFrom` and `dateTo` (YYYY-MM-DD format)',
-        'Use `pageSize` parameter to limit results (e.g., pageSize: 100)'
-      ]
-    };
-
-    const defaultSuggestions = [
-      'Use more specific search terms or filters',
-      'Use `pageSize` parameter to limit results',
-      'Add additional filter criteria to narrow down results'
-    ];
-
-    const typeSuggestions = suggestions[searchType] || defaultSuggestions;
-    const selectedSuggestions = typeSuggestions.slice(0, 3); // Show max 3 suggestions
-
-    return `Found ${resultCount} results (${responseSizeKB}KB). For more focused results, try:\n` +
-           selectedSuggestions.map(s => `  • ${s}`).join('\n');
-  }
-
-  /**
    * Get mapping service instance (singleton)
    */
   private async getMappingService(): Promise<MappingService> {
@@ -567,45 +899,77 @@ export class EnhancedAutotaskToolHandler {
   }
 
   /**
-   * Extract tenant context from tool arguments
+   * Extract tenant context from tool arguments.
+   * Tries `_tenant`, then `tenant`, then `credentials` — uses the first object that has
+   * non-empty username, secret, and integrationCode. (Some clients send an empty `_tenant`
+   * placeholder alongside a populated `tenant`; `_tenant || tenant` would wrongly ignore `tenant`.)
    */
   private extractTenantContext(args: Record<string, any>): TenantContext | undefined {
-     
+    const candidates: Array<{ key: string; data: Record<string, any> }> = [];
+    for (const key of ['_tenant', 'tenant', 'credentials'] as const) {
+      const raw = args[key];
+      if (raw !== null && raw !== undefined && typeof raw === 'object' && !Array.isArray(raw)) {
+        candidates.push({ key, data: raw as Record<string, any> });
+      }
+    }
 
-    // Check if tenant credentials are provided in the arguments
-    if (args._tenant || args.tenant || args.credentials) {
-      const tenantData = args._tenant || args.tenant || args.credentials;
-       
-      
-      if (tenantData.username && tenantData.secret && tenantData.integrationCode) {
+    for (const { data: tenantData } of candidates) {
+      const username = tenantData.username;
+      const secret = tenantData.secret;
+      const integrationCode = tenantData.integrationCode;
+      if (
+        typeof username === 'string' &&
+        username.length > 0 &&
+        typeof secret === 'string' &&
+        secret.length > 0 &&
+        typeof integrationCode === 'string' &&
+        integrationCode.length > 0
+      ) {
         const credentials: AutotaskCredentials = {
-          username: tenantData.username,
-          secret: tenantData.secret,
-          integrationCode: tenantData.integrationCode,
+          username,
+          secret,
+          integrationCode,
           apiUrl: tenantData.apiUrl
         };
+
+        const mode = tenantData.mode === 'read' ? 'read' : 'write';
+        const rawImpersonationResourceId = tenantData.impersonationResourceId;
+        const impersonationResourceId =
+          mode === 'write' && typeof rawImpersonationResourceId === 'number'
+            ? rawImpersonationResourceId
+            : mode === 'write' &&
+                typeof rawImpersonationResourceId === 'string' &&
+                rawImpersonationResourceId.trim().length > 0
+              ? Number(rawImpersonationResourceId)
+              : undefined;
 
         const tenantContext: TenantContext = {
           tenantId: tenantData.tenantId || `tenant_${credentials.username}`,
           credentials,
           sessionId: tenantData.sessionId,
-          impersonationResourceId: tenantData.impersonationResourceId,
-          mode: tenantData.mode || 'write' // Default to write mode if not specified
+          ...(impersonationResourceId !== undefined && Number.isFinite(impersonationResourceId)
+            ? { impersonationResourceId }
+            : {}),
+          mode
         };
 
         return tenantContext;
-      } else {
-        this.logger.warn('⚠️ Incomplete tenant credentials found', {
-          hasUsername: !!tenantData.username,
-          hasSecret: !!tenantData.secret,
-          hasIntegrationCode: !!tenantData.integrationCode,
-          missingFields: [
-            !tenantData.username && 'username',
-            !tenantData.secret && 'secret',
-            !tenantData.integrationCode && 'integrationCode'
-          ].filter(Boolean)
-        });
       }
+    }
+
+    if (candidates.length > 0) {
+      const first = candidates[0].data;
+      this.logger.warn('⚠️ Incomplete tenant credentials found', {
+        keysTried: candidates.map((c) => c.key),
+        hasUsername: !!first.username,
+        hasSecret: !!first.secret,
+        hasIntegrationCode: !!first.integrationCode,
+        missingFields: [
+          !(typeof first.username === 'string' && first.username.length > 0) && 'username',
+          !(typeof first.secret === 'string' && first.secret.length > 0) && 'secret',
+          !(typeof first.integrationCode === 'string' && first.integrationCode.length > 0) && 'integrationCode'
+        ].filter(Boolean)
+      });
     } else {
       this.logger.info('🏠 No tenant credentials found - using single-tenant mode');
     }
@@ -691,10 +1055,15 @@ export class EnhancedAutotaskToolHandler {
           },
           pageSize: {
             type: 'number',
-            description: 'LIMIT results returned (default: 100, max: 500). This does NOT support pagination to specific pages - Autotask uses cursor-based pagination. To find specific companies: 1) Use get_entity with company ID for direct lookup, 2) Use searchTerm to filter by name, 3) Add filters (ownerResourceID, companyType, isActive, etc.) to narrow results. DO NOT request large pageSizes - instead use specific filters to reduce the dataset.',
+            description: 'Rows per underlying Autotask /query request (default 500, max 500). Does not cap total merged rows; use maxItems or narrower filters.',
             minimum: 1,
             maximum: 500,
-            default: 100
+            default: 500
+          },
+          maxItems: {
+            type: 'number',
+            description: 'Optional maximum merged rows for this call. Omit to use server defaults (env AT_MAX_*).',
+            minimum: 1
           }
         }
       ),
@@ -824,18 +1193,17 @@ export class EnhancedAutotaskToolHandler {
                   type: 'boolean',
                   description: 'Filter by active status to control contact availability. TRUE returns only active contacts (current employees, available for communication), FALSE returns inactive contacts (former employees, disabled accounts). Active contacts can receive tickets, notifications, and communications. Inactive contacts are kept for historical records. Most operational searches should use TRUE unless doing cleanup or historical analysis.'
                 },
-                page: {
-                  type: 'number',
-                  description: 'Page number (1-indexed) for pagination. CRITICAL: Check _paginationProtocol.status in the response. If status is INCOMPLETE, you MUST call again with the next page number. Continue until status is COMPLETE before performing any analysis.',
-                  minimum: 1,
-                  default: 1
-                },
                 pageSize: {
                   type: 'number',
-                  description: 'Number of contact records per page (max 500). Default 500 for comprehensive results. Use with page parameter for pagination.',
+                  description: 'Rows per underlying Autotask /query request (default 500, max 500). Server merges pages until complete or budget; use maxItems to cap.',
                   minimum: 1,
                   maximum: 500,
                   default: 500
+                },
+                maxItems: {
+                  type: 'number',
+                  description: 'Optional maximum merged contacts for this call.',
+                  minimum: 1
                 }
               }
             ),
@@ -969,18 +1337,17 @@ export class EnhancedAutotaskToolHandler {
                   type: 'string',
                   description: 'Filter tickets with last activity on or before this date (YYYY-MM-DD format). Use to find tickets that haven\'t been updated recently (potentially stale), or for historical activity analysis. Example: "2024-01-01" finds tickets with no activity after January 1st. Combine with lastActivityDateFrom to find tickets inactive during specific periods.'
                 },
-                page: {
-                  type: 'number',
-                  description: 'Page number (1-indexed) for pagination. CRITICAL: Check _paginationProtocol.status in the response. If status is INCOMPLETE, you MUST call again with the next page number. Continue until status is COMPLETE before performing any analysis.',
-                  minimum: 1,
-                  default: 1
-                },
                 pageSize: {
                   type: 'number',
-                  description: 'Number of ticket records per page (max 500). Default 500 for comprehensive results. Use with page parameter for pagination.',
+                  description: 'Rows per underlying Autotask /query request (default 500, max 500). Server merges pages; use maxItems to cap.',
                   minimum: 1,
                   maximum: 500,
                   default: 500
+                },
+                maxItems: {
+                  type: 'number',
+                  description: 'Optional maximum merged tickets for this call.',
+                  minimum: 1
                 }
               }
             ),
@@ -1132,18 +1499,18 @@ export class EnhancedAutotaskToolHandler {
                   type: 'number',
                   description: 'Filter by project manager resource ID - refers to Resources entity (employee managing the project). Find all projects managed by a specific PM. Essential for: PM workload analysis, portfolio management by PM, capacity planning, performance tracking. Example: projectManagerResourceID=123 shows all projects managed by employee #123.'
                 },
-                page: {
-                  type: 'number',
-                  description: 'Page number (1-indexed) for pagination. CRITICAL: Check _paginationProtocol.status in the response. If status is INCOMPLETE, you MUST call again with the next page number.',
-                  minimum: 1,
-                  default: 1
-                },
                 pageSize: {
                   type: 'number',
-                  description: 'Number of results per page (max 500). Default 500 for comprehensive results.',
+                  description:
+                    'Rows per underlying Autotask /query request (default 500, max 500). Does not cap total merged rows; use maxItems or narrower filters.',
                   minimum: 1,
                   maximum: 500,
                   default: 500
+                },
+                maxItems: {
+                  type: 'number',
+                  description: 'Optional maximum merged rows for this call. Omit to use server defaults (env AT_MAX_*).',
+                  minimum: 1
                 }
               }
             ),
@@ -1177,18 +1544,18 @@ export class EnhancedAutotaskToolHandler {
                   type: 'boolean',
                   description: 'Filter by active status (true for active employees, false for inactive)'
                 },
-                page: {
-                  type: 'number',
-                  description: 'Page number (1-indexed) for pagination. CRITICAL: Check _paginationProtocol.status in the response. If status is INCOMPLETE, you MUST call again with the next page number.',
-                  minimum: 1,
-                  default: 1
-                },
                 pageSize: {
                   type: 'number',
-                  description: 'Number of results per page (max 500). Default 500 for comprehensive results.',
+                  description:
+                    'Rows per underlying Autotask /query request (default 500, max 500). Does not cap total merged rows; use maxItems or narrower filters.',
                   minimum: 1,
                   maximum: 500,
                   default: 500
+                },
+                maxItems: {
+                  type: 'number',
+                  description: 'Optional maximum merged rows for this call. Omit to use server defaults (env AT_MAX_*).',
+                  minimum: 1
                 }
               }
             ),
@@ -1324,18 +1691,17 @@ export class EnhancedAutotaskToolHandler {
             type: 'string',
             description: 'End date filter (YYYY-MM-DD format). Works with dateFrom to create date ranges. Without dateFrom, gets all entries up to this date. Essential for: monthly/quarterly reports, billing cutoffs, project phase completions. Example: "2024-03-31" to end at March 31st. Use inclusive date logic (entries ON the dateTo are included).'
           },
-          page: {
-            type: 'number',
-            description: 'Page number (1-indexed) for pagination. CRITICAL: Check _paginationProtocol.status in the response. If status is INCOMPLETE, you MUST call again with the next page number. Continue until status is COMPLETE before performing any analysis.',
-            minimum: 1,
-            default: 1
-          },
           pageSize: {
             type: 'number',
-            description: 'Number of results per page (max 500). Default 500 for comprehensive results. Time entry searches can return large datasets. Use with page parameter for pagination.',
+            description: 'Rows per underlying Autotask /query request (default 500, max 500). Server merges pages; use maxItems to cap.',
             minimum: 1,
             maximum: 500,
             default: 500
+          },
+          maxItems: {
+            type: 'number',
+            description: 'Optional maximum merged time entries for this call.',
+            minimum: 1
           }
         }
       ),
@@ -1385,17 +1751,18 @@ export class EnhancedAutotaskToolHandler {
             type: 'string',
             description: 'Filter tasks created on or before this date (YYYY-MM-DD format). Works with createdDateFrom for date ranges. Use for periodic reports or historical analysis. Example: "2024-01-31" finds tasks created through end of January.'
           },
-          page: {
-            type: 'number',
-            description: 'Page number (1-indexed) for pagination. CRITICAL: Check _paginationProtocol.status in the response. If status is INCOMPLETE, you MUST call again with the next page number.',
-            minimum: 1,
-            default: 1
-          },
           pageSize: {
             type: 'number',
-            description: 'Number of results per page (max 500). Default 500 for comprehensive results.',
+            description:
+              'Rows per underlying Autotask /query request (default 500, max 500). Does not cap total merged rows; use maxItems or narrower filters.',
             minimum: 1,
-            maximum: 500
+            maximum: 500,
+            default: 500
+          },
+          maxItems: {
+            type: 'number',
+            description: 'Optional maximum merged rows for this call. Omit to use server defaults (env AT_MAX_*).',
+            minimum: 1
           }
         }
       ),
@@ -1721,7 +2088,10 @@ export class EnhancedAutotaskToolHandler {
       // Financial Management
       EnhancedAutotaskToolHandler.createTool(
         'search_contracts',
-        'Search for contracts in Autotask with filters. Returns contract records with company information.',
+        buildPaginatedToolDescription(
+          'Search for contracts in Autotask with filters. Returns contract records with company information.',
+          'contracts'
+        ),
         'read',
         {
           companyId: {
@@ -1742,16 +2112,26 @@ export class EnhancedAutotaskToolHandler {
           },
           pageSize: {
             type: 'number',
-            description: 'Number of results to return (max 500)',
+            description:
+              'Rows per underlying Autotask /query request (default 500, max 500). Does not cap total merged rows; use maxItems or narrower filters.',
             minimum: 1,
-            maximum: 500
+            maximum: 500,
+            default: 500
+          },
+          maxItems: {
+            type: 'number',
+            description: 'Optional maximum merged rows for this call. Omit to use server defaults (env AT_MAX_*).',
+            minimum: 1
           }
         }
       ),
 
       EnhancedAutotaskToolHandler.createTool(
         'search_invoices',
-        'Search for invoices in Autotask with filters. Returns invoice records with company information.',
+        buildPaginatedToolDescription(
+          'Search for invoices in Autotask with filters. Returns invoice records with company information.',
+          'invoices'
+        ),
         'read',
         {
           companyId: {
@@ -1772,16 +2152,26 @@ export class EnhancedAutotaskToolHandler {
           },
           pageSize: {
             type: 'number',
-            description: 'Number of results to return (max 500)',
+            description:
+              'Rows per underlying Autotask /query request (default 500, max 500). Does not cap total merged rows; use maxItems or narrower filters.',
             minimum: 1,
-            maximum: 500
+            maximum: 500,
+            default: 500
+          },
+          maxItems: {
+            type: 'number',
+            description: 'Optional maximum merged rows for this call. Omit to use server defaults (env AT_MAX_*).',
+            minimum: 1
           }
         }
       ),
 
       EnhancedAutotaskToolHandler.createTool(
         'search_quotes',
-        'Search for quotes in Autotask with filters. Returns quote records with company and contact information.',
+        buildPaginatedToolDescription(
+          'Search for quotes in Autotask with filters. Returns quote records with company and contact information.',
+          'quotes'
+        ),
         'read',
         {
           companyId: {
@@ -1802,9 +2192,16 @@ export class EnhancedAutotaskToolHandler {
           },
           pageSize: {
             type: 'number',
-            description: 'Number of results to return (max 500)',
+            description:
+              'Rows per underlying Autotask /query request (default 500, max 500). Does not cap total merged rows; use maxItems or narrower filters.',
             minimum: 1,
-            maximum: 500
+            maximum: 500,
+            default: 500
+          },
+          maxItems: {
+            type: 'number',
+            description: 'Optional maximum merged rows for this call. Omit to use server defaults (env AT_MAX_*).',
+            minimum: 1
           }
         }
       ),
@@ -1906,18 +2303,17 @@ export class EnhancedAutotaskToolHandler {
             type: 'string',
             description: 'Filter by projected close date (YYYY-MM-DD format). Find opportunities expected to close by a specific date. Critical for sales forecasting, quota planning, and revenue projections.'
           },
-          page: {
-            type: 'number',
-            description: 'Page number (1-indexed) for pagination. CRITICAL: Check _paginationProtocol.status in the response. If status is INCOMPLETE, you MUST call again with the next page number. Continue until status is COMPLETE before performing any analysis.',
-            minimum: 1,
-            default: 1
-          },
           pageSize: {
             type: 'number',
-            description: 'Number of opportunity records per page (max 500). Default 500 for comprehensive results. Use with page parameter for pagination.',
+            description: 'Rows per underlying Autotask /query request (default 500, max 500). Server merges pages; use maxItems to cap.',
             minimum: 1,
             maximum: 500,
             default: 500
+          },
+          maxItems: {
+            type: 'number',
+            description: 'Optional maximum merged opportunities for this call.',
+            minimum: 1
           }
         }
       ),
@@ -2423,6 +2819,24 @@ export class EnhancedAutotaskToolHandler {
 
 
 
+      EnhancedAutotaskToolHandler.createTool(
+        'continue_query',
+        'Resume server-side Autotask cursor pagination when a search_* response has _paginationProtocol.status=INCOMPLETE. Pass the opaque `cursor` from _paginationProtocol.nextAction.callWith. Repeats until status is COMPLETE. Do not use numeric page>1.',
+        'read',
+        {
+          cursor: {
+            type: 'string',
+            description: 'Continuation token from _paginationProtocol.nextAction.callWith.cursor (UUID).'
+          },
+          maxItems: {
+            type: 'number',
+            description: 'Optional cap on merged rows for this resume chunk (same semantics as search tools).',
+            minimum: 1
+          }
+        },
+        ['cursor']
+      ),
+
       // Generic GET Query Tool (URL parameter-based search)
       EnhancedAutotaskToolHandler.createTool(
         'query_entity',
@@ -2921,6 +3335,11 @@ export class EnhancedAutotaskToolHandler {
           result = await this.getCompaniesPage(args, tenantContext, tracker);
           break;
 
+        case 'continue_query':
+          this.logger.info(`⏭️ Executing continue_query`, { toolCallId });
+          result = await this.continuePaginatedQuery(args, tenantContext, tracker);
+          break;
+
         case 'query_entity':
           this.logger.info(`🔍 Executing query_entity`, { toolCallId });
           result = await this.queryEntity(args, tenantContext, tracker);
@@ -3054,12 +3473,18 @@ export class EnhancedAutotaskToolHandler {
 
   private async searchCompanies(args: Record<string, any>, tenantContext?: TenantContext, tracker?: ApiCallTracker): Promise<McpToolResult> {
     try {
-      const { page = 1, pageSize = 500 } = args;
-      const options: any = {};
-      
-      // Build filter array
+      const legacy = this.rejectLegacySearchPage(args.page);
+      if (legacy) {
+        return legacy;
+      }
+
+      const pageSize = Math.min(Number(args.pageSize) || 500, 500);
+      const maxItems =
+        typeof args.maxItems === 'number' && args.maxItems > 0 ? args.maxItems : undefined;
+      const options: Record<string, unknown> = { pageSize, maxItems };
+
       const filters: any[] = [];
-      
+
       if (args.searchTerm) {
         filters.push({
           field: 'companyName',
@@ -3067,7 +3492,7 @@ export class EnhancedAutotaskToolHandler {
           value: args.searchTerm
         });
       }
-      
+
       if (typeof args.companyType === 'number') {
         filters.push({
           field: 'companyType',
@@ -3075,7 +3500,7 @@ export class EnhancedAutotaskToolHandler {
           value: args.companyType
         });
       }
-      
+
       if (typeof args.ownerResourceID === 'number') {
         filters.push({
           field: 'ownerResourceID',
@@ -3083,7 +3508,7 @@ export class EnhancedAutotaskToolHandler {
           value: args.ownerResourceID
         });
       }
-      
+
       if (typeof args.isActive === 'boolean') {
         filters.push({
           field: 'isActive',
@@ -3091,7 +3516,7 @@ export class EnhancedAutotaskToolHandler {
           value: args.isActive
         });
       }
-      
+
       if (args.city) {
         filters.push({
           field: 'city',
@@ -3099,7 +3524,7 @@ export class EnhancedAutotaskToolHandler {
           value: args.city
         });
       }
-      
+
       if (args.state) {
         filters.push({
           field: 'state',
@@ -3107,7 +3532,7 @@ export class EnhancedAutotaskToolHandler {
           value: args.state
         });
       }
-      
+
       if (args.country) {
         filters.push({
           field: 'country',
@@ -3115,25 +3540,22 @@ export class EnhancedAutotaskToolHandler {
           value: args.country
         });
       }
-      
+
       if (filters.length > 0) {
         options.filter = filters;
       }
-      
-      options.pageSize = Math.min(pageSize, 500);
 
-      const companies = await this.autotaskService.searchCompanies(options, tenantContext, tracker);
-      
-      // Get total count for pagination
-      let totalCount = companies.length;
-      try {
-        const countResult = await this.autotaskService.countCompanies(options, tenantContext, tracker);
-        totalCount = countResult ?? companies.length;
-      } catch (countError) {
-        this.logger.warn('Could not get total count for companies, using returned count');
-      }
+      const searchBody = this.autotaskService.buildCompaniesQueryPayload(options as any);
+      const fetchResult = await this.autotaskService.fetchPaginatedEntity(
+        'Companies',
+        searchBody,
+        tenantContext,
+        tracker,
+        maxItems,
+        { enrichment: 'companies', responseKey: 'companies' }
+      );
+      const companies = fetchResult.items;
 
-      // Determine which filters are available but not used (for performance suggestions)
       const unusedFilters: string[] = [];
       if (!args.searchTerm) unusedFilters.push('searchTerm (company name)');
       if (args.companyType === undefined) unusedFilters.push('companyType (1=Customer, 3=Prospect, etc)');
@@ -3142,27 +3564,21 @@ export class EnhancedAutotaskToolHandler {
       if (!args.city) unusedFilters.push('city (geographical filter)');
       if (!args.state) unusedFilters.push('state (geographical filter)');
 
-      // Apply pagination protocol
-      const paginationResult = PaginationEnforcer.enforce({
-        items: companies,
-        totalCount,
-        currentPage: page,
-        pageSize: Math.min(pageSize, 500),
-        entityName: 'companies',
-        availableFilters: unusedFilters,
-        largeResultThreshold: 500
+      const paginationResult = this.applyCursorPagination(fetchResult, companies, 'companies', {
+        availableFilters: unusedFilters
       });
 
-      // Build response with pagination protocol
       const response = {
         companies: paginationResult.items,
         _paginationProtocol: paginationResult.protocol
       };
 
-      const content = [{
-        type: 'text',
-        text: JSON.stringify(response, null, 2)
-      }];
+      const content = [
+        {
+          type: 'text',
+          text: JSON.stringify(response, null, 2)
+        }
+      ];
 
       return {
         content,
@@ -3197,110 +3613,89 @@ export class EnhancedAutotaskToolHandler {
 
   private async searchContacts(args: Record<string, any>, tenantContext?: TenantContext, tracker?: ApiCallTracker): Promise<McpToolResult> {
     try {
-      const { page = 1, pageSize = 500 } = args;
-      const options: any = {};
-      
-      if (args.searchTerm) {
-        options.filter = [{
-          field: 'firstName',
-          op: 'contains',
-          value: args.searchTerm
-        }, {
-          field: 'lastName',
-          op: 'contains',
-          value: args.searchTerm
-        }, {
-          field: 'emailAddress',
-          op: 'contains',
-          value: args.searchTerm
-        }];
+      const legacy = this.rejectLegacySearchPage(args.page);
+      if (legacy) {
+        return legacy;
       }
-      
+
+      const pageSize = Math.min(Number(args.pageSize) || 500, 500);
+      const maxItems =
+        typeof args.maxItems === 'number' && args.maxItems > 0 ? args.maxItems : undefined;
+      const options: Record<string, unknown> = { pageSize, maxItems };
+
+      if (args.searchTerm) {
+        options.filter = [
+          {
+            field: 'firstName',
+            op: 'contains',
+            value: args.searchTerm
+          },
+          {
+            field: 'lastName',
+            op: 'contains',
+            value: args.searchTerm
+          },
+          {
+            field: 'emailAddress',
+            op: 'contains',
+            value: args.searchTerm
+          }
+        ];
+      }
+
       if (typeof args.companyId === 'number') {
         if (!options.filter) options.filter = [];
-        options.filter.push({
+        (options.filter as any[]).push({
           field: 'companyID',
           op: 'eq',
           value: args.companyId
         });
       }
-      
+
       if (typeof args.isActive === 'boolean') {
         if (!options.filter) options.filter = [];
-        options.filter.push({
+        (options.filter as any[]).push({
           field: 'isActive',
           op: 'eq',
           value: args.isActive
         });
       }
-      
-      options.pageSize = Math.min(pageSize, 500);
 
-      const contacts = await this.autotaskService.searchContacts(options, tenantContext, tracker);
-      this.logger.info(`🏢 Found ${contacts.length} contacts`, {
+      const searchBody = this.autotaskService.buildContactsQueryPayload(options as any);
+      const fetchResult = await this.autotaskService.fetchPaginatedEntity(
+        'Contacts',
+        searchBody,
+        tenantContext,
+        tracker,
+        maxItems,
+        { enrichment: 'contacts', responseKey: 'contacts' }
+      );
+
+      this.logger.info(`🏢 Found ${fetchResult.items.length} contacts`, {
         tenant: tenantContext,
         sessionId: tenantContext?.sessionId
       });
-      
-      // Get total count for pagination
-      let totalCount = contacts.length;
-      try {
-        const countResult = await this.autotaskService.countContacts(options, tenantContext, tracker);
-        totalCount = countResult ?? contacts.length;
-      } catch (countError) {
-        this.logger.warn('Could not get total count for contacts, using returned count');
-      }
-      
-      // Pre-fetch unique IDs to avoid cache stampede
-      await this.prefetchMappingIds(
-        contacts,
-        ['companyID'],
-        [],
+
+      const enrichedContacts = await this.enrichSearchRowsForContinuation(
+        'contacts',
+        fetchResult.items,
         tenantContext,
         tracker
       );
-      
-      // Enhanced results with mapped names (cache is now populated)
-      const mappingService = await this.getMappingService();
-      const enhancedContacts = await Promise.all(
-        contacts.map(async (contact: any) => {
-          const enhanced: any = { ...contact };
-          
-          // Add company name if available (from cache)
-          if (contact.companyID) {
-            try {
-              enhanced._enhanced = enhanced._enhanced || {};
-              enhanced._enhanced.companyName = await mappingService.getCompanyName(contact.companyID, tenantContext, tracker);
-            } catch (error) {
-              this.logger.info(`Failed to map company ID ${contact.companyID}:`, error);
-              enhanced._enhanced = enhanced._enhanced || {};
-              enhanced._enhanced.companyName = `Unknown (${contact.companyID})`;
-            }
-          }
-          
-          return enhanced;
-        })
-      );
 
-      // Apply pagination protocol
-      const paginationResult = PaginationEnforcer.enforce({
-        items: enhancedContacts,
-        totalCount,
-        currentPage: page,
-        pageSize: Math.min(pageSize, 500),
-        entityName: 'contacts'
-      });
+      const paginationResult = this.applyCursorPagination(fetchResult, enrichedContacts, 'contacts');
 
-      // Build response with pagination protocol
       const response = {
         contacts: paginationResult.items,
         _paginationProtocol: paginationResult.protocol
       };
 
-      const content = [{
-        type: 'text',
-        text: JSON.stringify(response, null, 2)
-      }];
+      const content = [
+        {
+          type: 'text',
+          text: JSON.stringify(response, null, 2)
+        }
+      ];
 
       return {
         content,
@@ -3335,101 +3730,109 @@ export class EnhancedAutotaskToolHandler {
 
   private async searchTickets(args: Record<string, any>, tenantContext?: TenantContext, tracker?: ApiCallTracker): Promise<McpToolResult> {
     try {
-      const { page = 1, pageSize = 500 } = args;
-      const options: any = {};
-      
-      // Use the proper searchTerm parameter instead of custom filter
+      const legacy = this.rejectLegacySearchPage(args.page);
+      if (legacy) {
+        return legacy;
+      }
+
+      const pageSize = Math.min(Number(args.pageSize) || 500, 500);
+      const maxItems =
+        typeof args.maxItems === 'number' && args.maxItems > 0 ? args.maxItems : undefined;
+      const options: any = { pageSize, maxItems };
+
       if (args.searchTerm) {
         options.searchTerm = args.searchTerm;
       }
-      
+
       if (typeof args.status === 'number') {
         options.status = args.status;
       }
-      
+
       if (typeof args.priority === 'number') {
         options.priority = args.priority;
       }
-      
+
       if (typeof args.companyID === 'number') {
         options.companyId = args.companyID;
       }
-      
+
       if (typeof args.projectID === 'number') {
         options.projectId = args.projectID;
       }
-      
+
       if (typeof args.contractID === 'number') {
         options.contractId = args.contractID;
       }
-      
+
       if (typeof args.assignedResourceID === 'number') {
         options.assignedResourceID = args.assignedResourceID;
       }
-      
+
       if (typeof args.unassigned === 'boolean') {
         options.unassigned = args.unassigned;
       }
-      
+
       if (args.createdDateFrom) {
         options.createdDateFrom = args.createdDateFrom;
       }
-      
+
       if (args.createdDateTo) {
         options.createdDateTo = args.createdDateTo;
       }
-      
-      options.pageSize = Math.min(pageSize, 500);
 
-      let tickets = await this.autotaskService.searchTickets(options, tenantContext, tracker);
-      
-      // If no results with searchTerm and we haven't tried the alternate field, try fallback
-      if (tickets.length === 0 && args.searchTerm) {
+      let fetchResult = await this.autotaskService.fetchPaginatedEntity(
+        'Tickets',
+        this.autotaskService.buildTicketsQueryPayload(options),
+        tenantContext,
+        tracker,
+        maxItems,
+        { enrichment: 'tickets', responseKey: 'tickets' }
+      );
+
+      if (fetchResult.items.length === 0 && args.searchTerm) {
         const searchTerm = args.searchTerm;
         const looksLikeTicketNumber = /^T\d+\.\d+$/.test(searchTerm);
-        
+
         this.logger.info(`No results found, trying fallback search for: ${searchTerm}`);
-        
-        // Create fallback options with alternate search strategy
-        const fallbackOptions = { ...options };
-        delete fallbackOptions.searchTerm; // Remove to avoid conflict
-        
+
+        const fallbackOptions: any = { ...options };
+        delete fallbackOptions.searchTerm;
+
         if (looksLikeTicketNumber) {
-          // Original search was ticket number, try title search as fallback
-          fallbackOptions.filter = [{
-            op: 'contains',
-            field: 'title',
-            value: searchTerm
-          }];
+          fallbackOptions.filter = [
+            {
+              op: 'contains',
+              field: 'title',
+              value: searchTerm
+            }
+          ];
         } else {
-          // Original search was title, try partial ticket number match as fallback
-          fallbackOptions.filter = [{
-            op: 'contains',
-            field: 'ticketNumber',
-            value: searchTerm
-          }];
+          fallbackOptions.filter = [
+            {
+              op: 'contains',
+              field: 'ticketNumber',
+              value: searchTerm
+            }
+          ];
         }
-        
+
         try {
-          tickets = await this.autotaskService.searchTickets(fallbackOptions, tenantContext, tracker);
-          if (tickets.length > 0) {
-            this.logger.info(`Fallback search found ${tickets.length} tickets`);
+          fetchResult = await this.autotaskService.fetchPaginatedEntity(
+            'Tickets',
+            this.autotaskService.buildTicketsQueryPayload(fallbackOptions),
+            tenantContext,
+            tracker,
+            maxItems,
+            { enrichment: 'tickets', responseKey: 'tickets' }
+          );
+          if (fetchResult.items.length > 0) {
+            this.logger.info(`Fallback search found ${fetchResult.items.length} tickets`);
           }
         } catch (error) {
           this.logger.warn(`Fallback search failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
         }
       }
-      
-      // Get total count for pagination
-      let totalCount = tickets.length;
-      try {
-        const countResult = await this.autotaskService.countTickets(options, tenantContext, tracker);
-        totalCount = countResult ?? tickets.length;
-      } catch (countError) {
-        this.logger.warn('Could not get total count for tickets, using returned count');
-      }
-      
-      // Determine which filters are available but not used (for performance suggestions)
+
       const unusedFilters: string[] = [];
       if (!args.searchTerm) unusedFilters.push('searchTerm (ticket number or title)');
       if (args.status === undefined) unusedFilters.push('status (1=New, 2=In Progress, 5=Complete, etc)');
@@ -3437,77 +3840,30 @@ export class EnhancedAutotaskToolHandler {
       if (!args.companyID) unusedFilters.push('companyID (filter by specific customer)');
       if (!args.assignedResourceID) unusedFilters.push('assignedResourceID (filter by technician)');
       if (!args.createdDateFrom) unusedFilters.push('createdDateFrom (filter by date range)');
-      
-      // Pre-fetch unique IDs to avoid cache stampede
-      await this.prefetchMappingIds(
-        tickets,
-        ['companyID'],
-        ['assignedResourceID'],
+
+      const shrunk = fetchResult.items.map((t: any) => this.autotaskService.shrinkTicketForList(t));
+      const enhancedTickets = await this.enrichSearchRowsForContinuation(
+        'tickets',
+        shrunk,
         tenantContext,
         tracker
       );
-      
-      // Enhanced results with mapped names (cache is now populated)
-      const mappingService = await this.getMappingService();
-      const enhancedTickets = await Promise.all(
-        tickets.map(async (ticket: any) => {
-          const enhanced: any = { ...ticket };
-          
-          // Add company name if available (from cache)
-          if (ticket.companyID) {
-            try {
-              enhanced._enhanced = enhanced._enhanced || {};
-              enhanced._enhanced.companyName = await mappingService.getCompanyName(ticket.companyID, tenantContext, tracker);
-            } catch (error) {
-              this.logger.info(`Failed to map company ID ${ticket.companyID}:`, error);
-              enhanced._enhanced = enhanced._enhanced || {};
-              enhanced._enhanced.companyName = `Unknown (${ticket.companyID})`;
-            }
-          }
 
-          // Add assigned resource name if available (from cache)
-          if (ticket.assignedResourceID) {
-            try {
-              enhanced._enhanced = enhanced._enhanced || {};
-              enhanced._enhanced.assignedResourceName = await mappingService.getResourceName(ticket.assignedResourceID, tenantContext, tracker);
-            } catch (error) {
-              this.logger.info(`Failed to map assigned resource ID ${ticket.assignedResourceID}:`, error);
-              enhanced._enhanced = enhanced._enhanced || {};
-              enhanced._enhanced.assignedResourceName = `Unknown (${ticket.assignedResourceID})`;
-            }
-          }
-
-          // Note: Contact name mapping would require additional implementation
-          if (ticket.contactID) {
-            enhanced._enhanced = enhanced._enhanced || {};
-            enhanced._enhanced.contactName = `Contact ID: ${ticket.contactID}`;
-          }
-          
-          return enhanced;
-        })
-      );
-
-      // Apply pagination protocol
-      const paginationResult = PaginationEnforcer.enforce({
-        items: enhancedTickets,
-        totalCount,
-        currentPage: page,
-        pageSize: Math.min(pageSize, 500),
-        entityName: 'tickets',
-        availableFilters: unusedFilters,
-        largeResultThreshold: 500
+      const paginationResult = this.applyCursorPagination(fetchResult, enhancedTickets, 'tickets', {
+        availableFilters: unusedFilters
       });
 
-      // Build response with pagination protocol
       const response = {
         tickets: paginationResult.items,
         _paginationProtocol: paginationResult.protocol
       };
 
-      const content = [{
-        type: 'text',
-        text: JSON.stringify(response, null, 2)
-      }];
+      const content = [
+        {
+          type: 'text',
+          text: JSON.stringify(response, null, 2)
+        }
+      ];
 
       return {
         content,
@@ -3558,11 +3914,18 @@ export class EnhancedAutotaskToolHandler {
 
   private async searchProjects(args: Record<string, any>, tenantContext?: TenantContext, tracker?: ApiCallTracker): Promise<McpToolResult> {
     try {
-      const options: any = {};
-      
-      // Build filter array
+      const legacy = this.rejectLegacySearchPage(args.page);
+      if (legacy) {
+        return legacy;
+      }
+
+      const pageSize = Math.min(Number(args.pageSize) || 500, 500);
+      const maxItems =
+        typeof args.maxItems === 'number' && args.maxItems > 0 ? args.maxItems : undefined;
+      const options: Record<string, unknown> = { pageSize, maxItems };
+
       const filters: any[] = [];
-      
+
       if (args.searchTerm) {
         filters.push({
           field: 'projectName',
@@ -3570,7 +3933,7 @@ export class EnhancedAutotaskToolHandler {
           value: args.searchTerm
         });
       }
-      
+
       if (typeof args.companyId === 'number') {
         filters.push({
           field: 'companyID',
@@ -3578,7 +3941,7 @@ export class EnhancedAutotaskToolHandler {
           value: args.companyId
         });
       }
-      
+
       if (typeof args.status === 'number') {
         filters.push({
           field: 'status',
@@ -3586,7 +3949,7 @@ export class EnhancedAutotaskToolHandler {
           value: args.status
         });
       }
-      
+
       if (typeof args.projectType === 'number') {
         filters.push({
           field: 'projectType',
@@ -3594,7 +3957,7 @@ export class EnhancedAutotaskToolHandler {
           value: args.projectType
         });
       }
-      
+
       if (typeof args.projectManagerResourceID === 'number') {
         filters.push({
           field: 'projectManagerResourceID',
@@ -3602,64 +3965,39 @@ export class EnhancedAutotaskToolHandler {
           value: args.projectManagerResourceID
         });
       }
-      
+
       if (filters.length > 0) {
         options.filter = filters;
       }
-      
-      if (args.pageSize) {
-        options.pageSize = args.pageSize;
-      }
 
-      const projects = await this.autotaskService.searchProjects(options, tenantContext, tracker);
-      
-      // Pre-fetch unique IDs to avoid cache stampede
-      await this.prefetchMappingIds(
-        projects,
-        ['companyID'],
-        [],
+      const searchBody = this.autotaskService.buildProjectsQueryPayload(options as any);
+      const fetchResult = await this.autotaskService.fetchPaginatedEntity(
+        'Projects',
+        searchBody,
+        tenantContext,
+        tracker,
+        maxItems,
+        { enrichment: 'projects', responseKey: 'projects' }
+      );
+
+      const shrunk = fetchResult.items.map((p: any) => this.autotaskService.shrinkProjectForList(p));
+      const enrichedProjects = await this.enrichSearchRowsForContinuation(
+        'projects',
+        shrunk,
         tenantContext,
         tracker
       );
-      
-      // Enhanced results with mapped names (cache is now populated)
-      const mappingService = await this.getMappingService();
-      const enhancedProjects = await Promise.all(
-        projects.map(async (project: any) => {
-          const enhanced: any = { ...project };
-          
-          // Add company name if available (from cache)
-          if (project.companyID) {
-            try {
-              enhanced._enhanced = enhanced._enhanced || {};
-              enhanced._enhanced.companyName = await mappingService.getCompanyName(project.companyID, tenantContext, tracker);
-            } catch (error) {
-              this.logger.info(`Failed to map company ID ${project.companyID}:`, error);
-              enhanced._enhanced = enhanced._enhanced || {};
-              enhanced._enhanced.companyName = `Unknown (${project.companyID})`;
-            }
-          }
-          
-          return enhanced;
-        })
-      );
 
-      const resultsText = enhancedProjects.length > 0 
-        ? `Found ${enhancedProjects.length} projects:\n\n${enhancedProjects.map(project => 
-            `ID: ${project.id}\nName: ${project.projectName}\nCompany: ${project._enhanced?.companyName || 'Unknown'}\n`
-          ).join('\n')}`
-        : 'No projects found matching the criteria';
+      const paginationResult = this.applyCursorPagination(fetchResult, enrichedProjects, 'projects');
 
-      const content = [{
-        type: 'text',
-        text: resultsText
-      }];
-
-      // Add guidance for large responses
-      const contentWithGuidance = this.addLargeResponseGuidance(content, enhancedProjects.length, 'projects');
+      const response = {
+        projects: paginationResult.items,
+        _paginationProtocol: paginationResult.protocol
+      };
 
       return {
-        content: contentWithGuidance
+        content: [{ type: 'text', text: JSON.stringify(response, null, 2) }],
+        isError: false
       };
     } catch (error) {
       throw new Error(`Failed to search projects: ${error instanceof Error ? error.message : 'Unknown error'}`);
@@ -3668,12 +4006,18 @@ export class EnhancedAutotaskToolHandler {
 
   private async searchResources(args: Record<string, any>, tenantContext?: TenantContext, tracker?: ApiCallTracker): Promise<McpToolResult> {
     try {
-      const options: any = {};
-      
-      // Build filters based on provided search criteria
+      const legacy = this.rejectLegacySearchPage(args.page);
+      if (legacy) {
+        return legacy;
+      }
+
+      const pageSize = Math.min(Number(args.pageSize) || 500, 500);
+      const maxItems =
+        typeof args.maxItems === 'number' && args.maxItems > 0 ? args.maxItems : undefined;
+      const options: Record<string, unknown> = { pageSize, maxItems };
+
       const filters: any[] = [];
-      
-      // Individual field searches (optional)
+
       if (args.firstName) {
         filters.push({
           field: 'firstName',
@@ -3681,7 +4025,7 @@ export class EnhancedAutotaskToolHandler {
           value: args.firstName
         });
       }
-      
+
       if (args.lastName) {
         filters.push({
           field: 'lastName',
@@ -3689,7 +4033,7 @@ export class EnhancedAutotaskToolHandler {
           value: args.lastName
         });
       }
-      
+
       if (args.email) {
         filters.push({
           field: 'email',
@@ -3697,24 +4041,15 @@ export class EnhancedAutotaskToolHandler {
           value: args.email
         });
       }
-      
-      // Fallback: if searchTerm is provided but no specific fields, search across name fields
-      // Note: This will use AND logic, so it's better to use specific field parameters
+
       if (args.searchTerm && !args.firstName && !args.lastName && !args.email) {
         filters.push({
           field: 'firstName',
           op: 'contains',
           value: args.searchTerm
         });
-        // Note: Commented out lastName search to avoid AND logic issues
-        // To search lastName, use the lastName parameter instead
-        // filters.push({
-        //   field: 'lastName',
-        //   op: 'contains',
-        //   value: args.searchTerm
-        // });
       }
-      
+
       if (typeof args.isActive === 'boolean') {
         filters.push({
           field: 'isActive',
@@ -3722,40 +4057,38 @@ export class EnhancedAutotaskToolHandler {
           value: args.isActive
         });
       }
-      
-      // Only set filter if we have conditions
+
       if (filters.length > 0) {
         options.filter = filters;
       }
-      
-      if (args.pageSize) {
-        options.pageSize = args.pageSize;
-      }
 
-      const resources = await this.autotaskService.searchResources(options, tenantContext, tracker);
-      
-      // Enhanced results with mapped names
-      const enhancedResources = resources.map((resource: any) => {
-        const enhanced: any = { ...resource };
-        
-        // Add resource name
-        enhanced._enhanced = enhanced._enhanced || {};
-        enhanced._enhanced.resourceName = `${resource.firstName} ${resource.lastName}`.trim();
-        
-        return enhanced;
-      });
+      const searchBody = this.autotaskService.buildResourcesQueryPayload(options as any);
+      const fetchResult = await this.autotaskService.fetchPaginatedEntity(
+        'Resources',
+        searchBody,
+        tenantContext,
+        tracker,
+        maxItems,
+        { enrichment: 'resources', responseKey: 'resources' }
+      );
 
-      const resultsText = enhancedResources.length > 0 
-        ? `Found ${enhancedResources.length} resources:\n\n${enhancedResources.map(resource => 
-            `ID: ${resource.id}\nName: ${resource.firstName} ${resource.lastName}\nActive: ${resource.isActive}\n`
-          ).join('\n')}`
-        : 'No resources found matching the criteria';
+      const enrichedResources = await this.enrichSearchRowsForContinuation(
+        'resources',
+        fetchResult.items,
+        tenantContext,
+        tracker
+      );
+
+      const paginationResult = this.applyCursorPagination(fetchResult, enrichedResources, 'resources');
+
+      const response = {
+        resources: paginationResult.items,
+        _paginationProtocol: paginationResult.protocol
+      };
 
       return {
-        content: [{
-          type: 'text',
-          text: resultsText
-        }]
+        content: [{ type: 'text', text: JSON.stringify(response, null, 2) }],
+        isError: false
       };
     } catch (error) {
       throw new Error(`Failed to search resources: ${error instanceof Error ? error.message : 'Unknown error'}`);
@@ -3886,13 +4219,16 @@ export class EnhancedAutotaskToolHandler {
       } else if (searchTerm) {
         // Search for project by name
         const projects = await this.autotaskService.searchProjects({
-          filter: [{
-            field: 'projectName',
-            op: 'contains',
-            value: searchTerm
-          }],
-          pageSize: 1
-        }, tenantContext);
+          filter: [
+            {
+              field: 'projectName',
+              op: 'contains',
+              value: searchTerm
+            }
+          ],
+          pageSize: 500,
+          maxItems: 1
+        }, tenantContext, tracker);
         
         if (projects.length === 0) {
           return this.createNotFoundResponse('project', searchTerm);
@@ -3947,13 +4283,16 @@ export class EnhancedAutotaskToolHandler {
           this.logger.info(`Fetching tasks for project ${projectData.id}`, { projectId: projectData.id });
           
           const tasks = await this.autotaskService.searchTasks({
-            filter: [{
-              field: 'projectID',
-              op: 'eq',
-              value: projectData.id
-            }],
-            pageSize: Math.max(taskPageSize, 130)
-          }, tenantContext);
+            filter: [
+              {
+                field: 'projectID',
+                op: 'eq',
+                value: projectData.id
+              }
+            ],
+            pageSize: Math.min(500, Math.max(Number(taskPageSize) || 25, 130)),
+            maxItems: Math.min(5000, Math.max(Number(taskPageSize) || 25, 130))
+          }, tenantContext, tracker);
 
           this.logger.info(`Found ${tasks.length} tasks for project ${projectData.id}`);
 
@@ -4248,34 +4587,39 @@ export class EnhancedAutotaskToolHandler {
 
   private async searchTimeEntries(args: Record<string, any>, tenantContext?: TenantContext, tracker?: ApiCallTracker): Promise<McpToolResult> {
     try {
-      const { ticketID, taskID, resourceID, resourceId, dateFrom, dateTo, page = 1, pageSize = 500 } = args;
-      
-      // Build filter for time entries search
+      const legacy = this.rejectLegacySearchPage(args.page);
+      if (legacy) {
+        return legacy;
+      }
+
+      const { ticketID, taskID, resourceID, resourceId, dateFrom, dateTo } = args;
+      const pageSize = Math.min(Number(args.pageSize) || 500, 500);
+      const maxItems =
+        typeof args.maxItems === 'number' && args.maxItems > 0 ? args.maxItems : undefined;
+
       const filter: any[] = [];
-      
+
       if (ticketID) {
         filter.push({ field: 'ticketID', op: 'eq', value: ticketID });
       }
-      
+
       if (taskID) {
         filter.push({ field: 'taskID', op: 'eq', value: taskID });
       }
-      
+
       if (resourceID || resourceId) {
         filter.push({ field: 'resourceID', op: 'eq', value: resourceID || resourceId });
       }
-      
+
       if (dateFrom) {
         filter.push({ field: 'dateWorked', op: 'gte', value: dateFrom });
       }
-      
+
       if (dateTo) {
         filter.push({ field: 'dateWorked', op: 'lte', value: dateTo });
       }
-      
-      // If no specific filters, get recent entries
+
       if (filter.length === 0) {
-        // Get entries from last 30 days by default
         const thirtyDaysAgo = new Date();
         thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
         filter.push({ field: 'dateWorked', op: 'gte', value: thirtyDaysAgo.toISOString().split('T')[0] });
@@ -4283,83 +4627,43 @@ export class EnhancedAutotaskToolHandler {
 
       const queryOptions: any = {
         filter,
-        pageSize: Math.min(pageSize, 500)
+        pageSize,
+        maxItems
       };
 
-      const timeEntries = await this.autotaskService.getTimeEntries(queryOptions, tenantContext, tracker);
-      
-      // Pre-fetch unique IDs to avoid cache stampede (N parallel API calls for same ID)
-      await this.prefetchMappingIds(
-        timeEntries,
-        [], // No company fields in time entries
-        ['resourceID', 'billingApprovalResourceID'],
+      const searchBody = this.autotaskService.buildTimeEntriesQueryPayload(queryOptions);
+      const fetchResult = await this.autotaskService.fetchPaginatedEntity(
+        'TimeEntries',
+        searchBody,
+        tenantContext,
+        tracker,
+        maxItems,
+        { enrichment: 'timeentries', responseKey: 'timeEntries' }
+      );
+
+      const enhancedTimeEntries = await this.enrichSearchRowsForContinuation(
+        'timeentries',
+        fetchResult.items,
         tenantContext,
         tracker
       );
-      
-      // Enhanced results with mapped names (cache is now populated)
-      const mappingService = await this.getMappingService();
-      const enhancedTimeEntries = await Promise.all(
-        timeEntries.map(async (entry: any) => {
-          const enhanced: any = { ...entry };
-          enhanced._enhanced = {};
-          
-          // Add resource name if available (from cache)
-          if (entry.resourceID) {
-            try {
-              const resourceName = await mappingService.getResourceName(entry.resourceID, tenantContext, tracker);
-              enhanced._enhanced.resourceName = resourceName ?? `Unknown (${entry.resourceID})`;
-            } catch (error) {
-              this.logger.debug(`Failed to map resource ID ${entry.resourceID}:`, error);
-              enhanced._enhanced.resourceName = `Unknown (${entry.resourceID})`;
-            }
-          }
-          
-          // Add billing approval resource name if available (from cache)
-          if (entry.billingApprovalResourceID) {
-            try {
-              const resourceName = await mappingService.getResourceName(entry.billingApprovalResourceID, tenantContext, tracker);
-              enhanced._enhanced.billingApprovalResourceName = resourceName ?? `Unknown (${entry.billingApprovalResourceID})`;
-            } catch (error) {
-              this.logger.debug(`Failed to map billing approval resource ID ${entry.billingApprovalResourceID}:`, error);
-              enhanced._enhanced.billingApprovalResourceName = `Unknown (${entry.billingApprovalResourceID})`;
-            }
-          }
-          
-          return enhanced;
-        })
-      );
-      
-      // Get total count for pagination
-      let totalCount = enhancedTimeEntries.length;
-      try {
-        const countResult = await this.autotaskService.countTimeEntries({ filter }, tenantContext, tracker);
-        totalCount = countResult ?? enhancedTimeEntries.length;
-      } catch (countError) {
-        this.logger.warn('Could not get total count for time entries, using returned count');
-      }
 
-      // Apply pagination protocol
-      const paginationResult = PaginationEnforcer.enforce({
-        items: enhancedTimeEntries,
-        totalCount,
-        currentPage: page,
-        pageSize: Math.min(pageSize, 500),
-        entityName: 'time entries',
+      const paginationResult = this.applyCursorPagination(fetchResult, enhancedTimeEntries, 'time entries', {
         sumField: 'hoursWorked'
       });
 
-      // Build response with pagination protocol
       const response = {
         timeEntries: paginationResult.items,
         _paginationProtocol: paginationResult.protocol
       };
-      
-      const content = [{
-        type: 'text',
-        text: JSON.stringify(response, null, 2)
-      }];
-      
+
+      const content = [
+        {
+          type: 'text',
+          text: JSON.stringify(response, null, 2)
+        }
+      ];
+
       return {
         content,
         isError: false
@@ -4375,122 +4679,98 @@ export class EnhancedAutotaskToolHandler {
 
   private async searchTasks(args: Record<string, any>, tenantContext?: TenantContext, tracker?: ApiCallTracker): Promise<McpToolResult> {
     try {
-      const { projectId, assignedResourceId, status, priorityLabel, searchTerm, dueDateFrom, dueDateTo, createdDateFrom, createdDateTo, pageSize } = args;
-      
-      // Build filter for tasks search
+      const legacy = this.rejectLegacySearchPage(args.page);
+      if (legacy) {
+        return legacy;
+      }
+
+      const pageSize = Math.min(Number(args.pageSize) || 500, 500);
+      const maxItems =
+        typeof args.maxItems === 'number' && args.maxItems > 0 ? args.maxItems : undefined;
+
+      const {
+        projectId,
+        assignedResourceId,
+        status,
+        priorityLabel,
+        searchTerm,
+        dueDateFrom,
+        dueDateTo,
+        createdDateFrom,
+        createdDateTo
+      } = args;
+
       const filter: any[] = [];
-      
+
       if (projectId) {
         filter.push({ field: 'projectID', op: 'eq', value: projectId });
       }
-      
+
       if (assignedResourceId) {
         filter.push({ field: 'assignedResourceID', op: 'eq', value: assignedResourceId });
       }
-      
+
       if (status !== undefined) {
         filter.push({ field: 'status', op: 'eq', value: status });
       }
-      
+
       if (priorityLabel) {
         filter.push({ field: 'priorityLabel', op: 'eq', value: priorityLabel });
       }
-      
+
       if (searchTerm) {
         filter.push({ field: 'title', op: 'contains', value: searchTerm });
       }
-      
+
       if (dueDateFrom) {
         filter.push({ field: 'endDateTime', op: 'gte', value: dueDateFrom });
       }
-      
+
       if (dueDateTo) {
         filter.push({ field: 'endDateTime', op: 'lte', value: dueDateTo });
       }
-      
+
       if (createdDateFrom) {
         filter.push({ field: 'createDateTime', op: 'gte', value: createdDateFrom });
       }
-      
+
       if (createdDateTo) {
         filter.push({ field: 'createDateTime', op: 'lte', value: createdDateTo });
       }
-      
-      // If no specific filters, get all active tasks
+
       if (filter.length === 0) {
         filter.push({ field: 'id', op: 'gte', value: 0 });
       }
 
-      const queryOptions = {
-        filter,
-        ...(pageSize && { pageSize })
-      };
+      const options: Record<string, unknown> = { filter, pageSize, maxItems };
 
-      const tasks = await this.autotaskService.searchTasks(queryOptions, tenantContext, tracker);
-      
-      // Pre-fetch unique IDs to avoid cache stampede
-      await this.prefetchMappingIds(
-        tasks,
-        [], // No company fields in tasks
-        ['assignedResourceID', 'creatorResourceID', 'completedByResourceID'],
+      const searchBody = this.autotaskService.buildTasksQueryPayload(options as any);
+      const fetchResult = await this.autotaskService.fetchPaginatedEntity(
+        'Tasks',
+        searchBody,
+        tenantContext,
+        tracker,
+        maxItems,
+        { enrichment: 'tasks', responseKey: 'tasks' }
+      );
+
+      const shrunk = fetchResult.items.map((t: any) => this.autotaskService.shrinkTaskForList(t));
+      const enrichedTasks = await this.enrichSearchRowsForContinuation(
+        'tasks',
+        shrunk,
         tenantContext,
         tracker
       );
-      
-      // Enhanced results with mapped names (cache is now populated)
-      const mappingService = await this.getMappingService();
-      const enhancedTasks = await Promise.all(
-        tasks.map(async (task: any) => {
-          const enhanced: any = { ...task };
-          enhanced._enhanced = {};
-          
-          // Add assigned resource name if available (from cache)
-          if (task.assignedResourceID) {
-            try {
-              const resourceName = await mappingService.getResourceName(task.assignedResourceID, tenantContext, tracker);
-              enhanced._enhanced.assignedResourceName = resourceName ?? `Unknown (${task.assignedResourceID})`;
-            } catch (error) {
-              this.logger.debug(`Failed to map assigned resource ID ${task.assignedResourceID}:`, error);
-              enhanced._enhanced.assignedResourceName = `Unknown (${task.assignedResourceID})`;
-            }
-          }
-          
-          // Add creator resource name if available (from cache)
-          if (task.creatorResourceID) {
-            try {
-              const resourceName = await mappingService.getResourceName(task.creatorResourceID, tenantContext, tracker);
-              enhanced._enhanced.creatorResourceName = resourceName ?? `Unknown (${task.creatorResourceID})`;
-            } catch (error) {
-              this.logger.debug(`Failed to map creator resource ID ${task.creatorResourceID}:`, error);
-              enhanced._enhanced.creatorResourceName = `Unknown (${task.creatorResourceID})`;
-            }
-          }
-          
-          // Add completed by resource name if available (from cache)
-          if (task.completedByResourceID) {
-            try {
-              const resourceName = await mappingService.getResourceName(task.completedByResourceID, tenantContext, tracker);
-              enhanced._enhanced.completedByResourceName = resourceName ?? `Unknown (${task.completedByResourceID})`;
-            } catch (error) {
-              this.logger.debug(`Failed to map completed by resource ID ${task.completedByResourceID}:`, error);
-              enhanced._enhanced.completedByResourceName = `Unknown (${task.completedByResourceID})`;
-            }
-          }
-          
-          return enhanced;
-        })
-      );
-      
-      const content = [{
-        type: 'text',
-        text: JSON.stringify(enhancedTasks, null, 2)
-      }];
 
-      // Add guidance for large responses
-      const contentWithGuidance = this.addLargeResponseGuidance(content, enhancedTasks.length, 'tasks');
-      
+      const paginationResult = this.applyCursorPagination(fetchResult, enrichedTasks, 'tasks');
+
+      const response = {
+        tasks: paginationResult.items,
+        _paginationProtocol: paginationResult.protocol
+      };
+
       return {
-        content: contentWithGuidance,
+        content: [{ type: 'text', text: JSON.stringify(response, null, 2) }],
         isError: false
       };
     } catch (error) {
@@ -4848,76 +5128,69 @@ export class EnhancedAutotaskToolHandler {
 
   private async searchContracts(args: Record<string, any>, tenantContext?: TenantContext, tracker?: ApiCallTracker): Promise<McpToolResult> {
     try {
-      const { companyId, status, contractType, searchTerm, pageSize } = args;
-      
-      // Build filter for contracts search
+      const legacy = this.rejectLegacySearchPage(args.page);
+      if (legacy) {
+        return legacy;
+      }
+
+      const pageSize = Math.min(Number(args.pageSize) || 500, 500);
+      const maxItems =
+        typeof args.maxItems === 'number' && args.maxItems > 0 ? args.maxItems : undefined;
+
+      const { companyId, status, contractType, searchTerm } = args;
+
       const filter: any[] = [];
-      
+
       if (companyId) {
         filter.push({ field: 'companyID', op: 'eq', value: companyId });
       }
-      
+
       if (status !== undefined) {
         filter.push({ field: 'status', op: 'eq', value: status });
       }
-      
+
       if (contractType !== undefined) {
         filter.push({ field: 'contractType', op: 'eq', value: contractType });
       }
-      
+
       if (searchTerm) {
         filter.push({ field: 'contractName', op: 'contains', value: searchTerm });
       }
-      
-      // If no specific filters, get all contracts
+
       if (filter.length === 0) {
         filter.push({ field: 'id', op: 'gte', value: 0 });
       }
 
-      const queryOptions = {
-        filter,
-        ...(pageSize && { pageSize })
-      };
+      const options: Record<string, unknown> = { filter, pageSize, maxItems };
 
-      const contracts = await this.autotaskService.searchContracts(queryOptions, tenantContext, tracker);
-      
-      // Pre-fetch unique IDs to avoid cache stampede
-      await this.prefetchMappingIds(
-        contracts,
-        ['companyID'],
-        [],
+      const searchBody = this.autotaskService.buildContractsQueryPayload(options as any);
+      const fetchResult = await this.autotaskService.fetchPaginatedEntity(
+        'Contracts',
+        searchBody,
+        tenantContext,
+        tracker,
+        maxItems,
+        { enrichment: 'contracts', responseKey: 'contracts' }
+      );
+
+      const enriched = await this.enrichSearchRowsForContinuation(
+        'contracts',
+        fetchResult.items,
         tenantContext,
         tracker
       );
-      
-      // Enhanced results with mapped names (cache is now populated)
-      const mappingService = await this.getMappingService();
-      const enhancedContracts = await Promise.all(
-        contracts.map(async (contract: any) => {
-          const enhanced: any = { ...contract };
-          enhanced._enhanced = {};
-          
-          // Add company name if available (from cache)
-          if (contract.companyID) {
-            try {
-              const companyName = await mappingService.getCompanyName(contract.companyID, tenantContext, tracker);
-              enhanced._enhanced.companyName = companyName ?? `Unknown (${contract.companyID})`;
-            } catch (error) {
-              this.logger.debug(`Failed to map company ID ${contract.companyID}:`, error);
-              enhanced._enhanced.companyName = `Unknown (${contract.companyID})`;
-            }
-          }
-          
-          // Add billing contact name if available (contact ID would require separate lookup)
-          if (contract.billToCompanyContactID) {
-            enhanced._enhanced.billToContactId = contract.billToCompanyContactID;
-          }
-          
-          return enhanced;
-        })
-      );
-      
-      return this.createDataResponse(enhancedContracts);
+
+      const paginationResult = this.applyCursorPagination(fetchResult, enriched, 'contracts');
+
+      const response = {
+        contracts: paginationResult.items,
+        _paginationProtocol: paginationResult.protocol
+      };
+
+      return {
+        content: [{ type: 'text', text: JSON.stringify(response, null, 2) }],
+        isError: false
+      };
     } catch (error) {
       throw new Error(`Failed to search contracts: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
@@ -4925,80 +5198,66 @@ export class EnhancedAutotaskToolHandler {
 
   private async searchInvoices(args: Record<string, any>, tenantContext?: TenantContext, tracker?: ApiCallTracker): Promise<McpToolResult> {
     try {
-      const { companyId, fromDate, toDate, pageSize } = args;
-      // Build filter for invoices search
+      const legacy = this.rejectLegacySearchPage(args.page);
+      if (legacy) {
+        return legacy;
+      }
+
+      const pageSize = Math.min(Number(args.pageSize) || 500, 500);
+      const maxItems =
+        typeof args.maxItems === 'number' && args.maxItems > 0 ? args.maxItems : undefined;
+
+      const { companyId, fromDate, toDate } = args;
       const filter: any[] = [];
-      
+
       if (companyId) {
         filter.push({ field: 'companyID', op: 'eq', value: companyId });
       }
-      
+
       if (fromDate) {
         filter.push({ field: 'invoiceDateTime', op: 'gte', value: fromDate });
       }
-      
+
       if (toDate) {
         filter.push({ field: 'invoiceDateTime', op: 'lte', value: toDate });
       }
-       
-      
-      // If no specific filters, get recent invoices (last 30 days)
+
       if (filter.length === 0) {
         const thirtyDaysAgo = new Date();
         thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
         filter.push({ field: 'invoiceDateTime', op: 'gte', value: thirtyDaysAgo.toISOString().split('T')[0] });
       }
 
-      const queryOptions = {
-        filter,
-        ...(pageSize && { pageSize })
-      };
+      const options: Record<string, unknown> = { filter, pageSize, maxItems };
 
-      const invoices = await this.autotaskService.searchInvoices(queryOptions, tenantContext);
-      
-      // Pre-fetch unique IDs to avoid cache stampede
-      await this.prefetchMappingIds(
-        invoices,
-        ['companyID'],
-        ['creatorResourceID'],
+      const searchBody = this.autotaskService.buildInvoicesQueryPayload(options as any);
+      const fetchResult = await this.autotaskService.fetchPaginatedEntity(
+        'Invoices',
+        searchBody,
+        tenantContext,
+        tracker,
+        maxItems,
+        { enrichment: 'invoices', responseKey: 'invoices' }
+      );
+
+      const enriched = await this.enrichSearchRowsForContinuation(
+        'invoices',
+        fetchResult.items,
         tenantContext,
         tracker
       );
-      
-      // Enhanced results with mapped names (cache is now populated)
-      const mappingService = await this.getMappingService();
-      const enhancedInvoices = await Promise.all(
-        invoices.map(async (invoice: any) => {
-          const enhanced: any = { ...invoice };
-          enhanced._enhanced = {};
-          
-          // Add company name if available (from cache)
-          if (invoice.companyID) {
-            try {
-              const companyName = await mappingService.getCompanyName(invoice.companyID, tenantContext, tracker);
-              enhanced._enhanced.companyName = companyName ?? `Unknown (${invoice.companyID})`;
-            } catch (error) {
-              this.logger.debug(`Failed to map company ID ${invoice.companyID}:`, error);
-              enhanced._enhanced.companyName = `Unknown (${invoice.companyID})`;
-            }
-          }
-          
-          // Add creator resource name if available (from cache)
-          if (invoice.creatorResourceID) {
-            try {
-              const resourceName = await mappingService.getResourceName(invoice.creatorResourceID, tenantContext, tracker);
-              enhanced._enhanced.creatorResourceName = resourceName ?? `Unknown (${invoice.creatorResourceID})`;
-            } catch (error) {
-              this.logger.debug(`Failed to map creator resource ID ${invoice.creatorResourceID}:`, error);
-              enhanced._enhanced.creatorResourceName = `Unknown (${invoice.creatorResourceID})`;
-            }
-          }
-          
-          return enhanced;
-        })
-      );
-      
-      return this.createDataResponse(enhancedInvoices);
+
+      const paginationResult = this.applyCursorPagination(fetchResult, enriched, 'invoices');
+
+      const response = {
+        invoices: paginationResult.items,
+        _paginationProtocol: paginationResult.protocol
+      };
+
+      return {
+        content: [{ type: 'text', text: JSON.stringify(response, null, 2) }],
+        isError: false
+      };
     } catch (error) {
       throw new Error(`Failed to search invoices: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
@@ -5006,82 +5265,69 @@ export class EnhancedAutotaskToolHandler {
 
   private async searchQuotes(args: Record<string, any>, tenantContext?: TenantContext, tracker?: ApiCallTracker): Promise<McpToolResult> {
     try {
-      const { companyId, contactId, opportunityId, searchTerm, pageSize } = args;
-      
-      // Build filter for quotes search
+      const legacy = this.rejectLegacySearchPage(args.page);
+      if (legacy) {
+        return legacy;
+      }
+
+      const pageSize = Math.min(Number(args.pageSize) || 500, 500);
+      const maxItems =
+        typeof args.maxItems === 'number' && args.maxItems > 0 ? args.maxItems : undefined;
+
+      const { companyId, contactId, opportunityId, searchTerm } = args;
+
       const filter: any[] = [];
-      
+
       if (companyId) {
         filter.push({ field: 'accountId', op: 'eq', value: companyId });
       }
-      
+
       if (contactId) {
         filter.push({ field: 'contactId', op: 'eq', value: contactId });
       }
-      
+
       if (opportunityId) {
         filter.push({ field: 'opportunityId', op: 'eq', value: opportunityId });
       }
-      
+
       if (searchTerm) {
         filter.push({ field: 'description', op: 'contains', value: searchTerm });
       }
-      
-      // If no specific filters, get all quotes
+
       if (filter.length === 0) {
         filter.push({ field: 'id', op: 'gte', value: 0 });
       }
 
-      const queryOptions = {
-        filter,
-        ...(pageSize && { pageSize })
-      };
+      const options: Record<string, unknown> = { filter, pageSize, maxItems };
 
-      const quotes = await this.autotaskService.searchQuotes(queryOptions, tenantContext);
-      
-      // Pre-fetch unique IDs to avoid cache stampede
-      await this.prefetchMappingIds(
-        quotes,
-        ['accountId'],
-        ['creatorResourceID'],
+      const searchBody = this.autotaskService.buildQuotesQueryPayload(options as any);
+      const fetchResult = await this.autotaskService.fetchPaginatedEntity(
+        'Quotes',
+        searchBody,
+        tenantContext,
+        tracker,
+        maxItems,
+        { enrichment: 'quotes', responseKey: 'quotes' }
+      );
+
+      const enriched = await this.enrichSearchRowsForContinuation(
+        'quotes',
+        fetchResult.items,
         tenantContext,
         tracker
       );
-      
-      // Enhanced results with mapped names (cache is now populated)
-      const mappingService = await this.getMappingService();
-      const enhancedQuotes = await Promise.all(
-        quotes.map(async (quote: any) => {
-          const enhanced: any = { ...quote };
-          enhanced._enhanced = {};
-          
-          // Add company name if available (quotes use accountId, from cache)
-          if (quote.accountId) {
-            try {
-              const companyName = await mappingService.getCompanyName(quote.accountId, tenantContext, tracker);
-              enhanced._enhanced.companyName = companyName ?? `Unknown (${quote.accountId})`;
-            } catch (error) {
-              this.logger.debug(`Failed to map account ID ${quote.accountId}:`, error);
-              enhanced._enhanced.companyName = `Unknown (${quote.accountId})`;
-            }
-          }
-          
-          // Add creator resource name if available (from cache)
-          if (quote.creatorResourceID) {
-            try {
-              const resourceName = await mappingService.getResourceName(quote.creatorResourceID, tenantContext, tracker);
-              enhanced._enhanced.creatorResourceName = resourceName ?? `Unknown (${quote.creatorResourceID})`;
-            } catch (error) {
-              this.logger.debug(`Failed to map creator resource ID ${quote.creatorResourceID}:`, error);
-              enhanced._enhanced.creatorResourceName = `Unknown (${quote.creatorResourceID})`;
-            }
-          }
-          
-          return enhanced;
-        })
-      );
-      
-      return this.createDataResponse(enhancedQuotes);
+
+      const paginationResult = this.applyCursorPagination(fetchResult, enriched, 'quotes');
+
+      const response = {
+        quotes: paginationResult.items,
+        _paginationProtocol: paginationResult.protocol
+      };
+
+      return {
+        content: [{ type: 'text', text: JSON.stringify(response, null, 2) }],
+        isError: false
+      };
     } catch (error) {
       throw new Error(`Failed to search quotes: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
@@ -5127,12 +5373,18 @@ export class EnhancedAutotaskToolHandler {
 
   private async searchOpportunities(args: Record<string, any>, tenantContext?: TenantContext, tracker?: ApiCallTracker): Promise<McpToolResult> {
     try {
-      const { page = 1, pageSize = 500 } = args;
-      const options: any = {};
-      
-      // Build filter array
+      const legacy = this.rejectLegacySearchPage(args.page);
+      if (legacy) {
+        return legacy;
+      }
+
+      const pageSize = Math.min(Number(args.pageSize) || 500, 500);
+      const maxItems =
+        typeof args.maxItems === 'number' && args.maxItems > 0 ? args.maxItems : undefined;
+      const options: any = { pageSize, maxItems };
+
       const filters: any[] = [];
-      
+
       if (args.searchTerm) {
         filters.push({
           field: 'title',
@@ -5140,7 +5392,7 @@ export class EnhancedAutotaskToolHandler {
           value: args.searchTerm
         });
       }
-      
+
       if (typeof args.companyId === 'number') {
         filters.push({
           field: 'accountID',
@@ -5148,7 +5400,7 @@ export class EnhancedAutotaskToolHandler {
           value: args.companyId
         });
       }
-      
+
       if (typeof args.status === 'number') {
         filters.push({
           field: 'status',
@@ -5156,7 +5408,7 @@ export class EnhancedAutotaskToolHandler {
           value: args.status
         });
       }
-      
+
       if (args.stage) {
         filters.push({
           field: 'stage',
@@ -5164,7 +5416,7 @@ export class EnhancedAutotaskToolHandler {
           value: args.stage
         });
       }
-      
+
       if (typeof args.ownerResourceID === 'number') {
         filters.push({
           field: 'ownerResourceID',
@@ -5172,7 +5424,7 @@ export class EnhancedAutotaskToolHandler {
           value: args.ownerResourceID
         });
       }
-      
+
       if (typeof args.leadReferralSourceID === 'number') {
         filters.push({
           field: 'leadReferralSourceID',
@@ -5180,7 +5432,7 @@ export class EnhancedAutotaskToolHandler {
           value: args.leadReferralSourceID
         });
       }
-      
+
       if (typeof args.minAmount === 'number') {
         filters.push({
           field: 'amount',
@@ -5188,7 +5440,7 @@ export class EnhancedAutotaskToolHandler {
           value: args.minAmount
         });
       }
-      
+
       if (typeof args.maxAmount === 'number') {
         filters.push({
           field: 'amount',
@@ -5196,7 +5448,7 @@ export class EnhancedAutotaskToolHandler {
           value: args.maxAmount
         });
       }
-      
+
       if (args.createdDateFrom) {
         filters.push({
           field: 'createDate',
@@ -5204,7 +5456,7 @@ export class EnhancedAutotaskToolHandler {
           value: args.createdDateFrom
         });
       }
-      
+
       if (args.createdDateTo) {
         filters.push({
           field: 'createDate',
@@ -5212,7 +5464,7 @@ export class EnhancedAutotaskToolHandler {
           value: args.createdDateTo
         });
       }
-      
+
       if (args.projectedCloseDate) {
         filters.push({
           field: 'projectedCloseDate',
@@ -5220,78 +5472,28 @@ export class EnhancedAutotaskToolHandler {
           value: args.projectedCloseDate
         });
       }
-      
+
       if (filters.length > 0) {
         options.filter = filters;
       }
-      
-      options.pageSize = Math.min(pageSize, 500);
 
-      const opportunities = await this.autotaskService.searchOpportunities(options, tenantContext, tracker);
-      
-      // Pre-fetch unique IDs to avoid cache stampede
-      await this.prefetchMappingIds(
-        opportunities,
-        ['accountID'],
-        ['ownerResourceID', 'creatorResourceID'],
+      const searchBody = this.autotaskService.buildOpportunitiesQueryPayload(options);
+      const fetchResult = await this.autotaskService.fetchPaginatedEntity(
+        'Opportunities',
+        searchBody,
+        tenantContext,
+        tracker,
+        maxItems,
+        { enrichment: 'opportunities', responseKey: 'opportunities' }
+      );
+
+      const enhancedOpportunities = await this.enrichSearchRowsForContinuation(
+        'opportunities',
+        fetchResult.items,
         tenantContext,
         tracker
       );
-      
-      // Enhanced results with mapped names (cache is now populated)
-      const mappingService = await this.getMappingService();
-      const enhancedOpportunities = await Promise.all(
-        opportunities.map(async (opportunity: any) => {
-          const enhanced: any = { ...opportunity };
-          enhanced._enhanced = {};
-          
-          // Add company name if available (opportunities use accountID, from cache)
-          if (opportunity.accountID) {
-            try {
-              const companyName = await mappingService.getCompanyName(opportunity.accountID, tenantContext, tracker);
-              enhanced._enhanced.companyName = companyName ?? `Unknown (${opportunity.accountID})`;
-            } catch (error) {
-              this.logger.debug(`Failed to map account ID ${opportunity.accountID}:`, error);
-              enhanced._enhanced.companyName = `Unknown (${opportunity.accountID})`;
-            }
-          }
-          
-          // Add owner resource name if available (from cache)
-          if (opportunity.ownerResourceID) {
-            try {
-              const resourceName = await mappingService.getResourceName(opportunity.ownerResourceID, tenantContext, tracker);
-              enhanced._enhanced.ownerResourceName = resourceName ?? `Unknown (${opportunity.ownerResourceID})`;
-            } catch (error) {
-              this.logger.debug(`Failed to map owner resource ID ${opportunity.ownerResourceID}:`, error);
-              enhanced._enhanced.ownerResourceName = `Unknown (${opportunity.ownerResourceID})`;
-            }
-          }
-          
-          // Add creator resource name if available (from cache)
-          if (opportunity.creatorResourceID) {
-            try {
-              const resourceName = await mappingService.getResourceName(opportunity.creatorResourceID, tenantContext, tracker);
-              enhanced._enhanced.creatorResourceName = resourceName ?? `Unknown (${opportunity.creatorResourceID})`;
-            } catch (error) {
-              this.logger.debug(`Failed to map creator resource ID ${opportunity.creatorResourceID}:`, error);
-              enhanced._enhanced.creatorResourceName = `Unknown (${opportunity.creatorResourceID})`;
-            }
-          }
-          
-          return enhanced;
-        })
-      );
-      
-      // Get total count for pagination
-      let totalCount = enhancedOpportunities.length;
-      try {
-        const countResult = await this.autotaskService.countOpportunities(options, tenantContext, tracker);
-        totalCount = countResult ?? enhancedOpportunities.length;
-      } catch (countError) {
-        this.logger.warn('Could not get total count for opportunities, using returned count');
-      }
 
-      // Determine which filters are available but not used (for performance suggestions)
       const unusedFilters: string[] = [];
       if (!args.searchTerm) unusedFilters.push('searchTerm (opportunity title)');
       if (args.status === undefined) unusedFilters.push('status (0=Inactive, 1=Open, 2=Won, 3=Lost)');
@@ -5302,27 +5504,21 @@ export class EnhancedAutotaskToolHandler {
       if (!args.createdDateFrom) unusedFilters.push('createdDateFrom (filter by date range)');
       if (!args.projectedCloseDate) unusedFilters.push('projectedCloseDate (filter by close date)');
 
-      // Apply pagination protocol
-      const paginationResult = PaginationEnforcer.enforce({
-        items: enhancedOpportunities,
-        totalCount,
-        currentPage: page,
-        pageSize: Math.min(pageSize, 500),
-        entityName: 'opportunities',
-        availableFilters: unusedFilters,
-        largeResultThreshold: 500
+      const paginationResult = this.applyCursorPagination(fetchResult, enhancedOpportunities, 'opportunities', {
+        availableFilters: unusedFilters
       });
 
-      // Build response with pagination protocol
       const response = {
         opportunities: paginationResult.items,
         _paginationProtocol: paginationResult.protocol
       };
 
-      const content = [{
-        type: 'text',
-        text: JSON.stringify(response, null, 2)
-      }];
+      const content = [
+        {
+          type: 'text',
+          text: JSON.stringify(response, null, 2)
+        }
+      ];
 
       return {
         content,
@@ -6315,13 +6511,16 @@ export class EnhancedAutotaskToolHandler {
         if (includeContracts) {
           try {
             const contracts = await this.autotaskService.searchContracts({
-              filter: [{
-                field: 'companyID',
-                op: 'eq',
-                value: company.id
-              }],
-              pageSize: 10 // Limit contracts per client
-            }, tenantContext);
+              filter: [
+                {
+                  field: 'companyID',
+                  op: 'eq',
+                  value: company.id
+                }
+              ],
+              pageSize: 500,
+              maxItems: 10
+            }, tenantContext, _tracker);
 
             clientData.contracts = {
               count: contracts.length,
