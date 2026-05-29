@@ -204,6 +204,14 @@ export interface AutotaskCompanyNote {
   [key: string]: any;
 }
 
+export interface AutotaskCompanyAlert {
+  id?: number;
+  companyID?: number;
+  alertTypeID?: number;
+  alertText?: string;
+  [key: string]: any;
+}
+
 export interface AutotaskTicketAttachment {
   id?: number;
   ticketID?: number;

@@ -17,6 +17,7 @@ import {
   AutotaskTicketNote,
   AutotaskProjectNote,
   AutotaskCompanyNote,
+  AutotaskCompanyAlert,
   AutotaskTicketAttachment,
   AutotaskExpenseReport,
   AutotaskExpenseItem,
@@ -2529,6 +2530,57 @@ export class AutotaskService implements PaginatedQueryClientProvider {
       return notes as AutotaskCompanyNote[];
     } catch (error) {
       this.logger.error(`Failed to search company notes for company ${companyId}:`, error);
+      throw error;
+    }
+  }
+
+  async getCompanyAlert(companyId: number, alertId: number, tenantContext?: TenantContext): Promise<AutotaskCompanyAlert | null> {
+    const client = await this.getClientForTenant(tenantContext);
+    
+    try {
+      this.logger.info(`Getting company alert - CompanyID: ${companyId}, AlertID: ${alertId}`);
+      
+      const searchBody = {
+        filter: [
+          { field: 'companyID', op: 'eq', value: companyId },
+          { field: 'id', op: 'eq', value: alertId }
+        ]
+      };
+
+      this.logger.info('Making direct API call to CompanyAlerts/query for single alert:', searchBody);
+
+      const response = await client.CompanyAlerts.query(searchBody);
+      const alerts = response?.data?.items || [];
+      return alerts.length > 0 ? alerts[0] as AutotaskCompanyAlert : null;
+    } catch (error) {
+      this.logger.error(`Failed to get company alert ${alertId} for company ${companyId}:`, error);
+      throw error;
+    }
+  }
+
+  async searchCompanyAlerts(companyId: number, options: AutotaskQueryOptionsExtended = {}, tenantContext?: TenantContext): Promise<AutotaskCompanyAlert[]> {
+    const client = await this.getClientForTenant(tenantContext);
+    
+    try {
+      this.logger.info(`Searching company alerts for company ${companyId}:`, options);
+      
+      const searchBody = {
+        filter: [
+          { field: 'companyID', op: 'eq', value: companyId }
+        ],
+        pageSize: options.pageSize || 25,
+        MaxRecords: options.pageSize || 25
+      };
+
+      this.logger.info('Making direct API call to CompanyAlerts/query with body:', searchBody);
+
+      const response = await client.CompanyAlerts.query(searchBody);
+      const alerts = response?.data?.items || [];
+      
+      this.logger.info(`Retrieved ${alerts.length} company alerts`);
+      return alerts as AutotaskCompanyAlert[];
+    } catch (error) {
+      this.logger.error(`Failed to search company alerts for company ${companyId}:`, error);
       throw error;
     }
   }

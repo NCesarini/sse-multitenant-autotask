@@ -27,7 +27,7 @@ describe('AutotaskService', () => {
 
   test('should validate required configuration', async () => {
     const invalidConfig = { ...mockConfig };
-    delete invalidConfig.autotask.username;
+    delete (invalidConfig.autotask as any).username;
     
     const service = new AutotaskService(invalidConfig, mockLogger);
     await expect(service.initialize()).rejects.toThrow('Missing required Autotask credentials');
@@ -107,6 +107,10 @@ describe('AutotaskService', () => {
       await expect(service.getCompanyNote(123, 456)).rejects.toThrow();
       await expect(service.searchCompanyNotes(123)).rejects.toThrow();
       await expect(service.createCompanyNote(123, { title: 'Test', description: 'Test note' })).rejects.toThrow();
+
+      // Test company alerts
+      await expect(service.getCompanyAlert(123, 456)).rejects.toThrow();
+      await expect(service.searchCompanyAlerts(123)).rejects.toThrow();
     });
 
     test('should handle attachment methods with proper error messages', async () => {

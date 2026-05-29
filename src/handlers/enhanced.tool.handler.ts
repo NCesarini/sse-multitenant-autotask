@@ -61,6 +61,8 @@ export const TOOL_NAMES = {
   //SEARCH_COMPANY_NOTES: 'search_company_notes',
   GET_COMPANY_NOTE: 'get_company_note',
   CREATE_COMPANY_NOTE: 'create_company_note',
+  SEARCH_COMPANY_ALERTS: 'search_company_alerts',
+  GET_COMPANY_ALERT: 'get_company_alert',
   
   // Attachments Management
   //SEARCH_TICKET_ATTACHMENTS: 'search_ticket_attachments',
@@ -133,7 +135,9 @@ export const READ_ONLY_TOOLS = [
   TOOL_NAMES.GET_COMPANIES_PAGE,
   TOOL_NAMES.GET_TICKET_BY_NUMBER,
   TOOL_NAMES.GET_COMPANY_CATEGORIES,
-  TOOL_NAMES.FIND_CLIENTS_BY_CATEGORY
+  TOOL_NAMES.FIND_CLIENTS_BY_CATEGORY,
+  TOOL_NAMES.SEARCH_COMPANY_ALERTS,
+  TOOL_NAMES.GET_COMPANY_ALERT
 ] as const;
 
 /**
@@ -2045,6 +2049,41 @@ export class EnhancedAutotaskToolHandler {
         ['companyId', 'description']
       ),
 
+      EnhancedAutotaskToolHandler.createTool(
+        'search_company_alerts',
+        'Search for alerts on a specific company. Returns alert records from CompanyAlerts entity.',
+        'read',
+        {
+          companyId: {
+            type: 'number',
+            description: 'Company ID to search alerts for (required) - refers to Companies entity'
+          },
+          pageSize: {
+            type: 'number',
+            description: 'Number of results to return (max 100)',
+            minimum: 1,
+            maximum: 100
+          }
+        },
+        ['companyId']
+      ),
+      EnhancedAutotaskToolHandler.createTool(
+        'get_company_alert',
+        'Get a specific company alert by company ID and alert ID from CompanyAlerts entity.',
+        'read',
+        {
+          companyId: {
+            type: 'number',
+            description: 'Company ID - refers to Companies entity'
+          },
+          alertId: {
+            type: 'number',
+            description: 'Alert ID - refers to CompanyAlerts entity'
+          }
+        },
+        ['companyId', 'alertId']
+      ),
+
       // Attachments Management  
       EnhancedAutotaskToolHandler.createTool(
         'search_ticket_attachments',
@@ -3239,6 +3278,16 @@ export class EnhancedAutotaskToolHandler {
         case 'create_company_note':
           this.logger.info(`➕ Executing create_company_note`, { toolCallId });
           result = await this.createCompanyNote(args, tenantContext, tracker);
+          break;
+
+        case 'search_company_alerts':
+          this.logger.info(`🚨 Executing search_company_alerts`, { toolCallId });
+          result = await this.searchCompanyAlerts(args, tenantContext, tracker);
+          break;
+
+        case 'get_company_alert':
+          this.logger.info(`🚨 Executing get_company_alert`, { toolCallId });
+          result = await this.getCompanyAlert(args, tenantContext, tracker);
           break;
 
         case 'search_ticket_attachments':
@@ -5071,6 +5120,50 @@ export class EnhancedAutotaskToolHandler {
       return this.createCreationResponse('company note', noteId);
     } catch (error) {
       throw new Error(`Failed to create company note: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+  private async searchCompanyAlerts(args: Record<string, any>, tenantContext?: TenantContext, _tracker?: ApiCallTracker): Promise<McpToolResult> {
+    try {
+      const { companyId, pageSize } = args;
+      
+      if (!companyId || typeof companyId !== 'number') {
+        throw new Error('Company ID is required and must be a number');
+      }
+
+      const queryOptions = {
+        ...(pageSize && { pageSize })
+      };
+
+      const alerts = await this.autotaskService.searchCompanyAlerts(companyId, queryOptions, tenantContext);
+      
+      return this.createDataResponse(alerts);
+    } catch (error) {
+      throw new Error(`Failed to search company alerts: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+  private async getCompanyAlert(args: Record<string, any>, tenantContext?: TenantContext, _tracker?: ApiCallTracker): Promise<McpToolResult> {
+    try {
+      const { companyId, alertId } = args;
+      
+      if (!companyId || typeof companyId !== 'number') {
+        throw new Error('Company ID is required and must be a number');
+      }
+      
+      if (!alertId || typeof alertId !== 'number') {
+        throw new Error('Alert ID is required and must be a number');
+      }
+
+      const alert = await this.autotaskService.getCompanyAlert(companyId, alertId, tenantContext);
+      
+      if (!alert) {
+        return this.createNotFoundResponse('company alert', { companyId, alertId });
+      }
+
+      return this.createDataResponse(alert);
+    } catch (error) {
+      throw new Error(`Failed to get company alert: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   }
 

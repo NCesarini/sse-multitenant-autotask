@@ -379,6 +379,7 @@ export const AUTOTASK_ENTITIES = {
   TicketNotes: 'TicketNotes',
   ProjectNotes: 'ProjectNotes',
   CompanyNotes: 'CompanyNotes',
+  CompanyAlerts: 'CompanyAlerts',
   
   // Attachments (child entities)
   TicketAttachments: 'TicketAttachments',
@@ -412,6 +413,7 @@ export const PARENT_CHILD_RELATIONSHIPS: Record<string, string> = {
   'CompanyAttachments': 'Companies',
   'CompanyContacts': 'Companies',
   'CompanyLocations': 'Companies',
+  'CompanyAlerts': 'Companies',
   
   // Ticket children
   'TicketNotes': 'Tickets',
