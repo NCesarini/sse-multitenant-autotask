@@ -11,40 +11,40 @@ import { MappingService } from '../utils/mapping.service.js';
 import { AutotaskCredentials, TenantContext } from '../types/mcp.js';
 import { PaginatedResponse, PAGINATION_CONFIG } from '../types/autotask.js';
 
-/**
- * Format a paginated response for AI agent consumption
- * Includes mandatory "Showing X of Y" pattern
- */
-function formatPaginatedResult<T>(
-  paginatedResponse: PaginatedResponse<T>,
-  _toolName: string
-): McpToolResult {
-  const { items, _paginationStatus, _nextAction } = paginatedResponse;
-  
-  // Build the response content with mandatory pagination status at the TOP
-  const parts: string[] = [];
-  
-  // CRITICAL: Pagination status MUST be first for AI agent to see immediately
-  parts.push(_paginationStatus);
-  
-  if (_nextAction) {
-    parts.push(`\n${_nextAction}`);
-  }
-  
-  // Add separator
-  parts.push('\n' + '='.repeat(60) + '\n');
-  
-  // Add the actual data
-  parts.push(JSON.stringify(items, null, 2));
-  
-  return {
-    content: [{
-      type: 'text',
-      text: parts.join('\n')
-    }],
-    isError: false
-  };
-} 
+  /**
+   * Format a paginated response for AI agent consumption
+   * Includes mandatory "Showing X of Y" pattern
+   */
+  function formatPaginatedResult<T>(
+    paginatedResponse: PaginatedResponse<T>,
+    _toolName: string
+  ): McpToolResult {
+    const { items, _paginationStatus, _nextAction } = paginatedResponse;
+    
+    // Build the response content with mandatory pagination status at the TOP
+    const parts: string[] = [];
+    
+    // CRITICAL: Pagination status MUST be first for AI agent to see immediately
+    parts.push(_paginationStatus);
+    
+    if (_nextAction) {
+      parts.push(`\n${_nextAction}`);
+    }
+    
+    // Add separator
+    parts.push('\n' + '='.repeat(60) + '\n');
+    
+    // Add the actual data
+    parts.push(JSON.stringify(items, null, 2));
+    
+    return {
+      content: [{
+        type: 'text',
+        text: parts.join('\n')
+      }],
+      isError: false
+    };
+  } 
 
 export const LARGE_RESPONSE_THRESHOLDS = {
   tickets: 100,        
