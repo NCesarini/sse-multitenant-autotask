@@ -23,7 +23,7 @@ import { PaginatedResponse, PAGINATION_CONFIG } from '../types/autotask.js';
     
     // Build the response content with mandatory pagination status at the TOP
     const parts: string[] = [];
-    
+    ESTA TODO ROTO
     // CRITICAL: Pagination status MUST be first for AI agent to see immediately
     parts.push(_paginationStatus);
     
